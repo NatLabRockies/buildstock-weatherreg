@@ -1,0 +1,62 @@
+{
+    "upgrades": [0, 1],
+    "version_comstock": ["2024", "1"],
+    "version_resstock": ["2024", "2"],
+    "url_base": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/",
+    "base_year": 2018,
+    "target_year": 2012,
+    "chunk_size": 1,
+    "res_bsq_cols": ["geometry_building_type_recs", "heating_fuel", "county", "county_name", "state"],
+    "com_bsq_cols": ["comstock_building_type", "heating_fuel", "nhgis_county_gisjoin", "county_name", "state"],
+
+    "apply_regression": true,
+    "test_base": false,
+    "save_metrics": true,
+    "show_fit": false,
+    "save_fit": false,
+    "test_target": false,
+
+    "cross_val": true,
+    "hybrid_model": true,
+    "lag_hours_temperature": [-1, 1, 3, 6, 12],
+
+    "comstock": true,
+    "savings_shape": false,
+    "applied_only": true,
+    "n_bldngs": "assign",
+    "mode": "heat_and_cool",
+
+    "base_run": "comstock_oedi",
+    "target_run": "resstock_amy2018",
+    "run_types": {
+        "resstock_amy2018": {
+            "workgroup": "ghpphase2",
+            "db_name": "euss-res-2024-2-oedi",
+            "table_name": "resstock_amy2018_release_2",
+            "db_schema": "resstock_oedi",
+            "skip_reports": true
+        },
+        "resstock_tmy3": {
+            "workgroup": "ghpphase2",
+            "db_name": "euss-res-2024-2-oedi",
+            "table_name": "resstock_tmy3_release_2",
+            "db_schema": "resstock_oedi",
+            "skip_reports": true
+        },
+        "comstock_oedi": {
+            "workgroup": "ghpphase2",
+            "db_name": "euss-com-2024-1-oedi",
+            "table_name": "comstock_amy2018_release_1",
+            "db_schema": "comstock_oedi",
+            "buildstock_type": "comstock",
+            "skip_reports": true
+        },
+        "resstock_amy2012": {
+            "workgroup": "ghpphase2",
+            "db_name": "geohc",
+            "table_name": "full_run_20240524",
+            "buildstock_type": "resstock",
+            "skip_reports": true
+        }
+    }
+}
