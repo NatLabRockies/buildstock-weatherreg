@@ -1,6 +1,6 @@
 [Note: Please see Quickstart.docx]
 
-Version 1: Markdown format (similar but changed format from Quickstart.docx)
+Version 1: Markdown format (similar but changed format from Quickstart.docx) - from Quickstart_Revised_USED.md
 
 # ReEDS/ComStock Geothermal Pipeline Quickstart
 
