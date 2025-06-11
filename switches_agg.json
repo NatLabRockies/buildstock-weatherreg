@@ -1,6 +1,6 @@
 {
-    "upgrades": [0, 1],
-    "version_comstock": ["2024", "1"],
+    "upgrades": [0, 1, 22],
+    "version_comstock": ["2024", "2"],
     "version_resstock": ["2024", "2"],
     "url_base": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/",
     "base_year": 2018,
@@ -26,7 +26,7 @@
     "n_bldngs": "assign",
     "mode": "heat_and_cool",
 
-    "base_run": "comstock_oedi",
+    "base_run": "comstock_2024_2",
     "target_run": "resstock_amy2018",
     "run_types": {
         "resstock_amy2018": {
@@ -47,6 +47,14 @@
             "workgroup": "ghpphase2",
             "db_name": "euss-com-2024-1-oedi",
             "table_name": "comstock_amy2018_release_1",
+            "db_schema": "comstock_oedi",
+            "buildstock_type": "comstock",
+            "skip_reports": true
+        },
+        "comstock_2024_2": {
+            "workgroup": "ghpphase2",
+            "db_name": "buildstock_sdr",
+            "table_name": "comstock_2024_amy2018_release_1",
             "db_schema": "comstock_oedi",
             "buildstock_type": "comstock",
             "skip_reports": true

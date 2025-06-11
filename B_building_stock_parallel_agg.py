@@ -68,16 +68,67 @@ if __name__ == "__main__":
 
     # MAIN
     for upgrade in upgrades: 
-        # Reformat metadata filepath based on upgrade number
-        url_meta = 'metadata/baseline.parquet' if upgrade == 0 else (
-                f'metadata/upgrade{upgrade:02}.parquet')
+        if sw_comstock and comstock_year == "2024" and comstock_release == "2":
+            print("Using custom metadata load logic for ComStock 2024 Release 2")
+            state_county_map = pd.read_csv(
+                f"{url_base}2024/comstock_amy2018_release_2/geographic_information/spatial_tract_lookup_table.csv",
+                storage_options={"anon": True}
+            )
 
-        # Read Parquet file into a DataFrame
-        df_meta = pd.read_parquet(url_bldg + url_meta)
+            # state_meta = state_county_map["state_abbreviation"].unique().tolist() # Can be used to filter by state (see line below)
+            state_meta = ['VT']  # For testing purposes, only Vermont is used
+
+            all_meta = []
+            for state in state_meta:
+                state_county_map_iter = state_county_map[state_county_map["state_abbreviation"].isin([state])]
+                county_meta = state_county_map_iter["nhgis_county_gisjoin"].unique().tolist()
+
+                # county_meta = ['G5000030'] # TESTING
+                for county in county_meta:
+                    try:
+                        url = (
+                            f"{url_bldg}metadata_and_annual_results_aggregates/by_state_and_county/full/parquet/"
+                            f"state%3D{state}/county%3D{county}/{state}_{county}_upgrade{upgrade:02}_agg.parquet"
+                        )
+                        df = pd.read_parquet(url, storage_options={"anon": True})
+                        df["in.state"] = state
+                        df["in.nhgis_county_gisjoin"] = county
+                        all_meta.append(df)
+                    except Exception as e:
+                        print(f"Failed to load metadata for {state}, {county}: {e}")
+
+            if not all_meta:
+                raise RuntimeError(f"No metadata loaded for upgrade {upgrade}.")
+
+            df_meta = pd.concat(all_meta, ignore_index=True)
+            # TODO: It doesn't make sense to filter by upgrade here - should be above `for upgrade in upgrades`
+            df_meta = df_meta[df_meta["upgrade"] == upgrade]
+
+            # Merge state_county_map w/ df_meta to bring in resstock_county_id
+            df_meta = df_meta.merge(
+                state_county_map[
+                    ["nhgis_county_gisjoin", "resstock_county_id"]
+                ].drop_duplicates(),
+                how="left",
+                left_on="in.nhgis_county_gisjoin",
+                right_on="nhgis_county_gisjoin"
+            )
+
+            # Assign resstock_county_id to in.county_name
+            df_meta["in.county_name"] = df_meta["resstock_county_id"]
+
+        else:
+            # Reformat metadata filepath based on upgrade number
+            url_meta = 'metadata/baseline.parquet' if upgrade == 0 else (
+                    f'metadata/upgrade{upgrade:02}.parquet')
+
+            # Read Parquet file into a DataFrame
+            df_meta = pd.read_parquet(url_bldg + url_meta)
 
         # Set `county` based on `sw_comstock` value
         county = 'in.nhgis_county_gisjoin' if sw_comstock else 'in.county'
 
+        # TODO: Alter testing code blocks to incorporate ComStock 2024.2
         # TESTING - DELETE for production or comment out
         # Testing Subset 1
         ## For testing purposes, subset to Vermont state
@@ -95,7 +146,7 @@ if __name__ == "__main__":
         ## For testing purposes, subset counties
         # Note: G5000030 is the NHGIS code for Bennington County, VT
         # G1901630 = Scott County, IA; G1901530 = Polk County, IA
-        df_meta = df_meta[df_meta[county].isin(['G5000030'])] # or next line
+        # df_meta = df_meta[df_meta[county].isin(['G5000030'])] # or next line
         # df_meta = df_meta[df_meta[county].isin(counties)]
         # Testing Subset 1 end
 
@@ -125,7 +176,10 @@ if __name__ == "__main__":
             df_meta = df_meta[df_meta['applicability']]
 
         # Apply weight to sqft and natural gas energy consumption
-        df_meta['in.sqft'] = df_meta['in.sqft'] * df_meta['weight']
+        if sw_comstock and comstock_year == "2024" and comstock_release == "2":
+            df_meta['in.sqft'] = df_meta['in.sqft..ft2'] * df_meta['weight']
+        else:
+            df_meta['in.sqft'] = df_meta['in.sqft'] * df_meta['weight']
 
         # Define elec_enduses based on whether it's ComStock or ResStock
         if sw_comstock:
@@ -137,6 +191,8 @@ if __name__ == "__main__":
                 'out.electricity.heat_rejection.energy_consumption',
                 'out.electricity.pumps.energy_consumption'
             ]
+            if comstock_year == "2024" and comstock_release == "2":
+                elec_enduses = [item + '..kwh' for item in elec_enduses]
         else:
             elec_enduses = [
                 'out.electricity.heating.energy_consumption',
@@ -148,6 +204,8 @@ if __name__ == "__main__":
             ]
 
         gas_enduses = ['out.natural_gas.heating.energy_consumption']
+        if sw_comstock and comstock_year == "2024" and comstock_release == "2":
+            gas_enduses = [enduse + '..kwh' for enduse in gas_enduses]
 
         # Apply weight to energy consumption columns
         for enduse in elec_enduses + gas_enduses:

@@ -304,6 +304,29 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
               f"metadata.upgrade = {aws_upgrade} AND "
               f"comstock_amy2018_release_1_by_state.upgrade = '{aws_upgrade}'"
             )
+            if comstock_year == "2024" and comstock_release == "2":
+                ts_agg_query = (
+                    ts_agg_query.replace(
+                        'comstock_amy2018_release_1_by_state',
+                        'comstock_2024_amy2018_release_2_by_state'
+                    )
+                    .replace(
+                        'comstock_2024_amy2018_release_1_by_state',
+                        'comstock_2024_amy2018_release_2_by_state'
+                    )
+                    .replace(
+                        'comstock_2024_amy2018_release_1_metadata',
+                        'comstock_amy2018_r2_2024_md_agg_by_state_and_county_parquet'
+                    )
+                    .replace(
+                        f"_by_state.upgrade = '{aws_upgrade}'",
+                        f"_by_state.upgrade = {aws_upgrade}"
+                    )
+                    .replace(
+                        'in.county_name',
+                        'county'
+                    )
+                )
 
         print(ts_agg_query)
 
@@ -371,6 +394,24 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
         ts_agg = ts_agg.drop(columns=bsq_cols)
 
         ts_agg.reset_index(inplace=True)
+
+        if comstock_year == "2024" and comstock_release == "2":
+            state_county_map = pd.read_csv(
+                f"{url_base}2024/comstock_amy2018_release_2/geographic_information/spatial_tract_lookup_table.csv",
+                storage_options={"anon": True}
+            )
+
+            # Merge state_county_map w/ df_meta to bring in resstock_county_id
+            ts_agg = ts_agg.merge(
+                state_county_map[
+                    ["nhgis_county_gisjoin", "resstock_county_id"]
+                ].drop_duplicates(),
+                how="left",
+                on="nhgis_county_gisjoin"
+            )
+
+            # Assign resstock_county_id to in.county_name
+            ts_agg["county_name"] = ts_agg["resstock_county_id"]
 
     # Add building ID column from groupby columns and set as index
     ts_agg['bldg_id'] = ts_agg[aws_cols].apply(tuple, axis=1).astype(str)
