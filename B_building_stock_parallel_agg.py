@@ -66,14 +66,28 @@ if __name__ == "__main__":
     url_resstock = f'{url_base}{resstock_year}/resstock_amy{base_year}_release_{resstock_release}/'
     url_bldg = url_comstock if sw_comstock else url_resstock
 
+    # Load the state_county_map outside the loop
+    state_county_map = pd.read_csv(
+        f"{url_base}2024/comstock_amy2018_release_2/geographic_information/"
+        "spatial_tract_lookup_table.csv",
+        storage_options={"anon": True}
+    )
+
+    # Subset the DataFrame to include only the specified columns
+    state_county_map = state_county_map[
+        ["nhgis_county_gisjoin", "resstock_county_id", "state_abbreviation"]
+    ]
+
+    # Save the subsetted DataFrame as a CSV to the output directory
+    state_county_map.to_csv(
+        os.path.join(output_dir, "inputs", "spatial_tract_lookup_table.csv"),
+        index=False
+    )
+
     # MAIN
     for upgrade in upgrades: 
         if sw_comstock and comstock_year == "2024" and comstock_release == "2":
             print("Using custom metadata load logic for ComStock 2024 Release 2")
-            state_county_map = pd.read_csv(
-                f"{url_base}2024/comstock_amy2018_release_2/geographic_information/spatial_tract_lookup_table.csv",
-                storage_options={"anon": True}
-            )
 
             # state_meta = state_county_map["state_abbreviation"].unique().tolist() # Can be used to filter by state (see line below)
             state_meta = ['VT']  # For testing purposes, only Vermont is used

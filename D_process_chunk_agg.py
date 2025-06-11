@@ -397,8 +397,8 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
 
         if comstock_year == "2024" and comstock_release == "2":
             state_county_map = pd.read_csv(
-                f"{url_base}2024/comstock_amy2018_release_2/geographic_information/spatial_tract_lookup_table.csv",
-                storage_options={"anon": True}
+                os.path.join(
+                    output_dir, "inputs", "spatial_tract_lookup_table.csv")
             )
 
             # Merge state_county_map w/ df_meta to bring in resstock_county_id
