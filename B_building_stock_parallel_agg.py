@@ -97,12 +97,15 @@ if __name__ == "__main__":
                 state_county_map_iter = state_county_map[state_county_map["state_abbreviation"].isin([state])]
                 county_meta = state_county_map_iter["nhgis_county_gisjoin"].unique().tolist()
 
-                # county_meta = ['G5000030'] # TESTING
+                county_meta = ['G5000030'] # TESTING
                 for county in county_meta:
                     try:
                         url = (
                             f"{url_bldg}metadata_and_annual_results_aggregates/by_state_and_county/full/parquet/"
                             f"state%3D{state}/county%3D{county}/{state}_{county}_upgrade{upgrade:02}_agg.parquet"
+                            if upgrade > 0 else
+                            f"{url_bldg}metadata_and_annual_results_aggregates/by_state_and_county/full/parquet/"
+                            f"state%3D{state}/county%3D{county}/{state}_{county}_baseline_agg.parquet"
                         )
                         df = pd.read_parquet(url, storage_options={"anon": True})
                         df["in.state"] = state

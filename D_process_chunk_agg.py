@@ -326,6 +326,10 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                         'in.county_name',
                         'county'
                     )
+                    .replace(
+                        'in.nhgis_county_gisjoin',
+                        'county'
+                    )
                 )
 
         print(ts_agg_query)
