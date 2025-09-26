@@ -145,12 +145,6 @@ if __name__ == "__main__":
         # Set `county` based on `sw_comstock` value
         county = 'in.nhgis_county_gisjoin' if sw_comstock else 'in.county'
 
-        # DELETE or COMMENT this block - for debugging
-        # Output first 10 lines of df_meta to CSV for debugging
-        debug_path = os.path.join(output_dir, f'debug_df_meta_first10_upgrade{upgrade}.csv')
-        df_meta.head(10).to_csv(debug_path, index=False)
-        print(f"Saved first 10 lines of df_meta to: {debug_path}")
-
         # TODO: Alter testing code blocks to incorporate ComStock 2024.2
         # TESTING - DELETE for production or comment out
         # Testing Subset 1
@@ -198,9 +192,6 @@ if __name__ == "__main__":
         if applied_only:
             df_meta = df_meta[df_meta['applicability']]
 
-        # Drop duplicate building IDs if they exist
-        df_meta = df_meta.drop_duplicates(subset=['bldg_id'])
-
         # Apply weight to sqft and natural gas energy consumption
         if sw_comstock and comstock_year == "2024" and comstock_release == "2":
             df_meta['in.sqft'] = df_meta['in.sqft..ft2'] * df_meta['weight']
@@ -247,73 +238,49 @@ if __name__ == "__main__":
         # Format groupby columns based on BuildStockQuery groups
         group_cols = [f'in.{col}' for col in bsq_cols]
 
-        # Define columns to select for building ID DataFrame
-        bldg_id_cols = ['bldg_id', 'in.sampling_region_id', 'weight', 'in.sqft'] + group_cols + [
-            'in.as_simulated_nhgis_county_gisjoin',
-            'meta_HVAC.elec',
-            'meta_natural_gas.heating.energy_consumption'
-        ]
-        df_meta = df_meta[bldg_id_cols].copy()
-
-        # DELETE or COMMENT this block - for debugging
-        # Output first 10 lines of df_meta to CSV for debugging
-        debug_meta_path = os.path.join(output_dir, f'debug_df_meta_first10_upgrade{upgrade}.csv')
-        df_meta.head(10).to_csv(debug_meta_path, index=False)
-        print(f"Saved first 10 lines of df_meta to: {debug_meta_path}")
-
-        # DELETE or COMMENT next block - will cause issues downstream in 2024.2
-        # grouped = df_meta.groupby(group_cols, observed=True)
-        # df_meta = grouped.agg({
-        #     'in.sqft': 'sum',
-        #     'meta_HVAC.elec': 'sum',
-        #     'meta_natural_gas.heating.energy_consumption': 'sum'
-        # }).reset_index()
+        grouped = df_meta.groupby(group_cols, observed=True)
+        df_meta = grouped.agg({
+            'in.sqft': 'sum',
+            'meta_HVAC.elec': 'sum',
+            'meta_natural_gas.heating.energy_consumption': 'sum'
+        }).reset_index()
 
         # Error check: Convert energy consumption columns from kWh to MWh & round
         df_meta['meta_HVAC.elec'] = (df_meta['meta_HVAC.elec'] / 1000).round(6)
         df_meta['meta_natural_gas.heating.energy_consumption'] = (
             df_meta['meta_natural_gas.heating.energy_consumption'] / 1000).round(6)
 
-        # DELETE next two lines - will cause issues downstream
-        # df_meta['bldg_id'] = df_meta[group_cols].apply(tuple, axis=1).astype(str)
-        # df_meta.set_index('bldg_id', inplace=True)
-        df_meta = df_meta.sort_values(by=[
-            'in.state', 'in.nhgis_county_gisjoin', 'bldg_id'
-        ])
+        df_meta['bldg_id'] = df_meta[group_cols].apply(tuple, axis=1).astype(str)
+        df_meta.set_index('bldg_id', inplace=True)
+        df_meta = df_meta.sort_values('in.state')
 
         # Save single upgrade DataFrame to CSV file
         prefix = 'com_' if sw_comstock else 'res_'
         meta_path = os.path.join(
             output_dir, f'{prefix}meta_master_upgrade{upgrade}.csv')
-        df_meta.to_csv(meta_path, index=False)
+        df_meta.to_csv(meta_path)
 
-        # DELETE or COMMENT this block - for debugging
-        # For debugging: output first 10 lines of df_meta to CSV
-        debug_meta_path = os.path.join(output_dir, f'debug_df_meta_first10_upgrade{upgrade}_postagg.csv')
-        df_meta.head(10).to_csv(debug_meta_path, index=False)
-
-        # DELETE [:5] - for debugging
-        unique_bldg_ids = df_meta['bldg_id'].astype(str).unique()[:5]
+        unique_counties = df_meta[county].unique()
 
         # Store all processes for non-HPC mode in `tasks` list
         try:
             tasks  # Check if it exists
         except NameError:
             tasks = []
-        # Process bldg_ids in parallelized chunks
-        for i in range(0, len(unique_bldg_ids), chunk_size):
-            # Get the chunk of bldg_ids
+        # Process counties in parallelized chunks
+        for i in range(0, len(unique_counties), chunk_size):
+            # Get the chunk of counties
             start_index = i
             end_index = i + chunk_size
-            bldg_id_chunk = unique_bldg_ids[i:i + chunk_size]
-            bldg_ids_str = '_'.join(map(str, bldg_id_chunk))
+            county_chunk = unique_counties[i:i + chunk_size]
+            counties_str = '_'.join(county_chunk)
             # Submit job to HPC or run locally
             if hpc:
                 # Call a shell script that creates a compute node and runs a python file
                 os.system(
                     f'sbatch --job-name=chunk_{prefix}{upgrade}_{start_index}-{end_index} '
                     f'./C_run_bldg_chunk_agg.sh {start_index} {end_index} {meta_path} '
-                    f'{upgrade} {prefix} {output_dir} {script_dir} {bldg_ids_str}'
+                    f'{upgrade} {prefix} {output_dir} {script_dir} {counties_str}'
                 )
 
             else:
@@ -321,7 +288,7 @@ if __name__ == "__main__":
                 cmd = (
                     f'python {output_dir}/inputs/D_process_chunk_agg.py '
                     f'{start_index} {end_index} {meta_path} {upgrade} {prefix} '
-                    f'{output_dir} {script_dir} {bldg_ids_str}'
+                    f'{output_dir} {script_dir} {counties_str}'
                 )
                 tasks.append(cmd)  # Collect tasks to run later
 

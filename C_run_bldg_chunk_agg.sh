@@ -15,7 +15,7 @@ upgrade=$4
 prefix=$5
 output_dir=$6
 script_dir=$7
-bldg_ids_str=$8
+counties_str=$8
 
 # Set up nodal environment for run
 . $HOME/.bashrc
@@ -25,4 +25,4 @@ source /nopt/nrel/apps/env.sh
 module load anaconda3
 conda activate geothermal
 
-python $output_dir/inputs/D_process_chunk_agg.py $start_index $end_index $meta_path $upgrade $prefix $output_dir $script_dir $bldg_ids_str
+python $output_dir/inputs/D_process_chunk_agg.py $start_index $end_index $meta_path $upgrade $prefix $output_dir $script_dir $counties_str

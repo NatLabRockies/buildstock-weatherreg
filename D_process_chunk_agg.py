@@ -31,7 +31,7 @@ print('Script start time:', script_start_time)
 
 # Force program to sleep for a random amount of time between 0 and 300 seconds
 # Prevents AWS token errors when multiple jobs are run simultaneously
-#time.sleep(random.uniform(0, 30))
+time.sleep(random.uniform(0, 30))
 
 # Import command line arguments
 start_index = int(sys.argv[1])
@@ -41,7 +41,7 @@ upgrade = sys.argv[4]
 prefix = sys.argv[5]
 output_dir = sys.argv[6]
 script_dir = sys.argv[7]
-bldg_ids_str = sys.argv[8]
+counties_str = sys.argv[8]
 
 print('start_index:', start_index)
 print('end_index:', end_index)
@@ -50,12 +50,12 @@ print('upgrade:', upgrade)
 print('prefix:', prefix)
 print('output_dir:', output_dir)
 print('script_dir:', script_dir)
-print('bldg_ids_str:', bldg_ids_str)
+print('counties_str:', counties_str)
 
 print('Script to rerun this file with the same arguments:')
 print(f'sbatch --job-name=chunk_{prefix}{upgrade}_{start_index}-{end_index} '
       f'./C_run_bldg_chunk_agg.sh {start_index} {end_index} {meta_path} '
-      f'{upgrade} {prefix} {output_dir} {script_dir} {bldg_ids_str}')
+      f'{upgrade} {prefix} {output_dir} {script_dir} {counties_str}')
 
 # Import switches #TODO: Only import necessary for this script & reorder
 with open(os.path.join(output_dir, 'inputs', 'switches_agg.json'), 'r') as f:
@@ -116,7 +116,7 @@ def query_execution(query, my_run, retries=5, delay=10):
             else:
                 raise  # Re-raise the exception if out of retries
 
-def process_chunk_agg(bldg_ids, run_type, upgrade, counties, bsq_cols, sw_comstock,
+def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                       chunk_states, sw_savings_shape, df_meta, applied_only):
     """
     This function aggregates timeseries data for a specific run type, upgrade,
@@ -140,7 +140,7 @@ def process_chunk_agg(bldg_ids, run_type, upgrade, counties, bsq_cols, sw_comsto
     """
     # TODO: Make `is_oedi/else` sections into one section each if 2 aws calls
     # Copy variables to avoid modifying the variables in the main script
-    aws_cols = ['bldg_id'] + bsq_cols.copy() # NOT compatible with prev work
+    aws_cols = bsq_cols.copy()
     aws_counties = counties.copy()
     aws_run_type = run_types[run_type].copy()
     aws_upgrade = upgrade
@@ -281,14 +281,11 @@ def process_chunk_agg(bldg_ids, run_type, upgrade, counties, bsq_cols, sw_comsto
         ts_agg_query = my_run.agg.aggregate_timeseries(
             upgrade_id=0 if sw_comstock else aws_upgrade,
             enduses=elec_enduse + natural_gas,
-            restrict=[
-                ('bldg_id', bldg_ids),
-                ('state', chunk_states), # partition in the AWS query
-                ('upgrade', [int(aws_upgrade)]), # partition in the AWS query
-                *([('applicability', [True])] if applied_only else []),
-                (restrict_county, aws_counties),
-                (restrict_heating_fuel, heating_fuel)
-            ],
+            restrict=[('state', chunk_states), # partition in the AWS query
+                      ('upgrade', [int(aws_upgrade)]), # partition in the AWS query
+                      *([('applicability', [True])] if applied_only else []),
+                      (restrict_county, aws_counties),
+                      (restrict_heating_fuel, heating_fuel)],
             group_by=aws_cols,
             get_query_only=True,
             annual_only=False
@@ -395,10 +392,10 @@ def process_chunk_agg(bldg_ids, run_type, upgrade, counties, bsq_cols, sw_comsto
         # Shift index by 59 minutes for resampling (timestamp will be hour end)
         ts_agg.index = ts_agg.index + pd.Timedelta(minutes=59)
         
-        # Sum each hour's energy consumption for each unique aws_cols group
-        ts_agg = ts_agg.groupby(aws_cols).resample('H').sum()
+        # Sum each hour's energy consumption for each unique bsq_cols group
+        ts_agg = ts_agg.groupby(bsq_cols).resample('H').sum()
 
-        ts_agg = ts_agg.drop(columns=aws_cols)
+        ts_agg = ts_agg.drop(columns=bsq_cols)
 
         ts_agg.reset_index(inplace=True)
 
@@ -421,16 +418,13 @@ def process_chunk_agg(bldg_ids, run_type, upgrade, counties, bsq_cols, sw_comsto
             ts_agg["county_name"] = ts_agg["resstock_county_id"]
 
     # Add building ID column from groupby columns and set as index
-    if comstock_year == "2024" and comstock_release == "2":
-        ts_agg['bldg_id'] = ts_agg['bldg_id'].astype('int64')
-    else:
-        ts_agg['bldg_id'] = ts_agg[aws_cols].apply(tuple, axis=1).astype(str)
+    ts_agg['bldg_id'] = ts_agg[aws_cols].apply(tuple, axis=1).astype(str)
     ts_agg.set_index('bldg_id', inplace=True)
 
     # Sum energy consumption of cooling and heating as HVAC.elec
     ts_agg['HVAC.elec'] = ts_agg[elec_enduse].sum(axis=1)
 
-    ts_agg = ts_agg[['timestamp', 'HVAC.elec', 'nhgis_county_gisjoin',
+    ts_agg = ts_agg[['timestamp', 'HVAC.elec',
                      'natural_gas.heating.energy_consumption']]
     
     # Convert HVAC.elec and natural_gas columns from kWh to MWh & round
@@ -439,19 +433,6 @@ def process_chunk_agg(bldg_ids, run_type, upgrade, counties, bsq_cols, sw_comsto
         ts_agg['natural_gas.heating.energy_consumption'] / 1000).round(6)
 
     return ts_agg
-
-def _weather_state(gisjoin: str) -> str:
-    # GISJOIN like 'G3600070' -> FIPS '36' -> 'NY'
-    fips2abbr = {
-        1:'AL',2:'AK',4:'AZ',5:'AR',6:'CA',8:'CO',9:'CT',10:'DE',11:'DC',
-        12:'FL',13:'GA',15:'HI',16:'ID',17:'IL',18:'IN',19:'IA',20:'KS',
-        21:'KY',22:'LA',23:'ME',24:'MD',25:'MA',26:'MI',27:'MN',28:'MS',
-        29:'MO',30:'MT',31:'NE',32:'NV',33:'NH',34:'NJ',35:'NM',36:'NY',
-        37:'NC',38:'ND',39:'OH',40:'OK',41:'OR',42:'PA',44:'RI',45:'SC',
-        46:'SD',47:'TN',48:'TX',49:'UT',50:'VT',51:'VA',53:'WA',54:'WV',
-        55:'WI',56:'WY'
-    }
-    return fips2abbr[int(gisjoin[1:3])]
 
 def weather_data(url_base, year, state, county_id, max_retries=60, delay=60):
     """
@@ -856,10 +837,9 @@ df_meta = pd.read_csv(meta_path)
 # Set `county` based on `sw_comstock` value
 county = 'in.nhgis_county_gisjoin' if sw_comstock else 'in.county'
 
-# Subset df_meta to the specified range of building IDs, then derive counties
-bldg_ids = [int(x) for x in bldg_ids_str.split('_')]
-df_meta = df_meta[df_meta['bldg_id'].isin(bldg_ids)]
-counties = df_meta[county].unique().tolist() # DELETE - necessary?
+# Subset df_meta to the specified range of counties
+counties = counties_str.split('_')
+df_meta = df_meta[df_meta[county].isin(counties)]
 
 # Get the unique states in the metadata DataFrame for process_chunk_agg fxn
 chunk_states = df_meta['in.state'].unique().tolist()
@@ -869,15 +849,15 @@ df_meta = df_meta.set_index('bldg_id')
 
 # Call function to get aggregate timeseries data
 ts_agg = process_chunk_agg(
-    bldg_ids, base_run, upgrade, counties, bsq_cols, sw_comstock, chunk_states,
+    base_run, upgrade, counties, bsq_cols, sw_comstock, chunk_states,
     sw_savings_shape, df_meta, applied_only
 )
 
 # Grab the target year AWS data if sw_test_target else set as None
 df_eulp_targ = (
     process_chunk_agg(
-        bldg_ids, target_run, upgrade, counties, bsq_cols, sw_comstock,
-        chunk_states, sw_savings_shape, df_meta, applied_only
+        target_run, upgrade, counties, bsq_cols, sw_comstock, chunk_states,
+        sw_savings_shape, df_meta, applied_only
     )
     if sw_test_target and sw_apply_regression
     else None
@@ -903,33 +883,18 @@ if sw_apply_regression: # TODO: or `individual_building`?
         # Get the state of the building (for the URL)
         state = df_meta.loc[bldg_id, 'in.state']
         # Get the county ID of the building
-        if comstock_year == "2024" and comstock_release == "2":
-            county_id = df_meta.loc[
-                bldg_id, 'in.as_simulated_nhgis_county_gisjoin'
-            ]
-        else:
-            county_id = df_meta.loc[bldg_id, county]
+        county_id = df_meta.loc[bldg_id, county]
 
         # Check if weather data for this county is already in the dictionary
         if county_id not in weather_data_dict:
             # If not, get & store weather data for base & target years in dict
             weather_data_dict[county_id] = {
-                'base': weather_data(url_base, base_year, 
-                                     _weather_state(county_id), county_id),
-                'target': weather_data(url_base, target_year,
-                                     _weather_state(county_id), county_id)
+                'base': weather_data(url_base, base_year, state, county_id),
+                'target': weather_data(url_base, target_year, state, county_id)
             }
 
         # Get the EULP data for a specific building for use in the regressions
         df_eulp_pred = ts_agg.loc[bldg_id].copy()
-        # Subset df_eulp_pred to the corresponding county in df_meta in 2024.2
-        if comstock_year == "2024" and comstock_release == "2":
-            df_eulp_pred = df_eulp_pred[
-                df_eulp_pred['nhgis_county_gisjoin'] ==
-                df_meta.loc[bldg_id, county]
-            ]
-        # Drop the `nhgis_county_gisjoin` column as it's not needed for modeling
-        df_eulp_pred = df_eulp_pred.drop(columns=['nhgis_county_gisjoin'])
 
         # HVAC ELECTRICITY
         # Predict HVAC electricity energy consumption
