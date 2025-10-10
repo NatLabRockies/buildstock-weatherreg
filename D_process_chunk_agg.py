@@ -140,7 +140,7 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
     """
     # TODO: Make `is_oedi/else` sections into one section each if 2 aws calls
     # Copy variables to avoid modifying the variables in the main script
-    aws_cols = bsq_cols.copy()
+    aws_cols = [c for c in bsq_cols if c != "as_simulated_nhgis_county_gisjoin"]
     aws_counties = counties.copy()
     aws_run_type = run_types[run_type].copy()
     aws_upgrade = upgrade
@@ -305,6 +305,10 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
               f"comstock_amy2018_release_1_by_state.upgrade = '{aws_upgrade}'"
             )
             if comstock_year == "2024" and comstock_release == "2":
+                weather_counties_str = ', '.join(
+                    f"'{c}'" for c in df_meta[
+                        'in.as_simulated_nhgis_county_gisjoin'].unique()
+                )
                 ts_agg_query = (
                     ts_agg_query.replace(
                         'comstock_amy2018_release_1_by_state',
@@ -330,7 +334,30 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                         'in.nhgis_county_gisjoin',
                         'county'
                     )
+                    .replace(
+                        'GROUP BY 1, 2, 3, 4, 5, 6',
+                        'GROUP BY 1, 2, 3, 4, 5, 6, 7'
+                    )
+                    .replace(
+                        'ORDER BY 1, 2, 3, 4, 5, 6',
+                        'ORDER BY 1, 2, 3, 4, 5, 6, 7'
+                    )
+                    .replace(
+                        '"in.heating_fuel" AS heating_fuel, ',
+                        '"in.heating_fuel" AS heating_fuel, '
+                        'comstock_amy2018_r2_2024_md_agg_by_state_and_county_parquet.'
+                        '"in.as_simulated_nhgis_county_gisjoin" AS '
+                        'as_simulated_nhgis_county_gisjoin, '
+                    )
+                    .replace(
+                        'WHERE comstock_2024_amy2018',
+                        'WHERE comstock_amy2018_r2_2024_md_agg_by_state_and_county_parquet.'
+                        '"in.as_simulated_nhgis_county_gisjoin" IN '
+                        f'({weather_counties_str}) AND comstock_2024_amy2018'
+                    )
                 )
+
+            aws_cols = bsq_cols.copy()
 
         print(ts_agg_query)
 
@@ -433,6 +460,28 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
         ts_agg['natural_gas.heating.energy_consumption'] / 1000).round(6)
 
     return ts_agg
+
+def _weather_state(gisjoin: str) -> str:
+    '''
+    Convert GISJOIN to state abbreviation.
+    Parameters:
+    gisjoin (str): GISJOIN string, e.g. 'G3600070'
+    Returns:
+    str: State abbreviation, e.g. 'NY'
+
+    Note: Could alternatively use state_county_map
+    '''
+    # GISJOIN like 'G3600070' -> FIPS '36' -> 'NY'
+    fips2abbr = {
+        1:'AL',2:'AK',4:'AZ',5:'AR',6:'CA',8:'CO',9:'CT',10:'DE',11:'DC',
+        12:'FL',13:'GA',15:'HI',16:'ID',17:'IL',18:'IN',19:'IA',20:'KS',
+        21:'KY',22:'LA',23:'ME',24:'MD',25:'MA',26:'MI',27:'MN',28:'MS',
+        29:'MO',30:'MT',31:'NE',32:'NV',33:'NH',34:'NJ',35:'NM',36:'NY',
+        37:'NC',38:'ND',39:'OH',40:'OK',41:'OR',42:'PA',44:'RI',45:'SC',
+        46:'SD',47:'TN',48:'TX',49:'UT',50:'VT',51:'VA',53:'WA',54:'WV',
+        55:'WI',56:'WY'
+    }
+    return fips2abbr[int(gisjoin[1:3])]
 
 def weather_data(url_base, year, state, county_id, max_retries=60, delay=60):
     """
@@ -883,14 +932,21 @@ if sw_apply_regression: # TODO: or `individual_building`?
         # Get the state of the building (for the URL)
         state = df_meta.loc[bldg_id, 'in.state']
         # Get the county ID of the building
-        county_id = df_meta.loc[bldg_id, county]
+        if comstock_year == "2024" and comstock_release == "2":
+            county_id = df_meta.loc[
+                bldg_id, 'in.as_simulated_nhgis_county_gisjoin'
+            ]
+        else:
+            county_id = df_meta.loc[bldg_id, county]
 
         # Check if weather data for this county is already in the dictionary
         if county_id not in weather_data_dict:
             # If not, get & store weather data for base & target years in dict
             weather_data_dict[county_id] = {
-                'base': weather_data(url_base, base_year, state, county_id),
-                'target': weather_data(url_base, target_year, state, county_id)
+                'base': weather_data(url_base, base_year,
+                                     _weather_state(county_id), county_id),
+                'target': weather_data(url_base, target_year,
+                                       _weather_state(county_id), county_id)
             }
 
         # Get the EULP data for a specific building for use in the regressions

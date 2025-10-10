@@ -7,7 +7,7 @@
     "target_year": 2012,
     "chunk_size": 1,
     "res_bsq_cols": ["geometry_building_type_recs", "heating_fuel", "county", "county_name", "state"],
-    "com_bsq_cols": ["comstock_building_type", "heating_fuel", "nhgis_county_gisjoin", "county_name", "state"],
+    "com_bsq_cols": ["comstock_building_type", "heating_fuel", "as_simulated_nhgis_county_gisjoin", "nhgis_county_gisjoin", "county_name", "state"],
 
     "apply_regression": true,
     "test_base": false,
@@ -27,7 +27,7 @@
     "mode": "heat_and_cool",
 
     "base_run": "comstock_2024_2",
-    "target_run": "resstock_amy2018",
+    "target_run": "comstock_2024_2",
     "run_types": {
         "resstock_amy2018": {
             "workgroup": "ghpphase2",

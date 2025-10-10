@@ -252,7 +252,10 @@ if __name__ == "__main__":
 
         df_meta['bldg_id'] = df_meta[group_cols].apply(tuple, axis=1).astype(str)
         df_meta.set_index('bldg_id', inplace=True)
-        df_meta = df_meta.sort_values('in.state')
+        df_meta = df_meta.sort_values(by=[
+            'in.state',
+            'in.nhgis_county_gisjoin' if sw_comstock else 'in.county',
+        ])
 
         # Save single upgrade DataFrame to CSV file
         prefix = 'com_' if sw_comstock else 'res_'
