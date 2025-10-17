@@ -25,4 +25,12 @@ source /nopt/nrel/apps/env.sh
 module load anaconda3
 conda activate geothermal
 
+# Limit per-process threading to avoid oversubscription when using many processes
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export TF_NUM_INTRAOP_THREADS=1
+export TF_NUM_INTEROP_THREADS=1
+
 python $output_dir/inputs/D_process_chunk_agg.py $start_index $end_index $meta_path $upgrade $prefix $output_dir $script_dir $counties_str

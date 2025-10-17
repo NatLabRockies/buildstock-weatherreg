@@ -19,6 +19,7 @@ from urllib.error import HTTPError
 import traceback
 import re
 import random
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Set environment variable to disable OneDNN prior to importing tensorflow
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -92,6 +93,67 @@ url_base = switch['url_base']
 
 
 # FUNCTIONS
+# Detect HPC (SLURM or explicit flag)
+def _is_hpc() -> bool:
+    return bool(int(os.environ.get('SLURM_JOB_ID', 0) or
+                    os.environ.get('REEDS_USE_SLURM', 0)
+                    ))
+
+# Determine county column based on comstock/resstock and version for HPC
+def _county_of(bid):
+    if comstock_year == "2024" and comstock_release == "2":
+        return df_meta.loc[bid, 'in.as_simulated_nhgis_county_gisjoin']
+    else:
+        return df_meta.loc[bid, county]
+
+# Process one building worker function - for HPC multiprocessing
+def _process_one_building(args):
+    """
+    Worker: run predictions for one building and return:
+      - building HVAC timeseries df (timestamp_EST x 1 column)
+      - annual sums for HVAC and NG for df_meta
+    Notes:
+      - Metrics and plots are disabled in workers to avoid file contention.
+    """
+    (bldg_id,
+     df_eulp_pred,
+     weather_base_df,
+     weather_target_df,
+     df_eulp_targ_local,
+     base_year,
+     target_year,
+     sw_test_base,
+     sw_test_target) = args
+
+    # Ensure globals used in prediction/test_fit exist but do nothing noisy
+    global i, sw_save_metrics, sw_show_fit, sw_save_fit
+    i = 0
+    sw_save_metrics = False
+    sw_show_fit = False
+    sw_save_fit = False
+
+    # HVAC
+    df_eulp_hvac = prediction(
+        base_year, df_eulp_pred, sw_test_base, target_year, sw_test_target,
+        'HVAC.elec', weather_base_df, weather_target_df, bldg_id, df_eulp_targ_local
+    )
+    hvac_sum = df_eulp_hvac['HVAC.elec'].iloc[:8760].sum().round(6)
+
+    # NG
+    df_eulp_ng = prediction(
+        base_year, df_eulp_pred, sw_test_base, target_year, sw_test_target,
+        'natural_gas.heating.energy_consumption',
+        weather_base_df, weather_target_df, bldg_id, df_eulp_targ_local
+    )
+    ng_sum = df_eulp_ng['natural_gas.heating.energy_consumption'].iloc[:8760].sum().round(6)
+
+    # Shape HVAC df to timestamp_EST x bldg_id
+    df_out = df_eulp_hvac.copy()
+    df_out.columns = ['timestamp_EST', f'{bldg_id}']
+    df_out.set_index('timestamp_EST', inplace=True)
+
+    return bldg_id, df_out, hvac_sum, ng_sum
+
 def query_execution(query, my_run, retries=5, delay=10):
     """
     Helper function to retry query execution for transient failures.
@@ -924,71 +986,117 @@ df_meta['AWS_natural_gas.heating.energy_consumption'] = (
 df_bldg = []
 
 if sw_apply_regression: # TODO: or `individual_building`?
-    # Create a dictionary to store weather data for each unique county
-    weather_data_dict = {}
-
-    # Loop through each building in the metadata DataFrame
-    for i, bldg_id in enumerate(df_meta.index):
-        # Get the state of the building (for the URL)
-        state = df_meta.loc[bldg_id, 'in.state']
-        # Get the county ID of the building
-        if comstock_year == "2024" and comstock_release == "2":
-            county_id = df_meta.loc[
-                bldg_id, 'in.as_simulated_nhgis_county_gisjoin'
-            ]
-        else:
-            county_id = df_meta.loc[bldg_id, county]
-
-        # Check if weather data for this county is already in the dictionary
-        if county_id not in weather_data_dict:
-            # If not, get & store weather data for base & target years in dict
+    # Parallel path (HPC only)
+    if _is_hpc():
+        
+        # Preload weather per county
+        weather_data_dict = {}
+        unique_counties = {_county_of(bid) for bid in df_meta.index}
+        for county_id in unique_counties:
             weather_data_dict[county_id] = {
-                'base': weather_data(url_base, base_year,
-                                     _weather_state(county_id), county_id),
-                'target': weather_data(url_base, target_year,
-                                       _weather_state(county_id), county_id)
+                'base': weather_data(url_base, base_year, _weather_state(county_id), county_id),
+                'target': weather_data(url_base, target_year, _weather_state(county_id), county_id),
             }
 
-        # Get the EULP data for a specific building for use in the regressions
-        df_eulp_pred = ts_agg.loc[bldg_id].copy()
+        # Build tasks
+        tasks = []
+        for bldg_id in df_meta.index:
+            county_id = _county_of(bldg_id)
+            df_eulp_pred = ts_agg.loc[bldg_id].copy()
+            tasks.append((
+                bldg_id,
+                df_eulp_pred,
+                weather_data_dict[county_id]['base'],
+                weather_data_dict[county_id]['target'],
+                df_eulp_targ if sw_test_target and sw_apply_regression else None,
+                base_year,
+                target_year,
+                sw_test_base,
+                sw_test_target
+            ))
 
-        # HVAC ELECTRICITY
-        # Predict HVAC electricity energy consumption
-        df_eulp_hvac = prediction(
-            base_year, df_eulp_pred, sw_test_base, target_year, sw_test_target,
-            'HVAC.elec', weather_data_dict[county_id]['base'],
-            weather_data_dict[county_id]['target'], bldg_id, df_eulp_targ
-        )
+        # Pool size from CPU count with 4 CPU reserved for cap space
+        procs = os.cpu_count() - 4
+        print(f'Using {procs} processes for regression out of {os.cpu_count()} possible.')
 
-        # Error check: Add regressed annual HVAC.elec to df_meta for a bldg_id
-        df_meta.loc[bldg_id, 'HVAC.elec'] = (
-            df_eulp_hvac['HVAC.elec'].iloc[:8760].sum().round(6))
+        df_bldg = []
+        with ProcessPoolExecutor(max_workers=procs) as ex:
+            futures = [ex.submit(_process_one_building, t) for t in tasks]
+            for fut in as_completed(futures):
+                bldg_id, df_hvac, hvac_sum, ng_sum = fut.result()
+                df_bldg.append(df_hvac)
+                df_meta.loc[bldg_id, 'HVAC.elec'] = hvac_sum
+                df_meta.loc[bldg_id, 'natural_gas.heating.energy_consumption'] = ng_sum
 
-        # Rename columns, including `HVAC.elec` to match the building ID
-        df_eulp_hvac.columns = ['timestamp_EST', f'{bldg_id}']
+        df_eulp = pd.concat(df_bldg, axis=1)
 
-        # Set the timestamp column to the index
-        df_eulp_hvac.set_index('timestamp_EST', inplace=True)
+    # Serial path (local machine)
+    else:
+        # Create a dictionary to store weather data for each unique county
+        weather_data_dict = {}
 
-        # Append single building DataFrame to list of building DataFrames
-        df_bldg.append(df_eulp_hvac)
+        # Loop through each building in the metadata DataFrame
+        for i, bldg_id in enumerate(df_meta.index):
+            # Get the state of the building (for the URL)
+            state = df_meta.loc[bldg_id, 'in.state']
+            # Get the county ID of the building
+            if comstock_year == "2024" and comstock_release == "2":
+                county_id = df_meta.loc[
+                    bldg_id, 'in.as_simulated_nhgis_county_gisjoin'
+                ]
+            else:
+                county_id = df_meta.loc[bldg_id, county]
 
-        # NATURAL GAS
-        # Predict natural gas heating energy consumption
-        df_eulp_ng = prediction(
-            base_year, df_eulp_pred, sw_test_base, target_year, sw_test_target,
-            'natural_gas.heating.energy_consumption',
-            weather_data_dict[county_id]['base'],
-            weather_data_dict[county_id]['target'], bldg_id, df_eulp_targ
-        )
+            # Check if weather data for this county is already in the dictionary
+            if county_id not in weather_data_dict:
+                # If not, get & store weather data for base & target years in dict
+                weather_data_dict[county_id] = {
+                    'base': weather_data(url_base, base_year,
+                                        _weather_state(county_id), county_id),
+                    'target': weather_data(url_base, target_year,
+                                        _weather_state(county_id), county_id)
+                }
 
-        # Add regressed annual ng to df_meta for a bldg_id
-        df_meta.loc[bldg_id, 'natural_gas.heating.energy_consumption'] = (
-            df_eulp_ng['natural_gas.heating.energy_consumption']
-            .iloc[:8760].sum().round(6))
+            # Get the EULP data for a specific building for use in the regressions
+            df_eulp_pred = ts_agg.loc[bldg_id].copy()
 
-    # Concatenate all building DataFrames into a single DataFrame
-    df_eulp = pd.concat(df_bldg, axis=1)
+            # HVAC ELECTRICITY
+            # Predict HVAC electricity energy consumption
+            df_eulp_hvac = prediction(
+                base_year, df_eulp_pred, sw_test_base, target_year, sw_test_target,
+                'HVAC.elec', weather_data_dict[county_id]['base'],
+                weather_data_dict[county_id]['target'], bldg_id, df_eulp_targ
+            )
+
+            # Error check: Add regressed annual HVAC.elec to df_meta for a bldg_id
+            df_meta.loc[bldg_id, 'HVAC.elec'] = (
+                df_eulp_hvac['HVAC.elec'].iloc[:8760].sum().round(6))
+
+            # Rename columns, including `HVAC.elec` to match the building ID
+            df_eulp_hvac.columns = ['timestamp_EST', f'{bldg_id}']
+
+            # Set the timestamp column to the index
+            df_eulp_hvac.set_index('timestamp_EST', inplace=True)
+
+            # Append single building DataFrame to list of building DataFrames
+            df_bldg.append(df_eulp_hvac)
+
+            # NATURAL GAS
+            # Predict natural gas heating energy consumption
+            df_eulp_ng = prediction(
+                base_year, df_eulp_pred, sw_test_base, target_year, sw_test_target,
+                'natural_gas.heating.energy_consumption',
+                weather_data_dict[county_id]['base'],
+                weather_data_dict[county_id]['target'], bldg_id, df_eulp_targ
+            )
+
+            # Add regressed annual ng to df_meta for a bldg_id
+            df_meta.loc[bldg_id, 'natural_gas.heating.energy_consumption'] = (
+                df_eulp_ng['natural_gas.heating.energy_consumption']
+                .iloc[:8760].sum().round(6))
+
+        # Concatenate all building DataFrames into a single DataFrame
+        df_eulp = pd.concat(df_bldg, axis=1)
 
 else:
     # If not applying regression, duplicate annual ng and HVAC columns
