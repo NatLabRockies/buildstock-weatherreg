@@ -23,9 +23,18 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Set environment variable to disable OneDNN prior to importing tensorflow
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-import tensorflow as tf
-# Set random seed for reproducibility
-tf.random.set_seed(42)
+
+# Defer TensorFlow import to avoid forking a TF-initialized runtime.
+# Import and seed only when/if the hybrid model is used.
+_TF = None
+def _ensure_tf():
+    global _TF
+    if _TF is None:
+        import tensorflow as tf
+        # Set random seed for reproducibility
+        tf.random.set_seed(42)
+        _TF = tf
+    return _TF
 
 script_start_time = dt.datetime.now()
 print('Script start time:', script_start_time)
@@ -799,7 +808,7 @@ def prediction(base_year, df_eulp, sw_test_base, target_year, sw_test_target,
     startTime = dt.datetime.now()
 
     # Train random forest model
-    rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+    rf_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=1)
     if sw_cross_val:
         # Perform 5-fold cross-validation
         kfold = KFold(n_splits=5, shuffle=True, random_state=42)
@@ -843,6 +852,7 @@ def prediction(base_year, df_eulp, sw_test_base, target_year, sw_test_target,
         X_scale = scaler.fit_transform(X)
 
         # Define a simple neural network model
+        tf = _ensure_tf()
         model = tf.keras.Sequential([
             tf.keras.layers.Dense(
                 128,
@@ -1016,7 +1026,7 @@ if sw_apply_regression: # TODO: or `individual_building`?
             ))
 
         # Pool size from CPU count with 4 CPU reserved for cap space
-        procs = os.cpu_count() - 4
+        procs = 48
         print(f'Using {procs} processes for regression out of {os.cpu_count()} possible.')
 
         df_bldg = []
