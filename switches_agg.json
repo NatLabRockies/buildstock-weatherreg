@@ -5,9 +5,9 @@
     "url_base": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/",
     "base_year": 2018,
     "target_year": 2012,
-    "chunk_size": 1,
+    "chunk_size": 15,
     "res_bsq_cols": ["geometry_building_type_recs", "heating_fuel", "county", "county_name", "state"],
-    "com_bsq_cols": ["comstock_building_type", "heating_fuel", "as_simulated_nhgis_county_gisjoin", "nhgis_county_gisjoin", "county_name", "state"],
+    "com_bsq_cols": ["as_simulated_nhgis_county_gisjoin", "nhgis_county_gisjoin", "county_name", "state"],
 
     "apply_regression": true,
     "test_base": false,

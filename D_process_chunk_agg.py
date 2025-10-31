@@ -406,16 +406,12 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                         'county'
                     )
                     .replace(
-                        'GROUP BY 1, 2, 3, 4, 5, 6',
-                        'GROUP BY 1, 2, 3, 4, 5, 6, 7'
+                        '1, 2, 3, 4',
+                        '1, 2, 3, 4, 5'
                     )
                     .replace(
-                        'ORDER BY 1, 2, 3, 4, 5, 6',
-                        'ORDER BY 1, 2, 3, 4, 5, 6, 7'
-                    )
-                    .replace(
-                        '"in.heating_fuel" AS heating_fuel, ',
-                        '"in.heating_fuel" AS heating_fuel, '
+                        '"county" AS nhgis_county_gisjoin, ',
+                        '"county" AS nhgis_county_gisjoin, '
                         'comstock_amy2018_r2_2024_md_agg_by_state_and_county_parquet.'
                         '"in.as_simulated_nhgis_county_gisjoin" AS '
                         'as_simulated_nhgis_county_gisjoin, '
