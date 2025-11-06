@@ -68,8 +68,8 @@ if __name__ == "__main__":
 
     # Load the state_county_map outside the loop
     state_county_map = pd.read_csv(
-        f"{url_base}2024/comstock_amy2018_release_2/geographic_information/"
-        "spatial_tract_lookup_table.csv",
+        f"{url_base}2025/comstock_amy2018_release_2/geographic_information/"
+        "spatial_tract_lookup_table_publish_v8+1.csv",
         storage_options={"anon": True}
     )
 
@@ -86,26 +86,26 @@ if __name__ == "__main__":
 
     # MAIN
     for upgrade in upgrades: 
-        if sw_comstock and comstock_year == "2024" and comstock_release == "2":
-            print("Using custom metadata load logic for ComStock 2024 Release 2")
+        if sw_comstock and comstock_year == "2025" and comstock_release == "2":
+            print("Using custom metadata load logic for ComStock 2025 Release 2")
 
             # state_meta = state_county_map["state_abbreviation"].unique().tolist() # Can be used to filter by state (see line below)
-            state_meta = ['VT']  # For testing purposes, only Vermont is used
+            state_meta = ['CA', 'OR']  # For testing purposes, only Vermont is used
 
             all_meta = []
             for state in state_meta:
                 state_county_map_iter = state_county_map[state_county_map["state_abbreviation"].isin([state])]
                 county_meta = state_county_map_iter["nhgis_county_gisjoin"].unique().tolist()
 
-                county_meta = ['G5000030'] # TESTING
+                # county_meta = ['G5000030'] # TESTING
                 for county in county_meta:
                     try:
                         url = (
                             f"{url_bldg}metadata_and_annual_results_aggregates/by_state_and_county/full/parquet/"
-                            f"state%3D{state}/county%3D{county}/{state}_{county}_upgrade{upgrade:02}_agg.parquet"
-                            if upgrade > 0 else
-                            f"{url_bldg}metadata_and_annual_results_aggregates/by_state_and_county/full/parquet/"
-                            f"state%3D{state}/county%3D{county}/{state}_{county}_baseline_agg.parquet"
+                            f"state%3D{state}/county%3D{county}/{state}_{county}_upgrade{upgrade}_agg.parquet"
+                            # if upgrade > 0 else
+                            # f"{url_bldg}metadata_and_annual_results_aggregates/by_state_and_county/full/parquet/"
+                            # f"state%3D{state}/county%3D{county}/{state}_{county}_baseline_agg.parquet"
                         )
                         df = pd.read_parquet(url, storage_options={"anon": True})
                         df["in.state"] = state
@@ -145,7 +145,7 @@ if __name__ == "__main__":
         # Set `county` based on `sw_comstock` value
         county = 'in.nhgis_county_gisjoin' if sw_comstock else 'in.county'
 
-        # TODO: Alter testing code blocks to incorporate ComStock 2024.2
+        # TODO: Alter testing code blocks to incorporate ComStock 2025.2
         # TESTING - DELETE for production or comment out
         # Testing Subset 1
         ## For testing purposes, subset to Vermont state
@@ -193,7 +193,7 @@ if __name__ == "__main__":
             df_meta = df_meta[df_meta['applicability']]
 
         # Apply weight to sqft and natural gas energy consumption
-        if sw_comstock and comstock_year == "2024" and comstock_release == "2":
+        if sw_comstock and comstock_year == "2025" and comstock_release == "2":
             df_meta['in.sqft'] = df_meta['in.sqft..ft2'] * df_meta['weight']
         else:
             df_meta['in.sqft'] = df_meta['in.sqft'] * df_meta['weight']
@@ -208,7 +208,7 @@ if __name__ == "__main__":
                 'out.electricity.heat_rejection.energy_consumption',
                 'out.electricity.pumps.energy_consumption'
             ]
-            if comstock_year == "2024" and comstock_release == "2":
+            if comstock_year == "2025" and comstock_release == "2":
                 elec_enduses = [item + '..kwh' for item in elec_enduses]
         else:
             elec_enduses = [
@@ -221,7 +221,7 @@ if __name__ == "__main__":
             ]
 
         gas_enduses = ['out.natural_gas.heating.energy_consumption']
-        if sw_comstock and comstock_year == "2024" and comstock_release == "2":
+        if sw_comstock and comstock_year == "2025" and comstock_release == "2":
             gas_enduses = [enduse + '..kwh' for enduse in gas_enduses]
 
         # Apply weight to energy consumption columns

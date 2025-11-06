@@ -110,7 +110,7 @@ def _is_hpc() -> bool:
 
 # Determine county column based on comstock/resstock and version for HPC
 def _county_of(bid):
-    if comstock_year == "2024" and comstock_release == "2":
+    if comstock_year == "2025" and comstock_release == "2":
         return df_meta.loc[bid, 'in.as_simulated_nhgis_county_gisjoin']
     else:
         return df_meta.loc[bid, county]
@@ -375,7 +375,7 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
               f"metadata.upgrade = {aws_upgrade} AND "
               f"comstock_amy2018_release_1_by_state.upgrade = '{aws_upgrade}'"
             )
-            if comstock_year == "2024" and comstock_release == "2":
+            if comstock_year == "2025" and comstock_release == "2":
                 weather_counties_str = ', '.join(
                     f"'{c}'" for c in df_meta[
                         'in.as_simulated_nhgis_county_gisjoin'].unique()
@@ -383,15 +383,15 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                 ts_agg_query = (
                     ts_agg_query.replace(
                         'comstock_amy2018_release_1_by_state',
-                        'comstock_2024_amy2018_release_2_by_state'
+                        'comstock_amy2018_r2_2025_ts_by_state'
                     )
                     .replace(
                         'comstock_2024_amy2018_release_1_by_state',
-                        'comstock_2024_amy2018_release_2_by_state'
+                        'comstock_amy2018_r2_2025_ts_by_state'
                     )
                     .replace(
                         'comstock_2024_amy2018_release_1_metadata',
-                        'comstock_amy2018_r2_2024_md_agg_by_state_and_county_parquet'
+                        'comstock_amy2018_r2_2025_md_agg_by_state_and_county_parquet'
                     )
                     .replace(
                         f"_by_state.upgrade = '{aws_upgrade}'",
@@ -412,15 +412,20 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                     .replace(
                         '"county" AS nhgis_county_gisjoin, ',
                         '"county" AS nhgis_county_gisjoin, '
-                        'comstock_amy2018_r2_2024_md_agg_by_state_and_county_parquet.'
+                        'comstock_amy2018_r2_2025_md_agg_by_state_and_county_parquet.'
                         '"in.as_simulated_nhgis_county_gisjoin" AS '
                         'as_simulated_nhgis_county_gisjoin, '
                     )
                     .replace(
-                        'WHERE comstock_2024_amy2018',
-                        'WHERE comstock_amy2018_r2_2024_md_agg_by_state_and_county_parquet.'
+                        'WHERE comstock_amy2018_r2_2025',
+                        'WHERE comstock_amy2018_r2_2025_md_agg_by_state_and_county_parquet.'
                         '"in.as_simulated_nhgis_county_gisjoin" IN '
-                        f'({weather_counties_str}) AND comstock_2024_amy2018'
+                        f'({weather_counties_str}) AND comstock_amy2018_r2_2025'
+                    )
+                    # Undoing change made earlier for timestamp conversion - maybe delete ABOVE and HERE if confirmed unnecessary
+                    .replace(
+                        'from_unixtime_nanos(comstock_amy2018_r2_2025_ts_by_state.timestamp)',
+                        'comstock_amy2018_r2_2025_ts_by_state.timestamp'
                     )
                 )
 
@@ -493,7 +498,7 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
 
         ts_agg.reset_index(inplace=True)
 
-        if comstock_year == "2024" and comstock_release == "2":
+        if comstock_year == "2025" and comstock_release == "2":
             state_county_map = pd.read_csv(
                 os.path.join(
                     output_dir, "inputs", "spatial_tract_lookup_table.csv")
@@ -1046,7 +1051,7 @@ if sw_apply_regression: # TODO: or `individual_building`?
             # Get the state of the building (for the URL)
             state = df_meta.loc[bldg_id, 'in.state']
             # Get the county ID of the building
-            if comstock_year == "2024" and comstock_release == "2":
+            if comstock_year == "2025" and comstock_release == "2":
                 county_id = df_meta.loc[
                     bldg_id, 'in.as_simulated_nhgis_county_gisjoin'
                 ]
