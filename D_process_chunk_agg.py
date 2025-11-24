@@ -78,7 +78,7 @@ applied_only = switch['applied_only'] # if `True`, only buildings with upgrade a
 ## `process_chunk_agg` function will need to be updated following the AWS call
 bsq_cols =  switch['com_bsq_cols'] if sw_comstock else switch['res_bsq_cols']
 ## Note: resstock upgrades do not correspond to the same # as comstock
-upgrades = switch['upgrades'] # default: comstock = [0, 1, 18], resstock = [0, 1, 5]
+upgrades = switch['upgrades'] # default: comstock = [0, 1, 14, 55], resstock = [0, 4, 8]
 ## Number of buildings to pull per upgrade
 n_bldngs = switch['n_bldngs'] # 'all' for all buildings, 'assign' for assigned building id list from csv
 base_year = switch['base_year'] # Base year for the building stock
@@ -110,7 +110,7 @@ def _is_hpc() -> bool:
 
 # Determine county column based on comstock/resstock and version for HPC
 def _county_of(bid):
-    if comstock_year == "2025" and comstock_release == "2":
+    if sw_comstock and comstock_year == "2025" and comstock_release == "2":
         return df_meta.loc[bid, 'in.as_simulated_nhgis_county_gisjoin']
     else:
         return df_meta.loc[bid, county]
@@ -216,6 +216,9 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
     aws_run_type = run_types[run_type].copy()
     aws_upgrade = upgrade
 
+    # Create a string of chunk_states for query modification
+    chunk_states_str = ', '.join(f"'{state}'" for state in chunk_states)
+
     # Check if the run type is OEDI
     is_oedi = ('db_schema' in aws_run_type 
                and 'oedi' in aws_run_type['db_schema'])
@@ -223,6 +226,9 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
     # Set the relevant variables based on the run type
     heating_fuel = (['NaturalGas', 'Electricity'] if sw_comstock else
                     ['Natural Gas', 'Electricity'])
+
+    natural_gas = ['out.natural_gas.heating.energy_consumption']
+
     if is_oedi:
         if sw_comstock:
             elec_enduse = [
@@ -242,7 +248,10 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                 'out.electricity.cooling.energy_consumption',
                 'out.electricity.cooling_fans_pumps.energy_consumption'
             ]
-        natural_gas = ['out.natural_gas.heating.energy_consumption']
+            # ResStock has suffix '..kwh' for electricity & ng enduse columns
+            elec_enduse = [item + '..kwh' for item in elec_enduse]
+            natural_gas = [enduse + '..kwh' for enduse in natural_gas]
+
         restrict_county = ('in.nhgis_county_gisjoin' if sw_comstock else 
                            'in.county')
         restrict_bldg_type = ('in.comstock_building_type' if sw_comstock else
@@ -300,8 +309,6 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
             annual_only=False
         )
 
-        chunk_states_str = ', '.join(f"'{state}'" for state in chunk_states)
-
         ts_savings_query = (
             ts_savings_query.replace(
                 'SELECT ts_b.timestamp',
@@ -349,6 +356,14 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
         )
 
     elif is_oedi: # elif not sw_savings_shape and is_oedi
+        if not sw_comstock:
+            # Bypass BuildstockQuery upgrade validation/report lookups for this run
+            my_run.agg._validate_upgrade = lambda upgrade_id: str(upgrade_id)
+            my_run.report.get_success_report = (
+                lambda *args, **kwargs: pd.DataFrame(index=[str(aws_upgrade)],
+                                                    data={"success": [1], "fail": [0], "Sum": [1]})
+            )
+
         ts_agg_query = my_run.agg.aggregate_timeseries(
             upgrade_id=0 if sw_comstock else aws_upgrade,
             enduses=elec_enduse + natural_gas,
@@ -431,6 +446,15 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
 
             aws_cols = bsq_cols.copy()
 
+        else:
+            # ResStock OEDI query string requires additional modification
+            ts_agg_query = ts_agg_query.replace(
+              f"baseline.upgrade = {aws_upgrade}",
+              f"baseline.upgrade = {aws_upgrade} "
+              f"AND resstock_amy2018_r1_2025_ts_by_state.upgrade = {aws_upgrade} "
+              f"AND resstock_amy2018_r1_2025_ts_by_state.state IN ({chunk_states_str})"
+            )
+
         print(ts_agg_query)
 
         # Execute the query and store the results in ts_agg as a DataFrame
@@ -484,37 +508,42 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
             (ts_agg[natural_gas].sum(axis=1)) * 0.293071
         )
 
-    if sw_comstock:
-        # Set the timestamp as the index
-        ts_agg.set_index('timestamp', inplace=True)
+    # Remove '..kwh' suffix from elec_enduse columns for grouping
+    ts_agg.columns = [col.replace('..kwh', '') for col in ts_agg.columns]
 
-        # Shift index by 59 minutes for resampling (timestamp will be hour end)
-        ts_agg.index = ts_agg.index + pd.Timedelta(minutes=59)
-        
-        # Sum each hour's energy consumption for each unique bsq_cols group
-        ts_agg = ts_agg.groupby(bsq_cols).resample('H').sum()
+    # Remove '..kwh' from elec_enduse list for grouping
+    elec_enduse = [item.replace('..kwh', '') for item in elec_enduse]
 
-        ts_agg = ts_agg.drop(columns=bsq_cols)
+    # Set the timestamp as the index
+    ts_agg.set_index('timestamp', inplace=True)
 
-        ts_agg.reset_index(inplace=True)
+    # Shift index by 59 minutes for resampling (timestamp will be hour end)
+    ts_agg.index = ts_agg.index + pd.Timedelta(minutes=59)
+    
+    # Sum each hour's energy consumption for each unique bsq_cols group
+    ts_agg = ts_agg.groupby(bsq_cols).resample('H').sum()
 
-        if comstock_year == "2025" and comstock_release == "2":
-            state_county_map = pd.read_csv(
-                os.path.join(
-                    output_dir, "inputs", "spatial_tract_lookup_table.csv")
-            )
+    ts_agg = ts_agg.drop(columns=bsq_cols)
 
-            # Merge state_county_map w/ df_meta to bring in resstock_county_id
-            ts_agg = ts_agg.merge(
-                state_county_map[
-                    ["nhgis_county_gisjoin", "resstock_county_id"]
-                ].drop_duplicates(),
-                how="left",
-                on="nhgis_county_gisjoin"
-            )
+    ts_agg.reset_index(inplace=True)
 
-            # Assign resstock_county_id to in.county_name
-            ts_agg["county_name"] = ts_agg["resstock_county_id"]
+    if sw_comstock and comstock_year == "2025" and comstock_release == "2":
+        state_county_map = pd.read_csv(
+            os.path.join(
+                output_dir, "inputs", "spatial_tract_lookup_table.csv")
+        )
+
+        # Merge state_county_map w/ df_meta to bring in resstock_county_id
+        ts_agg = ts_agg.merge(
+            state_county_map[
+                ["nhgis_county_gisjoin", "resstock_county_id"]
+            ].drop_duplicates(),
+            how="left",
+            on="nhgis_county_gisjoin"
+        )
+
+        # Assign resstock_county_id to in.county_name
+        ts_agg["county_name"] = ts_agg["resstock_county_id"]
 
     # Add building ID column from groupby columns and set as index
     ts_agg['bldg_id'] = ts_agg[aws_cols].apply(tuple, axis=1).astype(str)
@@ -1051,7 +1080,7 @@ if sw_apply_regression: # TODO: or `individual_building`?
             # Get the state of the building (for the URL)
             state = df_meta.loc[bldg_id, 'in.state']
             # Get the county ID of the building
-            if comstock_year == "2025" and comstock_release == "2":
+            if sw_comstock and comstock_year == "2025" and comstock_release == "2":
                 county_id = df_meta.loc[
                     bldg_id, 'in.as_simulated_nhgis_county_gisjoin'
                 ]

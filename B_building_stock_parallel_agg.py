@@ -136,11 +136,13 @@ if __name__ == "__main__":
 
         else:
             # Reformat metadata filepath based on upgrade number
-            url_meta = 'metadata/baseline.parquet' if upgrade == 0 else (
-                    f'metadata/upgrade{upgrade:02}.parquet')
+            url_meta = f'metadata_and_annual_results/national/full/parquet/upgrade{upgrade}.parquet'
 
             # Read Parquet file into a DataFrame
             df_meta = pd.read_parquet(url_bldg + url_meta)
+
+        # Remove Alaska and Hawaii
+        df_meta = df_meta[~df_meta['in.state'].isin(['AK', 'HI'])]
 
         # Set `county` based on `sw_comstock` value
         county = 'in.nhgis_county_gisjoin' if sw_comstock else 'in.county'
@@ -193,10 +195,7 @@ if __name__ == "__main__":
             df_meta = df_meta[df_meta['applicability']]
 
         # Apply weight to sqft and natural gas energy consumption
-        if sw_comstock and comstock_year == "2025" and comstock_release == "2":
-            df_meta['in.sqft'] = df_meta['in.sqft..ft2'] * df_meta['weight']
-        else:
-            df_meta['in.sqft'] = df_meta['in.sqft'] * df_meta['weight']
+        df_meta['in.sqft'] = df_meta['in.sqft..ft2'] * df_meta['weight']
 
         # Define elec_enduses based on whether it's ComStock or ResStock
         if sw_comstock:
@@ -208,8 +207,7 @@ if __name__ == "__main__":
                 'out.electricity.heat_rejection.energy_consumption',
                 'out.electricity.pumps.energy_consumption'
             ]
-            if comstock_year == "2025" and comstock_release == "2":
-                elec_enduses = [item + '..kwh' for item in elec_enduses]
+
         else:
             elec_enduses = [
                 'out.electricity.heating.energy_consumption',
@@ -220,9 +218,11 @@ if __name__ == "__main__":
                 'out.electricity.cooling_fans_pumps.energy_consumption'
             ]
 
+        elec_enduses = [item + '..kwh' for item in elec_enduses]
+
         gas_enduses = ['out.natural_gas.heating.energy_consumption']
-        if sw_comstock and comstock_year == "2025" and comstock_release == "2":
-            gas_enduses = [enduse + '..kwh' for enduse in gas_enduses]
+
+        gas_enduses = [enduse + '..kwh' for enduse in gas_enduses]
 
         # Apply weight to energy consumption columns
         for enduse in elec_enduses + gas_enduses:
