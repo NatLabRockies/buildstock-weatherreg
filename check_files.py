@@ -128,7 +128,22 @@ if __name__ == "__main__":
     with open(output_file, "w") as f:
         f.write("File Check Results\n")
         f.write("=" * 40 + "\n")
-    
+
+    # Print and log selected items at the top
+    selected_items = [
+        f"Directory: {directory}",
+        f"File prefixes: {', '.join(file_prefixes)}",
+        f"Upgrades: {', '.join(str(upgrade) for upgrade in upgrades)}",
+        f"Step length: {step_length}",
+    ]
+    selected_header = "Selected items"
+    selected_block = selected_header + "\n" + "-" * len(selected_header) + "\n" + "\n".join(selected_items) + "\n\n"
+
+    with open(output_file, "a") as f:
+        f.write(selected_block)
+
+    print(selected_block, end="")
+
     # Perform checks and group outputs by upgrade
     grouped_results = {}
     for upgrade in upgrades:
