@@ -1,13 +1,13 @@
 {
-    "upgrades": [0, 1, 22],
+    "upgrades": [0, 4, 8],
     "version_comstock": ["2025", "2"],
-    "version_resstock": ["2024", "2"],
+    "version_resstock": ["2025", "1"],
     "url_base": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/",
     "base_year": 2018,
     "target_year": 2012,
-    "chunk_size": 15,
-    "res_bsq_cols": ["geometry_building_type_recs", "heating_fuel", "county", "county_name", "state"],
-    "com_bsq_cols": ["as_simulated_nhgis_county_gisjoin", "nhgis_county_gisjoin", "county_name", "state"],
+    "chunk_size": 150,
+    "res_bsq_cols": ["county", "county_name", "state"],
+    "com_bsq_cols": ["nhgis_county_gisjoin", "county_name", "state", "as_simulated_nhgis_county_gisjoin"],
 
     "apply_regression": true,
     "test_base": false,
@@ -20,19 +20,23 @@
     "hybrid_model": true,
     "lag_hours_temperature": [-1, 1, 3, 6, 12],
 
-    "comstock": true,
+    "comstock": false,
     "savings_shape": false,
-    "applied_only": true,
+    "applied_only": false,
     "n_bldngs": "assign",
     "mode": "heat_and_cool",
 
-    "base_run": "comstock_2025_2",
-    "target_run": "comstock_2025_2",
+    "base_run": "resstock_amy2018",
+    "target_run": "resstock_amy2018",
     "run_types": {
         "resstock_amy2018": {
             "workgroup": "ghpphase2",
-            "db_name": "euss-res-2024-2-oedi",
-            "table_name": "resstock_amy2018_release_2",
+            "db_name": "buildstock_sdr",
+            "table_name": [
+                "resstock_amy2018_r1_2025_md_by_state_parquet",
+                "resstock_amy2018_r1_2025_ts_by_state",
+                "resstock_amy2018_r1_2025_md_by_state_parquet"
+            ],
             "db_schema": "resstock_oedi",
             "skip_reports": true
         },
