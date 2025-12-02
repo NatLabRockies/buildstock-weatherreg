@@ -434,7 +434,10 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                         'WHERE comstock_amy2018_r2_2025',
                         'WHERE comstock_amy2018_r2_2025_md_agg_by_state_and_county_parquet.'
                         '"in.as_simulated_nhgis_county_gisjoin" IN '
-                        f'({weather_counties_str}) AND comstock_amy2018_r2_2025'
+                        f'({weather_counties_str}) AND '
+                        'comstock_amy2018_r2_2025_md_agg_by_state_and_county_parquet.'
+                        f'"state" IN ({chunk_states_str}) AND '
+                        'comstock_amy2018_r2_2025'
                     )
                     # Undoing change made earlier for timestamp conversion - maybe delete ABOVE and HERE if confirmed unnecessary
                     .replace(
