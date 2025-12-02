@@ -370,8 +370,7 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
             restrict=[('state', chunk_states), # partition in the AWS query
                       ('upgrade', [int(aws_upgrade)]), # partition in the AWS query
                       *([('applicability', [True])] if applied_only else []),
-                      (restrict_county, aws_counties),
-                      (restrict_heating_fuel, heating_fuel)],
+                      (restrict_county, aws_counties)],
             group_by=aws_cols,
             get_query_only=True,
             annual_only=False

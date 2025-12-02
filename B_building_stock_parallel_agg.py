@@ -185,11 +185,6 @@ if __name__ == "__main__":
         # df_meta = df_meta[df_meta[county].isin(counties)]
         # # Testing Subset 2 end
 
-        # Restrict to buildings with natural gas or electricity heating fuel
-        ng_com_res = 'NaturalGas' if sw_comstock else 'Natural Gas'
-        df_meta = df_meta[
-            df_meta['in.heating_fuel'].isin([ng_com_res, 'Electricity'])]
-
         # Restrict to buildings upgraded in the current upgrade iteration
         if applied_only:
             df_meta = df_meta[df_meta['applicability']]
