@@ -458,6 +458,11 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
               f"AND resstock_amy2018_r1_2025_ts_by_state.upgrade = {aws_upgrade} "
               f"AND resstock_amy2018_r1_2025_ts_by_state.state IN ({chunk_states_str})"
             )
+            ts_agg_query = ts_agg_query.replace(
+              "CAST(resstock_amy2018_r1_2025_md_by_state_parquet.upgrade AS VARCHAR) = '0'",
+              "CAST(resstock_amy2018_r1_2025_md_by_state_parquet.upgrade AS VARCHAR) = "
+              f"'{aws_upgrade}'"
+            )
 
         print(ts_agg_query)
 
