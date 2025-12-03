@@ -38,4 +38,7 @@ for f in eulp_files:
 df_sum = pd.concat(ls_df, axis=1)
 df_sum = df_sum.groupby(df_sum.columns, axis=1).sum()
 df_sum = df_sum/1000 #Convert to GWh
-df_sum.to_csv(f'{bldg_path}/agg_{bldg_type}_eulp_hvac_elec_GWh_{bldg_tech}.csv')
+
+out_file_path = f'{bldg_path}/agg_{bldg_type}_eulp_hvac_elec_GWh_{bldg_tech}.csv'
+print(f'Outputting csv: {out_file_path}')
+df_sum.to_csv(out_file_path)
