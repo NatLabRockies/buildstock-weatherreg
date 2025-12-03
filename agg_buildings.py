@@ -1,14 +1,23 @@
+#!/usr/bin/env python
+#SBATCH --account=geohc
+#SBATCH --time=4:00:00
+#SBATCH --mail-user=mmowers@nrel.gov
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --mem=246064    # RAM in MB; up to 246064 for normal or 2000000 for bigmem on kestrel
+#SBATCH --qos=high
+
 '''
 This script develops county-level building hvac load profiles for ReEDS (in GWh) based on resstock/comstock EULP outputs (MWh). The resulting files are dropped back into the directories where the raw EULP files are located.
 '''
+
 import os
 import pandas as pd
 import shutil
 from pdb import set_trace as b
 
 #Inputs
-bldg_type = 'res' # 'com' for comstock or 'res' for resstock
-bldg_path = r'C:\ReEDS\transfer\agg_buildings_2025-11-24\test_bldgs'
+bldg_type = 'com' # 'com' for comstock or 'res' for resstock
+bldg_path = r'/projects/geohc/geo_predict/outputs/outputs_2025-12-02-09-29-48'
 bldg_tech = 'upgrade0'
 
 shutil.copy2(os.path.realpath(__file__), bldg_path)
