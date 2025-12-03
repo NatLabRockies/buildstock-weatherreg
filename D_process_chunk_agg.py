@@ -588,7 +588,7 @@ def _weather_state(gisjoin: str) -> str:
     }
     return fips2abbr[int(gisjoin[1:3])]
 
-def weather_data(url_base, year, state, county_id, max_retries=60, delay=60):
+def weather_data(url_base, year, state, county_id, max_retries=20, delay=60):
     """
     Retrieves weather data from a URL and performs data preprocessing.
 
