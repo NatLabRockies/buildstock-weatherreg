@@ -7,7 +7,7 @@
 #SBATCH --qos=high
 
 '''
-This script develops county-level building hvac load profiles for ReEDS (in GWh) based on resstock/comstock EULP outputs (MWh). The resulting files are dropped back into the directories where the raw EULP files are located.
+This script develops county-level building hvac load profiles for ReEDS (in GWh) based on resstock/comstock EULP outputs (MWh). The resulting files are dropped back into the directories where the raw EULP files are located. This file can be run with python or via slurm with "sbatch agg_buildings.py".
 '''
 
 import os
