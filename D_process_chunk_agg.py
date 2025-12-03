@@ -15,7 +15,9 @@ import shutil
 import subprocess
 from buildstock_query import BuildStockQuery
 import time
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
+from http.client import IncompleteRead, RemoteDisconnected
+from urllib3.exceptions import ProtocolError
 import traceback
 import re
 import random
@@ -607,18 +609,20 @@ def weather_data(url_base, year, state, county_id, max_retries=60, delay=60):
         f'2022/resstock_amy{year}_release_1/weather/'
         f'state={state}/{county_id}_{year}.csv')
 
-    for _ in range(max_retries):
+    for attempt in range(max_retries):
         try:
             df_weather = pd.read_csv(url_weather,
                                      parse_dates=True,
                                      index_col='date_time')
             break
-        except HTTPError as e:
-            if e.code in [500, 503]:
-                print(f"Server error {e.code}, retrying in {delay} seconds...")
+        except (HTTPError, URLError, RemoteDisconnected,
+                IncompleteRead, ProtocolError) as e:
+            retryable_http = isinstance(e, HTTPError) and e.code in [500, 503]
+            print(f"Weather download failed ({attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1 and (retryable_http or not isinstance(e, HTTPError)):
                 time.sleep(delay)
-            else:
-                raise
+                continue
+            raise
     else:
         traceback.print_exc()
         raise Exception("Server error after multiple retries")
