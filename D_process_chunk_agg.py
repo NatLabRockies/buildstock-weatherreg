@@ -392,6 +392,13 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
               f"comstock_amy2018_release_1_by_state.upgrade = '{aws_upgrade}'"
             )
             if comstock_year == "2025" and comstock_release == "2":
+                # Derive table names by base year/release to support 2012/2018
+                com_ts_table = (
+                    f"comstock_amy{base_year}_r{comstock_release}_{comstock_year}_ts_by_state"
+                )
+                com_md_table = (
+                    f"comstock_amy{base_year}_r{comstock_release}_{comstock_year}_md_agg_by_state_and_county_parquet"
+                )
                 weather_counties_str = ', '.join(
                     f"'{c}'" for c in df_meta[
                         'in.as_simulated_nhgis_county_gisjoin'].unique()
@@ -399,15 +406,15 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                 ts_agg_query = (
                     ts_agg_query.replace(
                         'comstock_amy2018_release_1_by_state',
-                        'comstock_amy2018_r2_2025_ts_by_state'
+                        com_ts_table
                     )
                     .replace(
                         'comstock_2024_amy2018_release_1_by_state',
-                        'comstock_amy2018_r2_2025_ts_by_state'
+                        com_ts_table
                     )
                     .replace(
                         'comstock_2024_amy2018_release_1_metadata',
-                        'comstock_amy2018_r2_2025_md_agg_by_state_and_county_parquet'
+                        com_md_table
                     )
                     .replace(
                         f"_by_state.upgrade = '{aws_upgrade}'",
@@ -428,23 +435,20 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                     .replace(
                         '"county" AS nhgis_county_gisjoin, ',
                         '"county" AS nhgis_county_gisjoin, '
-                        'comstock_amy2018_r2_2025_md_agg_by_state_and_county_parquet.'
-                        '"in.as_simulated_nhgis_county_gisjoin" AS '
+                        f'{com_md_table}."in.as_simulated_nhgis_county_gisjoin" AS '
                         'as_simulated_nhgis_county_gisjoin, '
                     )
                     .replace(
-                        'WHERE comstock_amy2018_r2_2025',
-                        'WHERE comstock_amy2018_r2_2025_md_agg_by_state_and_county_parquet.'
-                        '"in.as_simulated_nhgis_county_gisjoin" IN '
+                        f'WHERE comstock_amy{base_year}_r{comstock_release}_{comstock_year}',
+                        f'WHERE {com_md_table}."in.as_simulated_nhgis_county_gisjoin" IN '
                         f'({weather_counties_str}) AND '
-                        'comstock_amy2018_r2_2025_md_agg_by_state_and_county_parquet.'
-                        f'"state" IN ({chunk_states_str}) AND '
-                        'comstock_amy2018_r2_2025'
+                        f'{com_md_table}."state" IN ({chunk_states_str}) AND '
+                        f'comstock_amy{base_year}_r{comstock_release}_{comstock_year}'
                     )
                     # Undoing change made earlier for timestamp conversion - maybe delete ABOVE and HERE if confirmed unnecessary
                     .replace(
-                        'from_unixtime_nanos(comstock_amy2018_r2_2025_ts_by_state.timestamp)',
-                        'comstock_amy2018_r2_2025_ts_by_state.timestamp'
+                        f'from_unixtime_nanos({com_ts_table}.timestamp)',
+                        f'{com_ts_table}.timestamp'
                     )
                 )
 
