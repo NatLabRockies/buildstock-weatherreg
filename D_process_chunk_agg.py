@@ -445,12 +445,15 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                         f'{com_md_table}."state" IN ({chunk_states_str}) AND '
                         f'comstock_amy{base_year}_r{comstock_release}_{comstock_year}'
                     )
-                    # Undoing change made earlier for timestamp conversion - maybe delete ABOVE and HERE if confirmed unnecessary
-                    .replace(
-                        f'from_unixtime_nanos({com_ts_table}.timestamp)',
-                        f'{com_ts_table}.timestamp'
-                    )
                 )
+
+            hour_expr = (
+                f"date_trunc('hour', {com_ts_table}.timestamp + interval '59' minute)"
+            )
+            ts_agg_query = ts_agg_query.replace(
+                f'from_unixtime_nanos({com_ts_table}.timestamp)',
+                hour_expr
+            )
 
             aws_cols = bsq_cols.copy()
 
