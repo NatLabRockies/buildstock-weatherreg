@@ -29,6 +29,17 @@
     "base_run": "resstock_amy2018",
     "target_run": "resstock_amy2018",
     "run_types": {
+        "resstock_amy2012": {
+            "workgroup": "ghpphase2",
+            "db_name": "buildstock_sdr",
+            "table_name": [
+                "resstock_amy2012_r1_2025_md_by_state_parquet",
+                "resstock_amy2012_r1_2025_ts_by_state",
+                "resstock_amy2012_r1_2025_md_by_state_parquet"
+            ],
+            "db_schema": "resstock_oedi",
+            "skip_reports": true
+        },
         "resstock_amy2018": {
             "workgroup": "ghpphase2",
             "db_name": "buildstock_sdr",
@@ -61,13 +72,6 @@
             "table_name": "comstock_2024_amy2018_release_1",
             "db_schema": "comstock_oedi",
             "buildstock_type": "comstock",
-            "skip_reports": true
-        },
-        "resstock_amy2012": {
-            "workgroup": "ghpphase2",
-            "db_name": "geohc",
-            "table_name": "full_run_20240524",
-            "buildstock_type": "resstock",
             "skip_reports": true
         }
     }

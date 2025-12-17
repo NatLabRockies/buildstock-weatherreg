@@ -459,15 +459,22 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
 
         else:
             # ResStock OEDI query string requires additional modification
+            res_ts_table = (
+                f"resstock_amy{base_year}_r{resstock_release}_{resstock_year}_ts_by_state"
+            )
+            res_md_table = (
+                f"resstock_amy{base_year}_r{resstock_release}_{resstock_year}_md_by_state_parquet"
+            )
+
             ts_agg_query = ts_agg_query.replace(
               f"baseline.upgrade = {aws_upgrade}",
               f"baseline.upgrade = {aws_upgrade} "
-              f"AND resstock_amy2018_r1_2025_ts_by_state.upgrade = {aws_upgrade} "
-              f"AND resstock_amy2018_r1_2025_ts_by_state.state IN ({chunk_states_str})"
+              f"AND {res_ts_table}.upgrade = {aws_upgrade} "
+              f"AND {res_ts_table}.state IN ({chunk_states_str})"
             )
             ts_agg_query = ts_agg_query.replace(
-              "CAST(resstock_amy2018_r1_2025_md_by_state_parquet.upgrade AS VARCHAR) = '0'",
-              "CAST(resstock_amy2018_r1_2025_md_by_state_parquet.upgrade AS VARCHAR) = "
+              f"CAST({res_md_table}.upgrade AS VARCHAR) = '0'",
+              f"CAST({res_md_table}.upgrade AS VARCHAR) = "
               f"'{aws_upgrade}'"
             )
 
