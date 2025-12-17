@@ -471,6 +471,19 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
               f"'{aws_upgrade}'"
             )
 
+            hour_expr = (
+                f"date_trunc('hour', {res_ts_table}.timestamp + interval '59' minute)"
+            )
+            ts_agg_query = ts_agg_query.replace(
+                f'from_unixtime_nanos({res_ts_table}.timestamp)',
+                hour_expr
+            )
+            # Fallback: force any raw timestamp selections to use the hourly truncation
+            ts_agg_query = ts_agg_query.replace(
+                f'{res_ts_table}.timestamp AS timestamp',
+                f'{hour_expr} AS timestamp'
+            )
+
         print(ts_agg_query)
 
         # Execute the query and store the results in ts_agg as a DataFrame
@@ -529,19 +542,6 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
 
     # Remove '..kwh' from elec_enduse list for grouping
     elec_enduse = [item.replace('..kwh', '') for item in elec_enduse]
-
-    # Set the timestamp as the index
-    ts_agg.set_index('timestamp', inplace=True)
-
-    # Shift index by 59 minutes for resampling (timestamp will be hour end)
-    ts_agg.index = ts_agg.index + pd.Timedelta(minutes=59)
-    
-    # Sum each hour's energy consumption for each unique bsq_cols group
-    ts_agg = ts_agg.groupby(bsq_cols).resample('H').sum()
-
-    ts_agg = ts_agg.drop(columns=bsq_cols)
-
-    ts_agg.reset_index(inplace=True)
 
     if sw_comstock and comstock_year == "2025" and comstock_release == "2":
         state_county_map = pd.read_csv(
