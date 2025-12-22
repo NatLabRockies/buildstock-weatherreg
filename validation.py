@@ -11,11 +11,32 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
 import shutil
+import re
 
-#Input the regression and reference file paths here.
-REF_PATH = Path(r"C:\ReEDS\geo_predict\validation_2025-12-19\com_0_ref_outputs_2025-12-10-15-53-30\agg_com_eulp_hvac_elec_GWh_upgrade0.csv")
-REG_PATH = Path(r"C:\ReEDS\geo_predict\validation_2025-12-19\com_0_reg_outputs_2025-12-02-09-29-48\agg_com_eulp_hvac_elec_GWh_upgrade0.csv")
+COMPARISONS = [
+    {
+        "name": "ComStock Upgrade 0 (Baseline)",
+        "ref": r"C:\ReEDS\geo_predict\validation_2025-12-19\com_0_ref_outputs_2025-12-10-15-53-30\agg_com_eulp_hvac_elec_GWh_upgrade0.csv",
+        "reg": r"C:\ReEDS\geo_predict\validation_2025-12-19\com_0_reg_outputs_2025-12-02-09-29-48\agg_com_eulp_hvac_elec_GWh_upgrade0.csv",
+    },
+    {
+        "name": "ComStock Upgrade 1 (Air-Source Heat Pump)",
+        "ref": r"C:\ReEDS\geo_predict\validation_2025-12-19\com_1_ref_outputs_2025-12-12-09-27-07\agg_com_eulp_hvac_elec_GWh_upgrade1.csv",
+        "reg": r"C:\ReEDS\geo_predict\validation_2025-12-19\com_1_reg_outputs_2025-12-03-16-16-21\agg_com_eulp_hvac_elec_GWh_upgrade1.csv",
+    },
+    {
+        "name": "ResStock Upgrade 0 (Baseline)",
+        "ref": r"C:\ReEDS\geo_predict\validation_2025-12-19\res_0_ref_outputs_2025-12-15-14-51-32\agg_res_eulp_hvac_elec_GWh_upgrade0.csv",
+        "reg": r"C:\ReEDS\geo_predict\validation_2025-12-19\res_0_reg_outputs_2025-12-03-13-50-22\agg_res_eulp_hvac_elec_GWh_upgrade0.csv",
+    },
+    {
+        "name": "ResStock Upgrade 4 (Air-Source Heat Pump)",
+        "ref": r"C:\ReEDS\geo_predict\validation_2025-12-19\res_4_ref_outputs_2025-12-15-14-51-32\agg_res_eulp_hvac_elec_GWh_upgrade4.csv",
+        "reg": r"C:\ReEDS\geo_predict\validation_2025-12-19\res_4_reg_outputs_2025-12-03-13-50-22\agg_res_eulp_hvac_elec_GWh_upgrade4.csv",
+    },
+]
 OUTPUT_DIR = Path("validation_outputs")
+OUTPUT_SUBDIR = None
 COUNTY_MAP_URL = "https://raw.githubusercontent.com/NREL/ReEDS-2.0/refs/heads/main/inputs/county2zone.csv"
 
 SEASON_LOOKUP = {
@@ -34,7 +55,6 @@ SEASON_LOOKUP = {
 }
 SEASON_ORDER = ["DJF", "MAM", "JJA", "SON"]
 PCTL = [90, 95, 99]
-
 
 def escape_html(val):
     text = str(val)
@@ -83,6 +103,14 @@ def ensure_output_dir(path: Path):
     path.mkdir(parents=True, exist_ok=True)
 
 
+def slugify(name: str):
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-_")
+    return safe or "comparison"
+
+
+def get_out_dir():
+    return OUTPUT_SUBDIR if OUTPUT_SUBDIR else OUTPUT_DIR
+
 def normalize_fips(val) -> str:
     sval = str(val).strip()
     sval = sval.lstrip("0")
@@ -130,7 +158,6 @@ def ba_state_lookup_from_meta(county_meta: pd.DataFrame):
         else:
             ba_states[ba] = states
     return ba_states, multi_state
-
 
 def select_best_middle_worst(series: pd.Series, k: int = 3):
     series = series.dropna().sort_values()
@@ -201,7 +228,6 @@ def diurnal_corr_by_month(nat_ref: pd.Series, nat_reg: pd.Series):
         prof = month_slice.groupby("hour").mean().reindex(range(24), fill_value=np.nan)
         out.append((m, float(prof["ref"].corr(prof["reg"]))))
     return out
-
 
 def plot_monthly_pct(monthly_pct: pd.Series, out_path: Path):
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -301,15 +327,18 @@ def plot_ranked_hourly_scatters(df_ref: pd.DataFrame, df_reg: pd.DataFrame, rank
             if idx not in df_ref.columns or idx not in df_reg.columns:
                 continue
             title = f"{label_lookup(idx)} ({bucket})"
-            out_path = OUTPUT_DIR / f"{prefix}_{bucket}_{idx}.png"
+            out_path = get_out_dir() / f"{prefix}_{bucket}_{idx}.png"
             plot_hourly_scatter(df_ref[idx], df_reg[idx], out_path, title=title)
 
+def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
+    global OUTPUT_SUBDIR
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    comp_slug = slugify(comp_name or f"{ref_path.stem}_vs_{reg_path.stem}")
+    OUTPUT_SUBDIR = OUTPUT_DIR / comp_slug
+    ensure_output_dir(get_out_dir())
 
-def main():
-    ensure_output_dir(OUTPUT_DIR)
-
-    counties_ref, df_ref_raw = load_csv(REF_PATH)
-    counties_reg, df_reg_raw = load_csv(REG_PATH)
+    counties_ref, df_ref_raw = load_csv(ref_path)
+    counties_reg, df_reg_raw = load_csv(reg_path)
     if counties_ref != counties_reg:
         raise SystemExit("Header mismatch")
     rename_map = {c: normalize_fips(c) for c in counties_ref}
@@ -495,15 +524,16 @@ def main():
 
     nat_nmae_pct = nat_nmae * 100 if np.isfinite(nat_nmae) else float("nan")
 
-    plot_monthly_pct(monthly_pct, OUTPUT_DIR / "monthly_percent_diff.png")
-    plot_top_county_pct(county_pct, OUTPUT_DIR / "county_percent_diff_top.png", label_lookup=fmt_county)
-    plot_daily_scatter(daily_ref, daily_reg, OUTPUT_DIR / "daily_totals_scatter.png")
-    plot_hourly_scatter(nat_ref, nat_reg, OUTPUT_DIR / "hourly_totals_scatter.png")
+    plot_monthly_pct(monthly_pct, get_out_dir() / "monthly_percent_diff.png")
+    plot_top_county_pct(county_pct, get_out_dir() / "county_percent_diff_top.png", label_lookup=fmt_county)
+    plot_daily_scatter(daily_ref, daily_reg, get_out_dir() / "daily_totals_scatter.png")
+    plot_hourly_scatter(nat_ref, nat_reg, get_out_dir() / "hourly_totals_scatter.png")
     plot_ranked_hourly_scatters(df_ref, df_reg, county_nmae, fmt_county, "county_hourly_scatter")
     if not ba_nmae.empty:
         plot_ranked_hourly_scatters(df_ref_ba, df_reg_ba, ba_nmae, fmt_ba, "ba_hourly_scatter")
 
     summary_rows = [
+        ("Comparison", comp_name),
         ("Ref rows", f"{len(df_ref_raw):,}"),
         ("Reg rows", f"{len(df_reg_raw):,}"),
         ("Common hours", f"{len(common_idx):,}"),
@@ -556,7 +586,7 @@ def main():
 
     national_error_rows = [
         ("MAE", fmt_gwh(nat_mae)),
-        ("Normalized MAE", f"{fmt_float(nat_nmae)} ({fmt_pct(nat_nmae_pct)})"),
+        ("Normalized MAE", f"{fmt_float(nat_nmae)} ({fmt_pct(nat_nmae * 100)})"),
         ("RMSE", fmt_gwh(nat_rmse)),
     ]
 
@@ -651,8 +681,8 @@ def main():
         ("Daily totals scatter", "daily_totals_scatter.png"),
         ("Hourly totals scatter", "hourly_totals_scatter.png"),
     ]
-    county_scatter_imgs = sorted([p.name for p in OUTPUT_DIR.glob("county_hourly_scatter_*.png")])
-    ba_scatter_imgs = sorted([p.name for p in OUTPUT_DIR.glob("ba_hourly_scatter_*.png")])
+    county_scatter_imgs = sorted([p.name for p in get_out_dir().glob("county_hourly_scatter_*.png")])
+    ba_scatter_imgs = sorted([p.name for p in get_out_dir().glob("ba_hourly_scatter_*.png")])
 
     style = """
     <style>
@@ -675,7 +705,8 @@ def main():
         style,
         "</head><body>",
         "<h1>Validation report</h1>",
-        f"<p>Generated from ref: {escape_html(str(REF_PATH))}<br>reg: {escape_html(str(REG_PATH))}</p>",
+        f"<p>Comparison: {escape_html(comp_name)}</p>",
+        f"<p>Ref: {escape_html(str(ref_path))}<br>Reg: {escape_html(str(reg_path))}</p>",
         "<section><h2>Overview</h2>",
         html_table(summary_rows, ["Metric", "Value"]),
         "</section>",
@@ -809,15 +840,25 @@ def main():
 
     html_parts.append("</body></html>")
 
-    report_path = OUTPUT_DIR / "report.html"
+    report_path = get_out_dir() / "report.html"
     report_path.write_text("\n".join(html_parts), encoding="utf-8")
 
     try:
-        shutil.copy(Path(__file__).resolve(), OUTPUT_DIR / Path(__file__).name)
+        shutil.copy(Path(__file__).resolve(), get_out_dir() / Path(__file__).name)
     except Exception as exc:
         print(f"Warning: failed to copy script into outputs: {exc}")
 
     print(f"Report written to {report_path.resolve()}")
+
+
+def main():
+    if not COMPARISONS:
+        raise SystemExit("No comparisons defined in COMPARISONS")
+    for comp in COMPARISONS:
+        ref_path = Path(comp["ref"])
+        reg_path = Path(comp["reg"])
+        comp_name = comp.get("name") or f"{ref_path.stem} vs {reg_path.stem}"
+        run_comparison(ref_path, reg_path, comp_name)
 
 
 if __name__ == "__main__":
