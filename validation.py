@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
+import shutil
 
 #Input the regression and reference file paths here.
 REF_PATH = Path(r"C:\ReEDS\geo_predict\validation_2025-12-19\com_0_ref_outputs_2025-12-10-15-53-30\agg_com_eulp_hvac_elec_GWh_upgrade0.csv")
@@ -33,6 +34,53 @@ SEASON_LOOKUP = {
 }
 SEASON_ORDER = ["DJF", "MAM", "JJA", "SON"]
 PCTL = [90, 95, 99]
+
+
+def escape_html(val):
+    text = str(val)
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def html_table(rows, headers):
+    head_cells = "".join(f"<th>{escape_html(h)}</th>" for h in headers)
+    body_rows = []
+    for row in rows:
+        cells = "".join(f"<td>{escape_html(val)}</td>" for val in row)
+        body_rows.append(f"<tr>{cells}</tr>")
+    return f"<table><thead><tr>{head_cells}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
+
+
+def bullet_list(items):
+    return "<ul>" + "".join(f"<li>{escape_html(item)}</li>" for item in items) + "</ul>"
+
+
+def fmt_pct(val):
+    return "nan" if pd.isna(val) else f"{val:.2f}%"
+
+
+def fmt_gwh(val):
+    return "nan" if pd.isna(val) else f"{val:,.3f} GWh"
+
+
+def fmt_float(val, precision=4):
+    return "nan" if pd.isna(val) else f"{val:.{precision}f}"
+
+
+def ensure_output_dir(path: Path):
+    if path.exists():
+        contents = list(path.iterdir())
+        if contents:
+            resp = input(f"Output directory '{path}' exists and has {len(contents)} item(s). Delete it? [y/N]: ").strip().lower()
+            if resp not in ("y", "yes"):
+                raise SystemExit("Aborting; output directory not cleared.")
+            shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def normalize_fips(val) -> str:
@@ -258,7 +306,7 @@ def plot_ranked_hourly_scatters(df_ref: pd.DataFrame, df_reg: pd.DataFrame, rank
 
 
 def main():
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    ensure_output_dir(OUTPUT_DIR)
 
     counties_ref, df_ref_raw = load_csv(REF_PATH)
     counties_reg, df_reg_raw = load_csv(REG_PATH)
@@ -273,13 +321,7 @@ def main():
     df_ref, df_reg, common_idx, miss_ref_only, miss_reg_only = align_frames(df_ref_raw, df_reg_raw)
 
     county_meta, missing_meta = load_county_metadata(counties)
-    if missing_meta:
-        missing_preview = ", ".join(missing_meta[:5])
-        print(f"Counties missing in mapping file: {len(missing_meta)} ({missing_preview}{'...' if len(missing_meta) > 5 else ''})")
     ba_states, multi_state = ba_state_lookup_from_meta(county_meta)
-    if multi_state:
-        example_ba = next(iter(multi_state))
-        print(f"Warning: BA(s) with multiple states in mapping (example {example_ba}: {multi_state[example_ba]})")
     fmt_county = lambda f: county_label(f, county_meta)
     fmt_ba = lambda b: ba_label(b, ba_states)
 
@@ -451,153 +493,7 @@ def main():
         peak_max_idx = county_peak_pct.idxmax()
         peak_min_idx = county_peak_pct.idxmin()
 
-    print("Ref rows:", len(df_ref_raw), "Reg rows:", len(df_reg_raw), "Common:", len(common_idx))
-    print("Missing in reg:", len(miss_ref_only), "Missing in ref:", len(miss_reg_only))
-
-    print("Hours used:", len(common_idx), "Counties:", n)
-    print("Annual GWh ref={:,.2f}, reg={:,.2f}, pct diff={:.2f}%".format(annual_ref, annual_reg, annual_pct))
-    print("\nSeasonal pct diff (reg-ref)/ref:")
-    for k in SEASON_ORDER:
-        print(f"  {k}: {seasonal_pct[k]:.2f}% (ref {season_ref[k]:,.2f} GWh, reg {season_reg[k]:,.2f} GWh)")
-
-    print("\nMonthly pct diff (reg-ref)/ref:")
-    for m in range(1, 13):
-        print(f"  {m:02d}: {monthly_pct[m]:.2f}%")
-
-    print("\nCounty annual pct diff stats:")
-    print(f"  Mean abs pct diff: {mean_abs:.2f}%")
-    print(f"  Median abs pct diff: {median_abs:.2f}%")
-    if max_pos is not None and max_neg is not None:
-        print(f"  Max positive pct diff: {county_pct[max_pos]:.2f}% ({fmt_county(max_pos)})")
-        print(f"  Max negative pct diff: {county_pct[max_neg]:.2f}% ({fmt_county(max_neg)})")
-    print("  Top +5 counties (pct diff):")
-    for fips, pct in pos5.items():
-        print(f"    {fmt_county(fips)}: {pct:.2f}%")
-    print("  Top -5 counties (pct diff):")
-    for fips, pct in neg5.items():
-        print(f"    {fmt_county(fips)}: {pct:.2f}%")
-
-    if not ba_pct.empty:
-        print("\nBA annual pct diff stats:")
-        print(f"  Mean abs pct diff: {ba_mean_abs:.2f}%")
-        print(f"  Median abs pct diff: {ba_median_abs:.2f}%")
-        if ba_max_pos is not None and ba_max_neg is not None:
-            print(f"  Max positive pct diff: {ba_pct[ba_max_pos]:.2f}% ({fmt_ba(ba_max_pos)})")
-            print(f"  Max negative pct diff: {ba_pct[ba_max_neg]:.2f}% ({fmt_ba(ba_max_neg)})")
-        print("  Top +5 BAs (pct diff):")
-        for ba, pct in ba_pos5.items():
-            print(f"    {fmt_ba(ba)}: {pct:.2f}%")
-        print("  Top -5 BAs (pct diff):")
-        for ba, pct in ba_neg5.items():
-            print(f"    {fmt_ba(ba)}: {pct:.2f}%")
-
-    print("\nCounty-month MAPE (ref>0): mean {:.2f}%, median {:.2f}%".format(mean_mape_cm, median_mape_cm))
-    if not df_ref_ba.empty:
-        print("BA-month MAPE (ref>0): mean {:.2f}%, median {:.2f}%".format(mean_mape_ba, median_mape_ba))
-    print("National hourly correlation: {:.4f}".format(hourly_corr))
-    print("Daily-total correlation: {:.4f}".format(daily_corr))
-    print("Load factor ref={:.3f}, reg={:.3f}, delta={:.3f}".format(lf_ref, lf_reg, lf_reg - lf_ref))
-
-    print("\nDiurnal profile correlation by month (0-23 avg hour):")
-    for m, c in monthly_diurnal_corr:
-        print(f"  Month {m:02d}: {c:.4f}")
-
     nat_nmae_pct = nat_nmae * 100 if np.isfinite(nat_nmae) else float("nan")
-    print("\nNational hourly error metrics:")
-    print("  MAE: {:.3f} GWh".format(nat_mae))
-    print("  Normalized MAE (MAE/mean ref): {:.4f} ({:.2f}%)".format(nat_nmae, nat_nmae_pct))
-    print("  RMSE: {:.3f} GWh".format(nat_rmse))
-
-    print("\nCounty hourly error stats:")
-    print("  MAE (GWh): mean {:.3f}, median {:.3f}".format(mean_mae, median_mae))
-    if min_nmae_idx is not None and max_nmae_idx is not None:
-        print(
-            "  Normalized MAE: mean {:.4f}, median {:.4f}, best {:.4f} ({}), worst {:.4f} ({})".format(
-                mean_nmae,
-                median_nmae,
-                county_nmae[min_nmae_idx],
-                fmt_county(min_nmae_idx),
-                county_nmae[max_nmae_idx],
-                fmt_county(max_nmae_idx),
-            )
-        )
-    else:
-        print("  Normalized MAE: mean {:.4f}, median {:.4f}".format(mean_nmae, median_nmae))
-    print(
-        "  RMSE (GWh): mean {:.3f}, median {:.3f}, max {:.3f} ({}), min {:.3f} ({})".format(
-            mean_rmse,
-            median_rmse,
-            county_rmse[max_rmse_idx],
-            fmt_county(max_rmse_idx),
-            county_rmse[min_rmse_idx],
-            fmt_county(min_rmse_idx),
-        )
-    )
-
-    if not ba_rmse.empty:
-        print("\nBA hourly error stats:")
-        print("  MAE (GWh): mean {:.3f}, median {:.3f}".format(mean_ba_mae, median_ba_mae))
-        if min_ba_nmae_idx is not None and max_ba_nmae_idx is not None:
-            print(
-                "  Normalized MAE: mean {:.4f}, median {:.4f}, best {:.4f} ({}), worst {:.4f} ({})".format(
-                    mean_ba_nmae,
-                    median_ba_nmae,
-                    ba_nmae[min_ba_nmae_idx],
-                    fmt_ba(min_ba_nmae_idx),
-                    ba_nmae[max_ba_nmae_idx],
-                    fmt_ba(max_ba_nmae_idx),
-                )
-            )
-        else:
-            print("  Normalized MAE: mean {:.4f}, median {:.4f}".format(mean_ba_nmae, median_ba_nmae))
-        if ba_max_rmse_idx is not None and ba_min_rmse_idx is not None:
-            print(
-                "  RMSE (GWh): mean {:.3f}, median {:.3f}, max {:.3f} ({}), min {:.3f} ({})".format(
-                    mean_ba_rmse,
-                    median_ba_rmse,
-                    ba_rmse[ba_max_rmse_idx],
-                    fmt_ba(ba_max_rmse_idx),
-                    ba_rmse[ba_min_rmse_idx],
-                    fmt_ba(ba_min_rmse_idx),
-                )
-            )
-        else:
-            print("  RMSE (GWh): mean {:.3f}, median {:.3f}".format(mean_ba_rmse, median_ba_rmse))
-
-    print("\nPeak demand (national totals, GWh):")
-    print("  Ref peak: {:.3f} at {}".format(peak_ref_val, peak_ref_ts))
-    print("  Reg peak: {:.3f} at {}".format(peak_reg_val, peak_reg_ts))
-    print("  Peak percent diff: {:.2f}%".format(peak_diff_pct))
-    print(
-        "  Reg at ref-peak hour: {:.3f} (pct diff vs ref {:.2f}%)".format(
-            reg_at_ref_peak, (reg_at_ref_peak - peak_ref_val) / peak_ref_val * 100 if peak_ref_val else float("nan")
-        )
-    )
-    print(
-        "  Ref at reg-peak hour: {:.3f} (pct diff vs reg {:.2f}%)".format(
-            ref_at_reg_peak, (ref_at_reg_peak - peak_reg_val) / peak_reg_val * 100 if peak_reg_val else float("nan")
-        )
-    )
-
-    print("\nNational high-load thresholds (GWh):")
-    for p in PCTL:
-        pdiff = (reg_pct.loc[p / 100] - ref_pct.loc[p / 100]) / ref_pct.loc[p / 100] * 100
-        print("  {:>3}%: ref {:.3f}, reg {:.3f}, pct diff {:.2f}%".format(p, ref_pct.loc[p / 100], reg_pct.loc[p / 100], pdiff))
-
-    print(
-        "\nCounty peak percent diff (reg-ref)/ref: mean {:.2f}%, median {:.2f}%".format(
-            peak_mean, peak_median
-        )
-    )
-    if peak_max_idx is not None and peak_min_idx is not None:
-        print(
-            "  Max {:.2f}% ({}), Min {:.2f}% ({})".format(
-                county_peak_pct[peak_max_idx],
-                fmt_county(peak_max_idx),
-                county_peak_pct[peak_min_idx],
-                fmt_county(peak_min_idx),
-            )
-        )
 
     plot_monthly_pct(monthly_pct, OUTPUT_DIR / "monthly_percent_diff.png")
     plot_top_county_pct(county_pct, OUTPUT_DIR / "county_percent_diff_top.png", label_lookup=fmt_county)
@@ -606,7 +502,322 @@ def main():
     plot_ranked_hourly_scatters(df_ref, df_reg, county_nmae, fmt_county, "county_hourly_scatter")
     if not ba_nmae.empty:
         plot_ranked_hourly_scatters(df_ref_ba, df_reg_ba, ba_nmae, fmt_ba, "ba_hourly_scatter")
-    print(f"\nCharts written to {OUTPUT_DIR.resolve()}")
+
+    summary_rows = [
+        ("Ref rows", f"{len(df_ref_raw):,}"),
+        ("Reg rows", f"{len(df_reg_raw):,}"),
+        ("Common hours", f"{len(common_idx):,}"),
+        ("Missing in reg", f"{len(miss_ref_only):,}"),
+        ("Missing in ref", f"{len(miss_reg_only):,}"),
+        ("Counties", f"{n:,}"),
+        ("Mapping missing counties", f"{len(missing_meta):,}"),
+    ]
+    if not df_ref_ba.empty:
+        summary_rows.append(("Balancing areas", f"{df_ref_ba.shape[1]:,}"))
+
+    seasonal_rows = [
+        (k, f"{season_ref[k]:,.2f}", f"{season_reg[k]:,.2f}", fmt_pct(seasonal_pct[k])) for k in SEASON_ORDER
+    ]
+    monthly_rows = [
+        (f"{m:02d}", f"{monthly_nat_ref[m]:,.2f}", f"{monthly_nat_reg[m]:,.2f}", fmt_pct(monthly_pct[m])) for m in range(1, 13)
+    ]
+
+    county_stats_items = [
+        f"Mean abs pct diff: {mean_abs:.2f}%",
+        f"Median abs pct diff: {median_abs:.2f}%",
+    ]
+    if max_pos is not None and max_neg is not None:
+        county_stats_items.append(f"Max positive pct diff: {county_pct[max_pos]:.2f}% ({fmt_county(max_pos)})")
+        county_stats_items.append(f"Max negative pct diff: {county_pct[max_neg]:.2f}% ({fmt_county(max_neg)})")
+    county_top_pos_rows = [(fmt_county(fips), fmt_pct(pct)) for fips, pct in pos5.items()]
+    county_top_neg_rows = [(fmt_county(fips), fmt_pct(pct)) for fips, pct in neg5.items()]
+
+    ba_stats_items = []
+    ba_top_pos_rows = []
+    ba_top_neg_rows = []
+    if not ba_pct.empty:
+        ba_stats_items = [
+            f"Mean abs pct diff: {ba_mean_abs:.2f}%",
+            f"Median abs pct diff: {ba_median_abs:.2f}%",
+        ]
+        if ba_max_pos is not None and ba_max_neg is not None:
+            ba_stats_items.append(f"Max positive pct diff: {ba_pct[ba_max_pos]:.2f}% ({fmt_ba(ba_max_pos)})")
+            ba_stats_items.append(f"Max negative pct diff: {ba_pct[ba_max_neg]:.2f}% ({fmt_ba(ba_max_neg)})")
+        ba_top_pos_rows = [(fmt_ba(ba), fmt_pct(pct)) for ba, pct in ba_pos5.items()]
+        ba_top_neg_rows = [(fmt_ba(ba), fmt_pct(pct)) for ba, pct in ba_neg5.items()]
+
+    mape_rows = [
+        ("County-month MAPE (ref>0)", fmt_pct(mean_mape_cm), fmt_pct(median_mape_cm)),
+    ]
+    if not df_ref_ba.empty:
+        mape_rows.append(("BA-month MAPE (ref>0)", fmt_pct(mean_mape_ba), fmt_pct(median_mape_ba)))
+
+    diurnal_rows = [(f"{m:02d}", fmt_float(c, 4)) for m, c in monthly_diurnal_corr]
+
+    national_error_rows = [
+        ("MAE", fmt_gwh(nat_mae)),
+        ("Normalized MAE", f"{fmt_float(nat_nmae)} ({fmt_pct(nat_nmae_pct)})"),
+        ("RMSE", fmt_gwh(nat_rmse)),
+    ]
+
+    county_error_rows = [
+        ("MAE mean", fmt_gwh(mean_mae)),
+        ("MAE median", fmt_gwh(median_mae)),
+        ("NMAE mean", fmt_float(mean_nmae)),
+        ("NMAE median", fmt_float(median_nmae)),
+    ]
+    if min_nmae_idx is not None and max_nmae_idx is not None:
+        county_error_rows.append(("Best NMAE county", f"{fmt_float(county_nmae[min_nmae_idx])} ({fmt_county(min_nmae_idx)})"))
+        county_error_rows.append(("Worst NMAE county", f"{fmt_float(county_nmae[max_nmae_idx])} ({fmt_county(max_nmae_idx)})"))
+    county_error_rows.extend(
+        [
+            ("RMSE mean", fmt_gwh(mean_rmse)),
+            ("RMSE median", fmt_gwh(median_rmse)),
+            ("Max RMSE county", f"{fmt_gwh(county_rmse[max_rmse_idx])} ({fmt_county(max_rmse_idx)})"),
+            ("Min RMSE county", f"{fmt_gwh(county_rmse[min_rmse_idx])} ({fmt_county(min_rmse_idx)})"),
+        ]
+    )
+
+    ba_error_rows = []
+    if not ba_rmse.empty:
+        ba_error_rows = [
+            ("MAE mean", fmt_gwh(mean_ba_mae)),
+            ("MAE median", fmt_gwh(median_ba_mae)),
+            ("NMAE mean", fmt_float(mean_ba_nmae)),
+            ("NMAE median", fmt_float(median_ba_nmae)),
+        ]
+        if min_ba_nmae_idx is not None and max_ba_nmae_idx is not None:
+            ba_error_rows.append(("Best NMAE BA", f"{fmt_float(ba_nmae[min_ba_nmae_idx])} ({fmt_ba(min_ba_nmae_idx)})"))
+            ba_error_rows.append(("Worst NMAE BA", f"{fmt_float(ba_nmae[max_ba_nmae_idx])} ({fmt_ba(max_ba_nmae_idx)})"))
+        ba_error_rows.extend(
+            [
+                ("RMSE mean", fmt_gwh(mean_ba_rmse)),
+                ("RMSE median", fmt_gwh(median_ba_rmse)),
+            ]
+        )
+        if ba_max_rmse_idx is not None and ba_min_rmse_idx is not None:
+            ba_error_rows.append(("Max RMSE BA", f"{fmt_gwh(ba_rmse[ba_max_rmse_idx])} ({fmt_ba(ba_max_rmse_idx)})"))
+            ba_error_rows.append(("Min RMSE BA", f"{fmt_gwh(ba_rmse[ba_min_rmse_idx])} ({fmt_ba(ba_min_rmse_idx)})"))
+
+    peak_rows = [
+        ("Ref peak", f"{fmt_gwh(peak_ref_val)} at {peak_ref_ts}"),
+        ("Reg peak", f"{fmt_gwh(peak_reg_val)} at {peak_reg_ts}"),
+        ("Peak percent diff", fmt_pct(peak_diff_pct)),
+        (
+            "Reg at ref-peak hour",
+            f"{fmt_gwh(reg_at_ref_peak)} (pct diff vs ref {fmt_pct((reg_at_ref_peak - peak_ref_val) / peak_ref_val * 100 if peak_ref_val else float('nan'))})",
+        ),
+        (
+            "Ref at reg-peak hour",
+            f"{fmt_gwh(ref_at_reg_peak)} (pct diff vs reg {fmt_pct((ref_at_reg_peak - peak_reg_val) / peak_reg_val * 100 if peak_reg_val else float('nan'))})",
+        ),
+        ("Load factor ref", fmt_float(lf_ref, 3)),
+        ("Load factor reg", fmt_float(lf_reg, 3)),
+        ("Load factor delta", fmt_float(lf_reg - lf_ref, 3)),
+    ]
+
+    threshold_rows = []
+    for p in PCTL:
+        pdiff = (reg_pct.loc[p / 100] - ref_pct.loc[p / 100]) / ref_pct.loc[p / 100] * 100
+        threshold_rows.append(
+            (
+                f"{p}%",
+                fmt_gwh(ref_pct.loc[p / 100]),
+                fmt_gwh(reg_pct.loc[p / 100]),
+                fmt_pct(pdiff),
+            )
+        )
+
+    peak_pct_rows = [
+        ("Mean", fmt_pct(peak_mean)),
+        ("Median", fmt_pct(peak_median)),
+    ]
+    if peak_max_idx is not None and peak_min_idx is not None:
+        peak_pct_rows.append(("Max", f"{fmt_pct(county_peak_pct[peak_max_idx])} ({fmt_county(peak_max_idx)})"))
+        peak_pct_rows.append(("Min", f"{fmt_pct(county_peak_pct[peak_min_idx])} ({fmt_county(peak_min_idx)})"))
+
+    warnings_list = []
+    if missing_meta:
+        missing_preview = ", ".join(missing_meta[:5])
+        suffix = "..." if len(missing_meta) > 5 else ""
+        warnings_list.append(f"Counties missing in mapping file: {len(missing_meta)} ({missing_preview}{suffix})")
+    if multi_state:
+        example_ba = next(iter(multi_state))
+        warnings_list.append(f"BAs with multiple states detected (example {example_ba}: {multi_state[example_ba]})")
+
+    charts = [
+        ("Monthly percent difference", "monthly_percent_diff.png"),
+        ("County percent difference (top +/-)", "county_percent_diff_top.png"),
+        ("Daily totals scatter", "daily_totals_scatter.png"),
+        ("Hourly totals scatter", "hourly_totals_scatter.png"),
+    ]
+    county_scatter_imgs = sorted([p.name for p in OUTPUT_DIR.glob("county_hourly_scatter_*.png")])
+    ba_scatter_imgs = sorted([p.name for p in OUTPUT_DIR.glob("ba_hourly_scatter_*.png")])
+
+    style = """
+    <style>
+    body { font-family: Arial, sans-serif; margin: 24px; color: #111; background: #fafafa; }
+    h1 { margin-bottom: 6px; }
+    h2 { margin-top: 24px; margin-bottom: 8px; }
+    table { border-collapse: collapse; margin: 12px 0; width: auto; }
+    th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
+    th { background: #f0f0f0; }
+    section { margin-bottom: 24px; }
+    .grid { display: flex; flex-wrap: wrap; gap: 12px; }
+    .grid figure { margin: 0; }
+    .grid img { max-width: 360px; border: 1px solid #ddd; background: white; padding: 4px; }
+    </style>
+    """
+
+    html_parts = [
+        "<!DOCTYPE html>",
+        "<html><head><meta charset='utf-8'><title>Validation report</title>",
+        style,
+        "</head><body>",
+        "<h1>Validation report</h1>",
+        f"<p>Generated from ref: {escape_html(str(REF_PATH))}<br>reg: {escape_html(str(REG_PATH))}</p>",
+        "<section><h2>Overview</h2>",
+        html_table(summary_rows, ["Metric", "Value"]),
+        "</section>",
+        "<section><h2>Annual totals</h2>",
+        html_table(
+            [
+                ("Annual ref", f"{annual_ref:,.2f} GWh"),
+                ("Annual reg", f"{annual_reg:,.2f} GWh"),
+                ("Percent diff (reg-ref)/ref", fmt_pct(annual_pct)),
+            ],
+            ["Metric", "Value"],
+        ),
+        "</section>",
+        "<section><h2>Seasonal percent difference</h2>",
+        html_table(seasonal_rows, ["Season", "Ref (GWh)", "Reg (GWh)", "Pct diff"]),
+        "</section>",
+        "<section><h2>Monthly percent difference</h2>",
+        html_table(monthly_rows, ["Month", "Ref (GWh)", "Reg (GWh)", "Pct diff"]),
+        "</section>",
+        "<section><h2>County percent difference stats</h2>",
+        bullet_list(county_stats_items),
+        html_table(county_top_pos_rows, ["Top + counties", "Pct diff"]),
+        html_table(county_top_neg_rows, ["Top - counties", "Pct diff"]),
+        "</section>",
+    ]
+
+    if ba_stats_items:
+        html_parts.extend(
+            [
+                "<section><h2>Balancing area percent difference stats</h2>",
+                bullet_list(ba_stats_items),
+                html_table(ba_top_pos_rows, ["Top + BAs", "Pct diff"]),
+                html_table(ba_top_neg_rows, ["Top - BAs", "Pct diff"]),
+                "</section>",
+            ]
+        )
+
+    html_parts.extend(
+        [
+            "<section><h2>MAPE</h2>",
+            html_table(mape_rows, ["Metric", "Mean", "Median"]),
+            "</section>",
+            "<section><h2>Correlations</h2>",
+            html_table(
+                [
+                    ("National hourly correlation", fmt_float(hourly_corr, 4)),
+                    ("Daily total correlation", fmt_float(daily_corr, 4)),
+                ],
+                ["Metric", "Value"],
+            ),
+            "</section>",
+            "<section><h2>Diurnal profile correlation by month</h2>",
+            html_table(diurnal_rows, ["Month", "Correlation"]),
+            "</section>",
+            "<section><h2>Error metrics (national)</h2>",
+            html_table(national_error_rows, ["Metric", "Value"]),
+            "</section>",
+            "<section><h2>Error metrics (counties)</h2>",
+            html_table(county_error_rows, ["Metric", "Value"]),
+            "</section>",
+        ]
+    )
+
+    if ba_error_rows:
+        html_parts.extend(
+            [
+                "<section><h2>Error metrics (balancing areas)</h2>",
+                html_table(ba_error_rows, ["Metric", "Value"]),
+                "</section>",
+            ]
+        )
+
+    html_parts.extend(
+        [
+            "<section><h2>Peak demand</h2>",
+            html_table(peak_rows, ["Metric", "Value"]),
+            "</section>",
+            "<section><h2>High-load thresholds</h2>",
+            html_table(threshold_rows, ["Percentile", "Ref", "Reg", "Pct diff"]),
+            "</section>",
+            "<section><h2>County peak percent diff</h2>",
+            html_table(peak_pct_rows, ["Metric", "Value"]),
+            "</section>",
+            "<section><h2>Charts</h2>",
+            "<div class='grid'>"
+            + "".join(
+                f"<figure><figcaption>{escape_html(title)}</figcaption><img src='{escape_html(filename)}' alt='{escape_html(title)}'></figure>"
+                for title, filename in charts
+            )
+            + "</div>",
+            "</section>",
+        ]
+    )
+
+    if county_scatter_imgs:
+        html_parts.extend(
+            [
+                "<section><h2>County hourly reg vs ref scatters (ranked by NMAE)</h2>",
+                "<div class='grid'>"
+                + "".join(
+                    f"<figure><figcaption>{escape_html(Path(fname).stem)}</figcaption><img src='{escape_html(fname)}' alt='{escape_html(Path(fname).stem)}'></figure>"
+                    for fname in county_scatter_imgs
+                )
+                + "</div>",
+                "</section>",
+            ]
+        )
+
+    if ba_scatter_imgs:
+        html_parts.extend(
+            [
+                "<section><h2>BA hourly reg vs ref scatters (ranked by NMAE)</h2>",
+                "<div class='grid'>"
+                + "".join(
+                    f"<figure><figcaption>{escape_html(Path(fname).stem)}</figcaption><img src='{escape_html(fname)}' alt='{escape_html(Path(fname).stem)}'></figure>"
+                    for fname in ba_scatter_imgs
+                )
+                + "</div>",
+                "</section>",
+            ]
+        )
+
+    if warnings_list:
+        html_parts.extend(
+            [
+                "<section><h2>Warnings</h2>",
+                bullet_list(warnings_list),
+                "</section>",
+            ]
+        )
+
+    html_parts.append("</body></html>")
+
+    report_path = OUTPUT_DIR / "report.html"
+    report_path.write_text("\n".join(html_parts), encoding="utf-8")
+
+    try:
+        shutil.copy(Path(__file__).resolve(), OUTPUT_DIR / Path(__file__).name)
+    except Exception as exc:
+        print(f"Warning: failed to copy script into outputs: {exc}")
+
+    print(f"Report written to {report_path.resolve()}")
 
 
 if __name__ == "__main__":
