@@ -212,6 +212,10 @@ def plot_hourly_scatter(nat_ref: pd.Series, nat_reg: pd.Series, out_path: Path, 
     aligned.columns = ["ref", "reg"]
     if aligned.empty:
         return
+    diff = (aligned["reg"] - aligned["ref"]).abs()
+    mae = float(diff.mean())
+    ref_mean = float(aligned["ref"].mean())
+    nmae = mae / ref_mean if ref_mean else float("nan")
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.scatter(aligned["ref"].values, aligned["reg"].values, alpha=0.3, color="#6366f1", edgecolor="white", linewidth=0.3, s=8)
     lims = [
@@ -224,6 +228,19 @@ def plot_hourly_scatter(nat_ref: pd.Series, nat_reg: pd.Series, out_path: Path, 
     ax.set_xlabel("Hourly ref total (GWh)")
     ax.set_ylabel("Hourly reg total (GWh)")
     ax.set_title(title or "Hourly totals: reg vs ref")
+    mae_txt = f"MAE: {mae:.3f} GWh"
+    if np.isfinite(nmae):
+        mae_txt += f"\nNMAE: {nmae*100:.2f}%"
+    ax.text(
+        0.05,
+        0.95,
+        mae_txt,
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=8.5,
+        bbox=dict(facecolor="white", alpha=0.8, edgecolor="none"),
+    )
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
