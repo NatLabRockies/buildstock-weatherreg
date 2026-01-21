@@ -9,6 +9,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import calendar
 from pathlib import Path
 import shutil
 import re
@@ -321,6 +322,35 @@ def plot_hourly_scatter(nat_ref: pd.Series, nat_reg: pd.Series, out_path: Path, 
     plt.close(fig)
 
 
+def plot_8760_month_rows(ref_series: pd.Series, reg_series: pd.Series, out_path: Path, title: str):
+    aligned = pd.concat([ref_series, reg_series], axis=1, join="inner").dropna()
+    aligned.columns = ["ref", "reg"]
+    if aligned.empty:
+        return False
+    aligned["month"] = aligned.index.month
+    fig, axes = plt.subplots(nrows=12, ncols=1, figsize=(12, 18), sharex=False)
+    for ax, month in zip(axes, range(1, 13)):
+        month_data = aligned[aligned["month"] == month]
+        if month_data.empty:
+            ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", fontsize=8)
+            ax.set_ylabel(calendar.month_abbr[month])
+            ax.set_xticks([])
+            ax.set_yticks([])
+            continue
+        x = np.arange(len(month_data))
+        ax.plot(x, month_data["ref"].values, color="#111827", linewidth=0.8, label="ref" if month == 1 else None)
+        ax.plot(x, month_data["reg"].values, color="#2563eb", linewidth=0.8, label="reg" if month == 1 else None)
+        ax.set_ylabel(calendar.month_abbr[month])
+        ax.grid(True, axis="y", linestyle=":", linewidth=0.4, alpha=0.6)
+    axes[-1].set_xlabel("Hour of month")
+    axes[0].legend(loc="upper right", fontsize=8, frameon=False)
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout(rect=[0, 0, 1, 0.98])
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+    return True
+
+
 def plot_ranked_hourly_scatters(df_ref: pd.DataFrame, df_reg: pd.DataFrame, ranking: pd.Series, label_lookup, prefix: str):
     targets = select_best_middle_worst(ranking)
     for bucket, ids in targets.items():
@@ -425,6 +455,17 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
         ba_max_neg = None
         ba_pos5 = pd.Series(dtype=float)
         ba_neg5 = pd.Series(dtype=float)
+
+    target_ba_ref = None
+    target_ba_reg = None
+    target_ba_label = None
+    if not df_ref_ba.empty:
+        ba_lookup = {str(col).lower(): col for col in df_ref_ba.columns}
+        target_key = TARGET_BA.lower()
+        if target_key in ba_lookup:
+            target_ba_label = ba_lookup[target_key]
+            target_ba_ref = df_ref_ba[target_ba_label]
+            target_ba_reg = df_reg_ba[target_ba_label]
 
     mape_cm = (monthly_county_reg - monthly_county_ref).abs().div(monthly_county_ref.replace(0, np.nan))
     mape_cm_flat = mape_cm.stack().dropna()
@@ -553,6 +594,22 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
         "target_county_hourly_scatter",
         title_suffix=f" (BA {TARGET_BA})",
     )
+
+    charts = [
+        ("Monthly percent difference", "monthly_percent_diff.png"),
+        ("County percent difference (top +/-)", "county_percent_diff_top.png"),
+        ("Daily totals scatter", "daily_totals_scatter.png"),
+        ("Hourly totals scatter", "hourly_totals_scatter.png"),
+    ]
+
+    national_8760_title = "National hourly profile by month (ref vs reg)"
+    if plot_8760_month_rows(nat_ref, nat_reg, get_out_dir() / "national_8760_by_month.png", national_8760_title):
+        charts.append((national_8760_title, "national_8760_by_month.png"))
+
+    if target_ba_ref is not None and target_ba_reg is not None:
+        ba_8760_title = f"BA {target_ba_label} hourly profile by month (ref vs reg)"
+        if plot_8760_month_rows(target_ba_ref, target_ba_reg, get_out_dir() / "target_ba_8760_by_month.png", ba_8760_title):
+            charts.append((ba_8760_title, "target_ba_8760_by_month.png"))
 
     summary_rows = [
         ("Comparison", comp_name),
@@ -698,13 +755,9 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
         warnings_list.append(f"BAs with multiple states detected (example {example_ba}: {multi_state[example_ba]})")
     if not target_counties:
         warnings_list.append(f"No counties mapped to BA {TARGET_BA} were found in the inputs; BA-specific county scatters were skipped.")
+    if target_ba_label is None:
+        warnings_list.append(f"Target BA {TARGET_BA} not found in BA aggregation; BA 8760 chart was skipped.")
 
-    charts = [
-        ("Monthly percent difference", "monthly_percent_diff.png"),
-        ("County percent difference (top +/-)", "county_percent_diff_top.png"),
-        ("Daily totals scatter", "daily_totals_scatter.png"),
-        ("Hourly totals scatter", "hourly_totals_scatter.png"),
-    ]
     county_scatter_imgs = sorted([p.name for p in get_out_dir().glob("county_hourly_scatter_*.png")])
     ba_scatter_imgs = sorted([p.name for p in get_out_dir().glob("ba_hourly_scatter_*.png")])
     target_county_scatter_imgs = sorted([p.name for p in get_out_dir().glob("target_county_hourly_scatter_*.png")])
