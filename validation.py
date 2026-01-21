@@ -38,6 +38,7 @@ COMPARISONS = [
 OUTPUT_DIR = Path("validation_outputs")
 OUTPUT_SUBDIR = None
 COUNTY_MAP_URL = "https://raw.githubusercontent.com/NREL/ReEDS-2.0/refs/heads/main/inputs/county2zone.csv"
+TARGET_BA = "p10"
 
 SEASON_LOOKUP = {
     12: "DJF",
@@ -330,6 +331,18 @@ def plot_ranked_hourly_scatters(df_ref: pd.DataFrame, df_reg: pd.DataFrame, rank
             out_path = get_out_dir() / f"{prefix}_{bucket}_{idx}.png"
             plot_hourly_scatter(df_ref[idx], df_reg[idx], out_path, title=title)
 
+
+def plot_specific_county_scatters(df_ref: pd.DataFrame, df_reg: pd.DataFrame, county_ids, label_lookup, prefix: str, title_suffix: str = ""):
+    if not county_ids:
+        return
+    for idx in sorted(set(county_ids)):
+        if idx not in df_ref.columns or idx not in df_reg.columns:
+            continue
+        title = f"{label_lookup(idx)}{title_suffix}"
+        out_path = get_out_dir() / f"{prefix}_{idx}.png"
+        plot_hourly_scatter(df_ref[idx], df_reg[idx], out_path, title=title)
+
+
 def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
     global OUTPUT_SUBDIR
     OUTPUT_DIR.mkdir(exist_ok=True)
@@ -353,6 +366,7 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
     ba_states, multi_state = ba_state_lookup_from_meta(county_meta)
     fmt_county = lambda f: county_label(f, county_meta)
     fmt_ba = lambda b: ba_label(b, ba_states)
+    target_counties = county_meta[county_meta["ba"].str.lower() == TARGET_BA.lower()].index.tolist()
 
     nat_ref = df_ref.sum(axis=1)
     nat_reg = df_reg.sum(axis=1)
@@ -531,6 +545,14 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
     plot_ranked_hourly_scatters(df_ref, df_reg, county_nmae, fmt_county, "county_hourly_scatter")
     if not ba_nmae.empty:
         plot_ranked_hourly_scatters(df_ref_ba, df_reg_ba, ba_nmae, fmt_ba, "ba_hourly_scatter")
+    plot_specific_county_scatters(
+        df_ref,
+        df_reg,
+        target_counties,
+        fmt_county,
+        "target_county_hourly_scatter",
+        title_suffix=f" (BA {TARGET_BA})",
+    )
 
     summary_rows = [
         ("Comparison", comp_name),
@@ -674,6 +696,8 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
     if multi_state:
         example_ba = next(iter(multi_state))
         warnings_list.append(f"BAs with multiple states detected (example {example_ba}: {multi_state[example_ba]})")
+    if not target_counties:
+        warnings_list.append(f"No counties mapped to BA {TARGET_BA} were found in the inputs; BA-specific county scatters were skipped.")
 
     charts = [
         ("Monthly percent difference", "monthly_percent_diff.png"),
@@ -683,6 +707,7 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
     ]
     county_scatter_imgs = sorted([p.name for p in get_out_dir().glob("county_hourly_scatter_*.png")])
     ba_scatter_imgs = sorted([p.name for p in get_out_dir().glob("ba_hourly_scatter_*.png")])
+    target_county_scatter_imgs = sorted([p.name for p in get_out_dir().glob("target_county_hourly_scatter_*.png")])
 
     style = """
     <style>
@@ -809,6 +834,20 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
                 + "".join(
                     f"<figure><figcaption>{escape_html(Path(fname).stem)}</figcaption><img src='{escape_html(fname)}' alt='{escape_html(Path(fname).stem)}'></figure>"
                     for fname in county_scatter_imgs
+                )
+                + "</div>",
+                "</section>",
+            ]
+        )
+
+    if target_county_scatter_imgs:
+        html_parts.extend(
+            [
+                f"<section><h2> BA {TARGET_BA} county hourly reg vs ref scatters</h2>",
+                "<div class='grid'>"
+                + "".join(
+                    f"<figure><figcaption>{escape_html(Path(fname).stem)}</figcaption><img src='{escape_html(fname)}' alt='{escape_html(Path(fname).stem)}'></figure>"
+                    for fname in target_county_scatter_imgs
                 )
                 + "</div>",
                 "</section>",
