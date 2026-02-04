@@ -2,13 +2,13 @@
 
 Version 1: Markdown format (similar but changed format from Quickstart.docx) - from Quickstart_Revised_USED.md
 
-# ReEDS/ComStock Geothermal Pipeline Quickstart
+# ResStock/ComStock EULP Weather-Year Regression Pipeline Quickstart
 
-> ⚙️ **OS-Agnostic:** This program is OS agnostic. For larger runs (e.g., full national runs), the user should pursue access to the High Performance Computing (HPC) environment. Use of the HPC is optional, but directions for its use are integrated into the following instructions.
+> **OS-Agnostic:** This program is OS agnostic. For larger runs (e.g., full national runs), the user should pursue access to the High Performance Computing (HPC) environment. Use of the HPC is optional, but directions for its use are integrated into the following instructions.
 
 ---
 
-## 🔑 Quickstart: Accesses
+## Accesses
 
 - **AWS Account and Allocation** – Please reach out to the Stratus Cloud team ([Stratus Cloud: Home](https://stratus.nrel.gov/)) to acquire them.
 - **AWS ResStock/ComStock Sandbox Access (likely `resbldg`)** – Please contact Anthony Fontanini for access.
@@ -16,7 +16,7 @@ Version 1: Markdown format (similar but changed format from Quickstart.docx) - f
 
 ---
 
-## 🛠️ Quickstart: Environment Setup
+## Environment Setup
 
 ### Install AWS CLI
 - Follow the [AWS CLI installation instructions](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html).
@@ -71,7 +71,7 @@ Locate `comstock_oedi.toml` in the current directory and copy it to:
 
 ---
 
-## ▶️ Quickstart: Running the Program
+## Running the Program
 
 ```bash
 conda activate geothermal
