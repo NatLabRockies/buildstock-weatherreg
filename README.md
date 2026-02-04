@@ -20,23 +20,24 @@ Version 1: Markdown format (similar but changed format from Quickstart.docx) - f
 
 ### Install AWS CLI
 - Follow the [AWS CLI installation instructions](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html).
-- **On Linux (e.g. Yampa/HPC):**
-  - Check architecture with:
-    ```bash
-    uname -m
+  - For example, on HPC:
     ```
-  - Follow the section that begins with:
-    _“You can install without sudo if you specify directories that you already have write permissions to…”_
-    ![image](https://github.com/user-attachments/assets/54c0ac52-b57d-40bf-9384-b01053a8b259)
-  - If the default install command fails with `Permission denied`, use:
-    ```bash
-    ./aws/install -i ./local/aws-cli -b ./local/bin
+    cd ~
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip awscliv2.zip
+    ./aws/install -i "$HOME/local/aws-cli" -b "$HOME/local/bin"
     ```
-  - Add the AWS CLI path to your `~/.bashrc`. Customize based on the version installed (e.g., 2.17.5). Line 25 is required; Line 24 may not be necessary.
-    ![image](https://github.com/user-attachments/assets/520db093-528a-41cf-bbf4-a5da43151cc6)
-
-### AWS SSO Login Setup
-- Follow [AWS SSO login setup instructions](https://docs.aws.amazon.com/cli/latest/userguide/sso-configure.html).
+    We then add $HOME/local/bin to $PATH so we can use "aws ..."
+    ```
+    echo 'export PATH="$HOME/local/bin:$PATH"' >> ~/.bashrc
+    source ~/.bashrc
+    ```
+    And we confirm installation and $PATH changes by seeing a version output from:
+    ``` 
+    aws --version
+    ```
+### AWS SSO Configuration
+- Follow [AWS SSO configuration instructions](https://github.com/NatLabRockies/buildstock-query/wiki/AWS-setup#with-sso-for-nrel-employees).
 
 ### Clone Repo
 ```bash
