@@ -10,9 +10,9 @@ Version 1: Markdown format (similar but changed format from Quickstart.docx) - f
 
 ## Accesses
 
-- **AWS Account and Allocation** – Please reach out to the Stratus Cloud team ([Stratus Cloud: Home](https://stratus.nrel.gov/)) to acquire them.
-- **AWS ResStock/ComStock Sandbox Access (likely `resbldg`)** – Please contact Anthony Fontanini for access.
-- **HPC (optional)** – Please reach out to the [HPC team](https://www.nrel.gov/computational-science/high-performance-computing.html) for an account and allocation.
+- **AWS Account and Allocation** – Please reach out to the Stratus Cloud team ([Stratus Cloud: Home](https://stratus-cloud.thesource.nrel.gov/)) to acquire them (you may need to refresh the page to load it).
+- **AWS ResStock/ComStock Sandbox Access (likely `resbldg`)** – Please contact Buildings (ResStock/ComStock) teams for access.
+- **HPC (optional)** – Please reach out to the [HPC team](https://www.nlr.gov/hpc/) for an account and allocation.
 
 ---
 
