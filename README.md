@@ -1,7 +1,3 @@
-[Note: Please see Quickstart.docx]
-
-Version 1: Markdown format (similar but changed format from Quickstart.docx) - from Quickstart_Revised_USED.md
-
 # ResStock/ComStock EULP Weather-Year Regression Pipeline Quickstart
 
 > **OS-Agnostic:** This program is OS agnostic. For larger runs (e.g., full national runs), the user should pursue access to the High Performance Computing (HPC) environment. Use of the HPC is optional, but directions for its use are integrated into the following instructions.
