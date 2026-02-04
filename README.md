@@ -2,41 +2,42 @@
 
 Version 1: Markdown format (similar but changed format from Quickstart.docx) - from Quickstart_Revised_USED.md
 
-# ReEDS/ComStock Geothermal Pipeline Quickstart
+# ResStock/ComStock EULP Weather-Year Regression Pipeline Quickstart
 
-> ⚙️ **OS-Agnostic:** This program is OS agnostic. For larger runs (e.g., full national runs), the user should pursue access to the High Performance Computing (HPC) environment. Use of the HPC is optional, but directions for its use are integrated into the following instructions.
-
----
-
-## 🔑 Quickstart: Accesses
-
-- **AWS Account and Allocation** – Please reach out to the Stratus Cloud team ([Stratus Cloud: Home](https://stratus.nrel.gov/)) to acquire them.
-- **AWS ResStock/ComStock Sandbox Access (likely `resbldg`)** – Please contact Anthony Fontanini for access.
-- **HPC (optional)** – Please reach out to the [HPC team](https://www.nrel.gov/computational-science/high-performance-computing.html) for an account and allocation.
+> **OS-Agnostic:** This program is OS agnostic. For larger runs (e.g., full national runs), the user should pursue access to the High Performance Computing (HPC) environment. Use of the HPC is optional, but directions for its use are integrated into the following instructions.
 
 ---
 
-## 🛠️ Quickstart: Environment Setup
+## Accesses
+
+- **AWS Account and Allocation** – Please reach out to the Stratus Cloud team ([Stratus Cloud: Home](https://stratus-cloud.thesource.nrel.gov/)) to acquire them (you may need to refresh the page to load it).
+- **AWS ResStock/ComStock Sandbox Access (likely `resbldg`)** – Please contact Buildings (ResStock/ComStock) teams for access.
+- **HPC (optional)** – Please reach out to the [HPC team](https://www.nlr.gov/hpc/) for an account and allocation.
+
+---
+
+## Environment Setup
 
 ### Install AWS CLI
 - Follow the [AWS CLI installation instructions](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html).
-- **On Linux (e.g. Yampa/HPC):**
-  - Check architecture with:
-    ```bash
-    uname -m
+  - For example, on HPC:
     ```
-  - Follow the section that begins with:
-    _“You can install without sudo if you specify directories that you already have write permissions to…”_
-    ![image](https://github.com/user-attachments/assets/54c0ac52-b57d-40bf-9384-b01053a8b259)
-  - If the default install command fails with `Permission denied`, use:
-    ```bash
-    ./aws/install -i ./local/aws-cli -b ./local/bin
+    cd ~
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip awscliv2.zip
+    ./aws/install -i "$HOME/local/aws-cli" -b "$HOME/local/bin"
     ```
-  - Add the AWS CLI path to your `~/.bashrc`. Customize based on the version installed (e.g., 2.17.5). Line 25 is required; Line 24 may not be necessary.
-    ![image](https://github.com/user-attachments/assets/520db093-528a-41cf-bbf4-a5da43151cc6)
-
-### AWS SSO Login Setup
-- Follow [AWS SSO login setup instructions](https://docs.aws.amazon.com/cli/latest/userguide/sso-configure.html).
+    We then add $HOME/local/bin to $PATH so we can use "aws ..."
+    ```
+    echo 'export PATH="$HOME/local/bin:$PATH"' >> ~/.bashrc
+    source ~/.bashrc
+    ```
+    And we confirm installation and $PATH changes by seeing a version output from:
+    ``` 
+    aws --version
+    ```
+### AWS SSO Configuration
+- Follow [AWS SSO configuration instructions](https://github.com/NatLabRockies/buildstock-query/wiki/AWS-setup#with-sso-for-nrel-employees), all the way through step 8! Note that after step 5 a browser should automatically open. We had luck using remote SSH from vscode, and didn't have luck with git bash or direct terminal sshing into kestrel. 
 
 ### Clone Repo
 ```bash
@@ -71,20 +72,12 @@ Locate `comstock_oedi.toml` in the current directory and copy it to:
 
 ---
 
-## ▶️ Quickstart: Running the Program
+## Running the Program
 
 ```bash
 conda activate geothermal
 aws sso login
 ```
-
-### Yampa-specific Setup
-For AWS SSO on Yampa, authentication must be performed on a different machine (e.g., local).
-- Sign in on your local machine using `aws sso login`.
-- Use WinSCP to:
-  - Remove the cache directory on Yampa.
-  - Copy over the SSO token cache directory from your local machine to Yampa.
-![image](https://github.com/user-attachments/assets/83e1265e-02a9-4bf7-8e57-b23a34129b30)
 
 ### Adjust Configuration
 - Edit `switches_agg.json` to match your desired settings.
@@ -95,4 +88,11 @@ For AWS SSO on Yampa, authentication must be performed on a different machine (e
 python B_building_stock_parallel_agg.py
 ```
 
----
+## Troubleshooting
+
+### Yampa-specific AWS SSO Configuration/Login
+We had issues with AWS SSO configuration on Yampa. One solution is to perform authentication on your local machine (required for each login):
+- Sign in on your local machine using `aws sso login`.
+- Replace the SSO token cache directory (~/.aws/sso/cache) on Yampa with the one on local.
+
+
