@@ -95,4 +95,6 @@ We had issues with AWS SSO configuration on Yampa. One solution is to perform au
 - Sign in on your local machine using `aws sso login`.
 - Replace the SSO token cache directory (~/.aws/sso/cache) on Yampa with the one on local.
 
+## Validation
+See regression validation outputs for resstock and comstock HVAC EULP here: https://drive.google.com/file/d/1qDy9DrraTP7Kkzk1i6_tDVStEf3fzrQn/view?usp=sharing
 
