@@ -37,7 +37,7 @@ Version 1: Markdown format (similar but changed format from Quickstart.docx) - f
     aws --version
     ```
 ### AWS SSO Configuration
-- Follow [AWS SSO configuration instructions](https://github.com/NatLabRockies/buildstock-query/wiki/AWS-setup#with-sso-for-nrel-employees).
+- Follow [AWS SSO configuration instructions](https://github.com/NatLabRockies/buildstock-query/wiki/AWS-setup#with-sso-for-nrel-employees), all the way through step 8! Note that after step 5 a browser should automatically open. We had luck using remote SSH from vscode, and didn't have luck with git bash or direct terminal sshing into kestrel. 
 
 ### Clone Repo
 ```bash
@@ -79,14 +79,6 @@ conda activate geothermal
 aws sso login
 ```
 
-### Yampa-specific Setup
-For AWS SSO on Yampa, authentication must be performed on a different machine (e.g., local).
-- Sign in on your local machine using `aws sso login`.
-- Use WinSCP to:
-  - Remove the cache directory on Yampa.
-  - Copy over the SSO token cache directory from your local machine to Yampa.
-![image](https://github.com/user-attachments/assets/83e1265e-02a9-4bf7-8e57-b23a34129b30)
-
 ### Adjust Configuration
 - Edit `switches_agg.json` to match your desired settings.
 - Ensure that `"workgroup"` matches your Stratus Cloud Handle / AWS Sandbox Workgroup.
@@ -96,4 +88,11 @@ For AWS SSO on Yampa, authentication must be performed on a different machine (e
 python B_building_stock_parallel_agg.py
 ```
 
----
+## Troubleshooting
+
+### Yampa-specific AWS SSO Configuration/Login
+We had issues with AWS SSO configuration on Yampa. One solution is to perform authentication on your local machine (required for each login):
+- Sign in on your local machine using `aws sso login`.
+- Replace the SSO token cache directory (~/.aws/sso/cache) on Yampa with the one on local.
+
+
