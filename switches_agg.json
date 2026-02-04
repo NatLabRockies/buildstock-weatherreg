@@ -1,5 +1,6 @@
 {
-    "upgrades": [0, 4, 8],
+    "testmode": true,
+    "upgrades": [0],
     "version_comstock": ["2025", "2"],
     "version_resstock": ["2025", "1"],
     "url_base": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/",

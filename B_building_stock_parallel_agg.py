@@ -47,6 +47,7 @@ if __name__ == "__main__":
     # SWITCHES #TODO: Only import necessary for this script & reorder
     with open(os.path.join(script_dir, 'switches_agg.json'), 'r') as f:
         switch = json.load(f)
+    sw_testmode = switch['testmode']
     ## Switch that designates comstock or resstock data
     sw_comstock = switch['comstock'] # if `False`, then resstock
     ## Note: resstock upgrades do not correspond to the same # as comstock
@@ -89,8 +90,10 @@ if __name__ == "__main__":
         if sw_comstock and comstock_year == "2025" and comstock_release == "2":
             print("Using custom metadata load logic for ComStock 2025 Release 2")
 
-            # state_meta = state_county_map["state_abbreviation"].unique().tolist() # Can be used to filter by state (see line below)
-            state_meta = ['CA', 'OR']  # For testing purposes, only Vermont is used
+            if sw_testmode:
+                state_meta = ['VT']
+            else:
+                state_meta = state_county_map["state_abbreviation"].unique().tolist()
 
             all_meta = []
             for state in state_meta:
@@ -141,6 +144,9 @@ if __name__ == "__main__":
             # Read Parquet file into a DataFrame
             df_meta = pd.read_parquet(url_bldg + url_meta)
 
+            if sw_testmode:
+                df_meta = df_meta[df_meta['in.state'] == 'VT']
+
         # Remove Alaska and Hawaii
         df_meta = df_meta[~df_meta['in.state'].isin(['AK', 'HI'])]
 
@@ -150,9 +156,6 @@ if __name__ == "__main__":
         # TODO: Alter testing code blocks to incorporate ComStock 2025.2
         # TESTING - DELETE for production or comment out
         # Testing Subset 1
-        ## For testing purposes, subset to Vermont state
-        # df_meta = df_meta[df_meta['in.state'] == 'VT']
-        
         ## For ResStock testing purposes, subset to 'Single-Family Detached'
         # df_meta = df_meta[df_meta['in.geometry_building_type_recs']
         #                           == 'Single-Family Detached']
