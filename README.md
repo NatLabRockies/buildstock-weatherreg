@@ -42,14 +42,15 @@ Version 1: Markdown format (similar but changed format from Quickstart.docx) - f
 ### Clone Repo
 ```bash
 # Via HTTPS
-git clone https://github.nrel.gov/ReEDS/ReEDS-2.0.git
+git clone https://github.com/NatLabRockies/buildstock-weatherreg.git
 
 # Via SSH (requires SSH key setup)
-git clone git@github.nrel.gov:ReEDS/ReEDS-2.0.git
+git clone git@github.com:NatLabRockies/buildstock-weatherreg.git
 ```
 
 ### Install the Geothermal Environment
 ```bash
+cd buildstock-weatherreg
 conda env create -f geothermal_env.yml
 conda activate geothermal
 conda install git-lfs
