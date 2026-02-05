@@ -48,16 +48,18 @@ git clone git@github.com:NatLabRockies/buildstock-weatherreg.git
 ```bash
 cd buildstock-weatherreg
 conda env create -f geothermal_env.yml
+```
+
+You may experience errors during this step, but continue through the following steps, which might correct them.
+
+```bash
 conda activate geothermal
 conda install git-lfs
 pip install tensorflow
 pip install --upgrade "numpy<2.0"
+pip install "buildstock-query[full] @ git+https://github.com/NatLabRockies/buildstock-query@2024.05.09"
 ```
 
-### Buildstock Query
-```bash
-pip install git+https://github.com/NREL/buildstock-query#egg=buildstock-query[full]
-```
 Then, copy the ComStock schema:
 ```bash
 python -c "import site; print(site.getsitepackages())"
@@ -78,7 +80,8 @@ aws sso login
 
 ### Adjust Configuration
 - Edit `switches_agg.json` to match your desired settings.
-- Ensure that `"workgroup"` matches your Stratus Cloud Handle / AWS Sandbox Workgroup.
+  - Ensure that `"workgroup"` matches your Stratus Cloud Handle / AWS Sandbox Workgroup.
+- Edit `#SBATCH` settings at the top of `A_start_building_stock_parallel_agg.sh` and `C_run_bldg_chunk_agg.sh` as needed.
 
 ### Run Aggregation
 ```bash
