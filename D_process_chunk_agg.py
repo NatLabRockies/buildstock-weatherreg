@@ -234,21 +234,11 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
     if is_oedi:
         if sw_comstock:
             elec_enduse = [
-                'out.electricity.heating.energy_consumption',
-                'out.electricity.cooling.energy_consumption',
-                'out.electricity.fans.energy_consumption',
-                'out.electricity.heat_recovery.energy_consumption',
-                'out.electricity.heat_rejection.energy_consumption',
-                'out.electricity.pumps.energy_consumption'
+                'out.electricity.total.energy_consumption'
             ]
         else:
             elec_enduse = [
-                'out.electricity.heating.energy_consumption',
-                'out.electricity.heating_fans_pumps.energy_consumption',
-                'out.electricity.heating_hp_bkup.energy_consumption',
-                'out.electricity.heating_hp_bkup_fa.energy_consumption',
-                'out.electricity.cooling.energy_consumption',
-                'out.electricity.cooling_fans_pumps.energy_consumption'
+                'out.electricity.total.energy_consumption'
             ]
             # ResStock has suffix '..kwh' for electricity & ng enduse columns
             elec_enduse = [item + '..kwh' for item in elec_enduse]
@@ -368,7 +358,7 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
 
         ts_agg_query = my_run.agg.aggregate_timeseries(
             upgrade_id=0 if sw_comstock else aws_upgrade,
-            enduses=elec_enduse + natural_gas,
+            enduses=elec_enduse + natural_gas + ['out.electricity.ev_charging.energy_consumption..kwh'],
             restrict=[('state', chunk_states), # partition in the AWS query
                       ('upgrade', [int(aws_upgrade)]), # partition in the AWS query
                       *([('applicability', [True])] if applied_only else []),
@@ -573,7 +563,7 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
     ts_agg.set_index('bldg_id', inplace=True)
 
     # Sum energy consumption of cooling and heating as HVAC.elec
-    ts_agg['HVAC.elec'] = ts_agg[elec_enduse].sum(axis=1)
+    ts_agg['HVAC.elec'] = ts_agg[elec_enduse].sum(axis=1) - ts_agg['electricity.ev_charging.energy_consumption']
 
     ts_agg = ts_agg[['timestamp', 'HVAC.elec',
                      'natural_gas.heating.energy_consumption']]

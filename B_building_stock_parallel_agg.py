@@ -198,22 +198,12 @@ if __name__ == "__main__":
         # Define elec_enduses based on whether it's ComStock or ResStock
         if sw_comstock:
             elec_enduses = [
-                'out.electricity.heating.energy_consumption',
-                'out.electricity.cooling.energy_consumption',
-                'out.electricity.fans.energy_consumption',
-                'out.electricity.heat_recovery.energy_consumption',
-                'out.electricity.heat_rejection.energy_consumption',
-                'out.electricity.pumps.energy_consumption'
+                'out.electricity.total.energy_consumption'
             ]
 
         else:
             elec_enduses = [
-                'out.electricity.heating.energy_consumption',
-                'out.electricity.heating_fans_pumps.energy_consumption',
-                'out.electricity.heating_hp_bkup.energy_consumption',
-                'out.electricity.heating_hp_bkup_fa.energy_consumption',
-                'out.electricity.cooling.energy_consumption',
-                'out.electricity.cooling_fans_pumps.energy_consumption'
+                'out.electricity.total.energy_consumption'
             ]
 
         elec_enduses = [item + '..kwh' for item in elec_enduses]
@@ -227,7 +217,7 @@ if __name__ == "__main__":
             df_meta[enduse] = df_meta[enduse] * df_meta['weight']
 
         # Create a new column for total electricity consumption
-        df_meta['meta_HVAC.elec'] = df_meta[elec_enduses].sum(axis=1)
+        df_meta['meta_HVAC.elec'] = df_meta[elec_enduses].sum(axis=1) - df_meta['out.electricity.ev_charging.energy_consumption..kwh']
 
         # Create a new column for total natural gas consumption
         df_meta['meta_natural_gas.heating.energy_consumption'] = (
