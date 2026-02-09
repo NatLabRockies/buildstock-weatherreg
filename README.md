@@ -50,7 +50,7 @@ cd buildstock-weatherreg
 conda env create -f geothermal_env.yml
 ```
 
-You may experience errors during this step, but continue through the following steps, which might correct them.
+This step can take ~30 minutes. You may experience errors during this step, but continue through the following steps, which should correct the issues.
 
 ```bash
 conda activate geothermal
