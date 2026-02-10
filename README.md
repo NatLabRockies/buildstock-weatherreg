@@ -26,9 +26,16 @@
     We then add $HOME/local/bin to $PATH so we can use "aws ..."
     ```
     echo 'export PATH="$HOME/local/bin:$PATH"' >> ~/.bashrc
+    ```
+    Although unrelated to AWS, add this flag on HPC to trigger HPC-specific logic when running (only do this on HPC!)
+    ```
+    echo 'export REEDS_USE_SLURM=1' >> ~/.bashrc
+    ```
+    Finally, reload .bashrc:
+    ```
     source ~/.bashrc
     ```
-    And we confirm installation and $PATH changes by seeing a version output from:
+    And we confirm AWS installation and $PATH changes by seeing a version output from:
     ``` 
     aws --version
     ```
