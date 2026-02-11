@@ -52,20 +52,16 @@ git clone git@github.com:NatLabRockies/buildstock-weatherreg.git
 ```
 
 ### Install the Geothermal Environment
+`geotheraml_env_kestrel.yml` was created on and intended to be installed on Kestrel, while `geothermal_env.yml` was created on Windows and likely is more appropriate for Windows machines.
+
+On Kestrel:
 ```bash
 cd buildstock-weatherreg
-conda env create -f geothermal_env.yml
-```
-
-This step can take ~30 minutes. You may experience errors during this step, but continue through the following steps, which should correct the issues.
-
-```bash
+conda env create -f geothermal_env_kestrel.yml
 conda activate geothermal
-conda install git-lfs
-pip install tensorflow
-pip install --upgrade "numpy<2.0"
-pip install "buildstock-query[full] @ git+https://github.com/NatLabRockies/buildstock-query@2024.05.09"
 ```
+
+This step can take ~30 minutes.
 
 Then, copy the ComStock schema:
 ```bash
