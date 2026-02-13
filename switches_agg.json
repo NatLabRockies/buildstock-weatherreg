@@ -4,6 +4,7 @@
     "version_comstock": ["2025", "2"],
     "version_resstock": ["2025", "1"],
     "url_base": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/",
+    "weather_data_base": "/projects/geohc/EPW/epw_symlinks",
     "base_year": 2018,
     "target_year": 2012,
     "chunk_size": 150,
