@@ -15,10 +15,6 @@ import shutil
 import subprocess
 from buildstock_query import BuildStockQuery
 import time
-from urllib.error import HTTPError, URLError
-from http.client import IncompleteRead, RemoteDisconnected
-from urllib3.exceptions import ProtocolError
-import traceback
 import re
 import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -37,6 +33,54 @@ def _ensure_tf():
         tf.random.set_seed(42)
         _TF = tf
     return _TF
+
+def _parse_year_entry(entry):
+    """
+    Parse one target year entry.
+    Supported forms:
+      - 2018
+      - "2018"
+      - "2007-2013"
+    """
+    if isinstance(entry, int):
+        return [entry]
+    if isinstance(entry, str):
+        token = entry.strip()
+        if not token:
+            return []
+        if "-" in token:
+            parts = token.split("-")
+            if len(parts) != 2:
+                raise ValueError(f"Invalid year range: {entry}")
+            start = int(parts[0].strip())
+            end = int(parts[1].strip())
+            if end < start:
+                raise ValueError(f"Year range end < start: {entry}")
+            return list(range(start, end + 1))
+        return [int(token)]
+    raise TypeError(f"Unsupported target_year entry type: {type(entry)}")
+
+def parse_target_years(year_spec):
+    """
+    Parse target_year setting into a sorted unique list of years.
+    Supported forms:
+      - 2018
+      - "2018"
+      - ["2007-2013", 2016, "2018"]
+    """
+    if isinstance(year_spec, (int, str)):
+        years = _parse_year_entry(year_spec)
+    elif isinstance(year_spec, list):
+        years = []
+        for entry in year_spec:
+            years.extend(_parse_year_entry(entry))
+    else:
+        raise TypeError(f"Unsupported target_year type: {type(year_spec)}")
+
+    years = sorted(set(years))
+    if not years:
+        raise ValueError("target_year parsed to an empty year list")
+    return years
 
 script_start_time = dt.datetime.now()
 print('Script start time:', script_start_time)
@@ -84,7 +128,10 @@ upgrades = switch['upgrades'] # default: comstock = [0, 1, 14, 55], resstock = [
 ## Number of buildings to pull per upgrade
 n_bldngs = switch['n_bldngs'] # 'all' for all buildings, 'assign' for assigned building id list from csv
 base_year = switch['base_year'] # Base year for the building stock
-target_year = switch['target_year'] # Target year for the building stock
+target_years = parse_target_years(switch['target_year']) # Target weather years
+comparison_year = (
+    base_year if base_year in target_years else target_years[0]
+) # Year used for df_meta annual regression comparison columns
 sw_apply_regression = switch['apply_regression']
 sw_test_base = switch['test_base']
 sw_save_metrics = switch['save_metrics']
@@ -100,7 +147,12 @@ lag_hours = switch['lag_hours_temperature']   # Lagged features for the dry bulb
 base_run = switch['base_run'] # The base run type for the BuildStockQuery object
 target_run = switch['target_run'] # The target run type for the BuildStockQuery object
 run_types = switch['run_types'] # Run types for the BuildStockQuery object
-url_base = switch['url_base']
+weather_data_base = switch['weather_data_base']
+
+if sw_test_target and len(target_years) != 1:
+    raise ValueError(
+        "switches_agg.json: sw_test_target=True requires exactly one target_year."
+    )
 
 
 # FUNCTIONS
@@ -127,12 +179,11 @@ def _process_one_building(args):
       - Metrics and plots are disabled in workers to avoid file contention.
     """
     (bldg_id,
+     county_id,
      df_eulp_pred,
-     weather_base_df,
-     weather_target_df,
      df_eulp_targ_local,
      base_year,
-     target_year,
+     target_years,
      sw_test_base,
      sw_test_target) = args
 
@@ -143,20 +194,45 @@ def _process_one_building(args):
     sw_show_fit = False
     sw_save_fit = False
 
+    # Load weather just-in-time for this building.
+    weather_base_df = weather_data(weather_data_base, base_year, county_id)
+    target_weather_frames = []
+    target_year_by_row = []
+    for yr in target_years:
+        year_df = weather_data(weather_data_base, yr, county_id)
+        target_weather_frames.append(year_df)
+        target_year_by_row.extend([yr] * len(year_df))
+    weather_target_df = pd.concat(target_weather_frames, ignore_index=True)
+    target_year_by_row = np.asarray(target_year_by_row)
+
     # HVAC
     df_eulp_hvac = prediction(
-        base_year, df_eulp_pred, sw_test_base, target_year, sw_test_target,
-        'HVAC.elec', weather_base_df, weather_target_df, bldg_id, df_eulp_targ_local
+        base_year, df_eulp_pred, sw_test_base, target_years, sw_test_target,
+        'HVAC.elec', weather_base_df, weather_target_df, bldg_id, df_eulp_targ_local,
+        target_year_by_row
     )
-    hvac_sum = df_eulp_hvac['HVAC.elec'].iloc[:8760].sum().round(6)
+    hvac_sum = (
+        df_eulp_hvac.loc[
+            (df_eulp_hvac['timestamp'] - pd.Timedelta(hours=1)).dt.year
+            == comparison_year,
+            'HVAC.elec'
+        ].sum().round(6)
+    )
 
     # NG
     df_eulp_ng = prediction(
-        base_year, df_eulp_pred, sw_test_base, target_year, sw_test_target,
+        base_year, df_eulp_pred, sw_test_base, target_years, sw_test_target,
         'natural_gas.heating.energy_consumption',
-        weather_base_df, weather_target_df, bldg_id, df_eulp_targ_local
+        weather_base_df, weather_target_df, bldg_id, df_eulp_targ_local,
+        target_year_by_row
     )
-    ng_sum = df_eulp_ng['natural_gas.heating.energy_consumption'].iloc[:8760].sum().round(6)
+    ng_sum = (
+        df_eulp_ng.loc[
+            (df_eulp_ng['timestamp'] - pd.Timedelta(hours=1)).dt.year
+            == comparison_year,
+            'natural_gas.heating.energy_consumption'
+        ].sum().round(6)
+    )
 
     # Shape HVAC df to timestamp_EST x bldg_id
     df_out = df_eulp_hvac.copy()
@@ -585,93 +661,67 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
 
     return ts_agg
 
-def _weather_state(gisjoin: str) -> str:
-    '''
-    Convert GISJOIN to state abbreviation.
-    Parameters:
-    gisjoin (str): GISJOIN string, e.g. 'G3600070'
-    Returns:
-    str: State abbreviation, e.g. 'NY'
-
-    Note: Could alternatively use state_county_map
-    '''
-    # GISJOIN like 'G3600070' -> FIPS '36' -> 'NY'
-    fips2abbr = {
-        1:'AL',2:'AK',4:'AZ',5:'AR',6:'CA',8:'CO',9:'CT',10:'DE',11:'DC',
-        12:'FL',13:'GA',15:'HI',16:'ID',17:'IL',18:'IN',19:'IA',20:'KS',
-        21:'KY',22:'LA',23:'ME',24:'MD',25:'MA',26:'MI',27:'MN',28:'MS',
-        29:'MO',30:'MT',31:'NE',32:'NV',33:'NH',34:'NJ',35:'NM',36:'NY',
-        37:'NC',38:'ND',39:'OH',40:'OK',41:'OR',42:'PA',44:'RI',45:'SC',
-        46:'SD',47:'TN',48:'TX',49:'UT',50:'VT',51:'VA',53:'WA',54:'WV',
-        55:'WI',56:'WY'
-    }
-    return fips2abbr[int(gisjoin[1:3])]
-
-def weather_data(url_base, year, state, county_id, max_retries=20, delay=60):
+def weather_data(url_base, year, county_id):
     """
     Retrieves weather data from a URL and performs data preprocessing.
 
     Parameters:
     url_base (str): The base URL for the weather data.
     year (int): The year for which the weather data is retrieved.
-    state (str): The state for which the weather data is retrieved.
     county_id (str): The county ID for which the weather data is retrieved.
-    max_retries (int): The maximum number of retries for a server error.
-    delay (int): The delay in seconds between retries.
 
     Returns:
     df_weather (DataFrame): The preprocessed weather data as a DataFrame.
     """
-    print(f'Retrieving weather data for {year} in {state} county {county_id}.')
-    # Read the weather data into a DataFrame
-    url_weather = (url_base + 
-        f'2022/resstock_amy{year}_release_1/weather/'
-        f'state={state}/{county_id}_{year}.csv')
+    print(f'Retrieving weather data for {year} county {county_id}.')
 
-    for attempt in range(max_retries):
-        try:
-            df_weather = pd.read_csv(url_weather,
-                                     parse_dates=True,
-                                     index_col='date_time')
-            break
-        except (HTTPError, URLError, RemoteDisconnected,
-                IncompleteRead, ProtocolError) as e:
-            retryable_http = isinstance(e, HTTPError) and e.code in [500, 503]
-            print(f"Weather download failed ({attempt + 1}/{max_retries}): {e}")
-            if attempt < max_retries - 1 and (retryable_http or not isinstance(e, HTTPError)):
-                time.sleep(delay)
-                continue
-            raise
-    else:
-        traceback.print_exc()
-        raise Exception("Server error after multiple retries")
+    # Local EPW path support (e.g., /projects/geohc/EPW/epw_symlinks)
+    epw_path = os.path.join(url_base, f'FIPS_{year}', f'{county_id}_{year}.epw')
+    if not os.path.isfile(epw_path):
+        raise FileNotFoundError(f'Local EPW file not found: {epw_path}')
 
-    df_weather.index = pd.to_datetime(df_weather.index)
+    # EPW has 8 metadata lines, then hourly data with no column header.
+    df_epw = pd.read_csv(epw_path, skiprows=8, header=None)
+    if df_epw.empty:
+        raise ValueError(f'Empty EPW file: {epw_path}')
 
-    # Adding lagged features for the dry bulb temperature
-    for lag in lag_hours:
-        df_weather[f'Dry Bulb Temperature Lag {lag}h'] = df_weather['Dry Bulb Temperature [°C]'].shift(lag)
+    df_weather = pd.DataFrame({
+        'Dry Bulb Temperature [°C]': pd.to_numeric(df_epw.iloc[:, 6], errors='coerce'),
+        'Relative Humidity [%]': pd.to_numeric(df_epw.iloc[:, 8], errors='coerce'),
+        'Wind Speed [m/s]': pd.to_numeric(df_epw.iloc[:, 21], errors='coerce'),
+        'Wind Direction [Deg]': pd.to_numeric(df_epw.iloc[:, 20], errors='coerce'),
+        'Global Horizontal Radiation [W/m2]': pd.to_numeric(df_epw.iloc[:, 13], errors='coerce'),
+        'Direct Normal Radiation [W/m2]': pd.to_numeric(df_epw.iloc[:, 14], errors='coerce'),
+        'Diffuse Horizontal Radiation [W/m2]': pd.to_numeric(df_epw.iloc[:, 15], errors='coerce')
+    })
 
-    # Fill NaN values caused by the lagging operation
-    df_weather.bfill(inplace=True)
-    df_weather.ffill(inplace=True)
+    # Build a time index by row count so downstream features stay consistent.
+    df_weather.index = pd.date_range(
+        start=f'{year}-01-01 01:00:00',
+        periods=len(df_weather),
+        freq='h'
+    )
 
     # Add a column for the time of day as a float
     df_weather['Time of Day'] = df_weather.index.hour
     # Add a column for weekend or weekday as a binary value
     df_weather['Weekend'] = df_weather.index.weekday.isin([5, 6]).astype(int)
 
+    # Adding lagged features for the dry bulb temperature
+    for lag in lag_hours:
+        df_weather[f'Dry Bulb Temperature Lag {lag}h'] = (
+            df_weather['Dry Bulb Temperature [°C]'].shift(lag)
+        )
+
+    # Fill NaN values caused by the lagging operation
+    df_weather.bfill(inplace=True)
+    df_weather.ffill(inplace=True)
+
     # Reset the index for further operations
     df_weather.reset_index(drop=True, inplace=True)
 
-    # Select and return the final set of columns including the new lagged features
-    columns_to_keep = ['Dry Bulb Temperature [°C]',
-        'Relative Humidity [%]', 'Wind Speed [m/s]', 'Wind Direction [Deg]',
-        'Global Horizontal Radiation [W/m2]', 'Direct Normal Radiation [W/m2]',
-        'Diffuse Horizontal Radiation [W/m2]', 'Time of Day', 'Weekend']
-    # Append dynamically generated lag column names
-    columns_to_keep.extend([f'Dry Bulb Temperature Lag {lag}h' for lag in lag_hours])
-    df_weather = df_weather[columns_to_keep]
+    # Match EULP convention: keep only the first 8760 hourly rows per year.
+    df_weather = df_weather.iloc[:8760].copy()
 
     return df_weather
 
@@ -808,32 +858,31 @@ def test_fit(yr_type, year, prefix, upgrade, bldg_id, model, Y_test, Y_pred,
         if sw_show_fit:
             plt.show()
 
-def prediction(base_year, df_eulp, sw_test_base, target_year, sw_test_target,
+def prediction(base_year, df_eulp, sw_test_base, target_years, sw_test_target,
                energy_type, weather_data_base, weather_data_target, bldg_id,
-               df_eulp_targ):
+               df_eulp_targ, target_year_by_row):
     """
-    Predicts hourly HVAC electricity consumption for a single building in a 
-    target year given known HVAC electricity consumption in a base year and
-    known weather for the state/county in the base year and target year.
+    Predict hourly energy consumption for a single building by fitting once on
+    base-year weather and predicting over concatenated target-year weather.
 
     Args:
-        state (str): The state for which to make the prediction.
-        county_id (int): The ID of the county for which to make the prediction.
         base_year (int): The base year for training the prediction model.
         df_eulp (DataFrame): df containing the electricity consumption data.
         sw_test_base (bool): Whether to test/evaluate the random forest model.
-        url_base (str): The base URL for weather data.
-        target_year (int): The target year for which to make the prediction.
+        target_years (list[int]): Target years for weather-based prediction.
         sw_test_target (bool): Whether to test/evaluate the random forest model.
         energy_type (str): 'HVAC.elec' or 'natural_gas.heating.energy_consumption'
         weather_data_base (DataFrame): The weather data for the base year.
-        weather_data_target (DataFrame): The weather data for the target year.
+        weather_data_target (DataFrame): Concatenated weather for all target
+            years.
         bldg_id (str): The building ID for which to make the prediction.
         df_eulp_targ (DataFrame): Electricity consumption data for target year.
+        target_year_by_row (np.ndarray): Per-row target year labels aligned to
+            weather_data_target.
 
     Returns:
-        predictions (DataFrame): df containing the predicted HVAC electricity 
-            consumption for each timestamp in the target year.
+        predictions (DataFrame): Predicted hourly consumption across all target
+            years, concatenated in target_years order.
     """
 
     # Drop the 1st entry (1:00a) of the EULP data bc the weather data starts at
@@ -841,157 +890,166 @@ def prediction(base_year, df_eulp, sw_test_base, target_year, sw_test_target,
     df_eulp = df_eulp.iloc[1:]
     Y = df_eulp[energy_type].reset_index(drop=True)
 
-    # Return target year EULP of zeros if sum of base year EULP is near zero
-    if Y.sum() <= 0.01:
-        index_array = range(len(weather_data_target))
-        predictions = pd.DataFrame(
-            np.zeros(len(weather_data_target)), index=index_array
-        )
-        predictions['timestamp'] = pd.date_range(
-            start=dt.datetime(target_year, 1, 1, 1, 0, 0),
-            end=dt.datetime(target_year+1, 1, 1, 0, 0, 0),
-            freq='H'
-        )
-        predictions = predictions.rename(columns={0: energy_type})
-        predictions = predictions[['timestamp', energy_type]]
-        print(f'{energy_type} is all zeros for {target_year} for {bldg_id}.')
-        return predictions
-    # Pull in the weather data for the base year
-    X = weather_data_base
-    # Drop final row so the lengths of the weather and EULP data match
-    X = X.iloc[:-1]
-    startTime = dt.datetime.now()
-
-    # Train random forest model
-    rf_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=1)
-    if sw_cross_val:
-        # Perform 5-fold cross-validation
-        kfold = KFold(n_splits=5, shuffle=True, random_state=42)
-        results = cross_val_score(rf_model, X, Y, cv=kfold, scoring='neg_mean_squared_error')
-        print(f'Cross-validated MSE: {results.mean()}')
-        rf_model.fit(X, Y)
-        print('Finished Random Forest Model Training: '+ str(dt.datetime.now() - startTime))
-        if sw_test_base or sw_save_metrics:
-            X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
-            Y_pred = rf_model.predict(X_test)
-            test_fit('base', base_year, prefix, upgrade, bldg_id, rf_model, Y_test,
-                    Y_pred, X_train, sw_save_metrics, output_dir, sw_save_fit,
-                    sw_show_fit, i, df_meta, Y, start_index, end_index, 
-                    energy_type)
-    else:
-        X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=.2,
-                                                            random_state=42)  
-        rf_model.fit(X_train, Y_train)
-        print('Finished Random Forest Model Training: '+ str(dt.datetime.now() - startTime))
-        if sw_test_base or sw_save_metrics:
-            # Make predictions on the test data
-            Y_pred = rf_model.predict(X_test)
-            test_fit('base', base_year, prefix, upgrade, bldg_id, rf_model, 
-                     Y_test, Y_pred, X_train, sw_save_metrics, output_dir,
-                     sw_save_fit, sw_show_fit, i, df_meta, Y, start_index,
-                     end_index, energy_type)
+    # Predict on one concatenated target-weather matrix.
     X_Predict = weather_data_target
-    rf_predictions = rf_model.predict(X_Predict)
 
-    # Determine if predictions require extrapolation using the Neural Network
-    min_train = X['Dry Bulb Temperature [°C]'].min()
-    max_train = X['Dry Bulb Temperature [°C]'].max()
-    min_predict = X_Predict['Dry Bulb Temperature [°C]'].min()
-    max_predict = X_Predict['Dry Bulb Temperature [°C]'].max()
-    needs_extrapolation = min_predict < min_train or max_predict > max_train
-
-    # If hybrid model is on and extrapolation needed, use RFR + NN (v just RFR)
-    if sw_hybrid_model and needs_extrapolation:
-        print('Extrapolation required, employing hybrid model.')
-        scaler = StandardScaler()
-        X_scale = scaler.fit_transform(X)
-
-        # Define a simple neural network model
-        tf = _ensure_tf()
-        model = tf.keras.Sequential([
-            tf.keras.layers.Dense(
-                128,
-                activation='relu',
-                input_shape=(X_scale.shape[1],),
-                kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42)
-            ),
-            tf.keras.layers.Dense(
-                64,
-                activation='relu',
-                kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42)
-            ),
-            tf.keras.layers.Dense(
-                1,
-                kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42)
-            )
-        ])
-
-        model.compile(optimizer='adam', loss='mean_squared_error')
-
-        startTime = dt.datetime.now()
-        count_rf = 0
-        count_nn = 0
-
-        if sw_cross_val:
-            kfold = KFold(n_splits=5, shuffle=True, random_state=42)
-            for train_index, test_index in kfold.split(X_scale):
-                X_train, X_test = X_scale[train_index], X_scale[test_index]
-                Y_train, Y_test = Y[train_index], Y[test_index]
-                model.fit(X_train, Y_train, epochs=50, batch_size=10, verbose=0)
-                mse = model.evaluate(X_test, Y_test, verbose=0)
-                print(f'Fold MSE: {mse}')
-            print('Finished Neural Network Training with Cross Validation: ' + str(dt.datetime.now() - startTime))
-        else:
-            X_train, X_test, Y_train, Y_test = train_test_split(X_scale, Y, test_size=0.2, random_state=42)
-            model.fit(X_train, Y_train, epochs=50, batch_size=10)
-            print('Finished Neural Network Training without Cross Validation: ' + str(dt.datetime.now() - startTime))
-
-        X_Predict_scale = scaler.transform(X_Predict)
-        nn_predictions = model.predict(X_Predict_scale).flatten()
-
-        predictions = []
-        for j in range(len(X_Predict)):
-            if ((X_Predict['Dry Bulb Temperature [°C]'].iloc[j] >= min_train) & (X_Predict['Dry Bulb Temperature [°C]'].iloc[j] <= max_train)):
-                predictions.append(rf_predictions[j])
-                count_rf += 1
-            else:
-                predictions.append(nn_predictions[j])
-                count_nn += 1
-        print('Total extrapolation percentage: ' + str((count_nn / (count_rf + count_nn)) * 100) + '%')
-
+    # Return zeros if sum of base year EULP is near zero
+    is_zero_base = Y.sum() <= 0.01
+    if is_zero_base:
+        predictions = np.zeros(len(X_Predict))
+        print(f'{energy_type} is all zeros for {target_years} for {bldg_id}.')
+        rf_model = None
     else:
-        predictions = rf_predictions
-        print('Using random forest predictions as no extrapolation is needed.')
+        # Pull in the weather data for the base year
+        X = weather_data_base
+        # Drop final row so the lengths of the weather and EULP data match
+        X = X.iloc[:-1]
+        startTime = dt.datetime.now()
 
-    index_array = range(len(predictions))
-    predictions = pd.DataFrame(predictions, index=index_array)
-    # 'timestamp' represents hour-end values, so, like above, a 1:00 AM entry
-    # for weather data corresponds to the 2:00 AM (1a-2a) entry for EULP data
-    start_datetime = dt.datetime(target_year, 1, 1, 2, 0, 0)
-    end_datetime = dt.datetime(target_year+1, 1, 1, 1, 0, 0)
-    datetime_range_predictions = pd.date_range(start=start_datetime,
-                                               end=end_datetime, freq='H')
-    predictions['timestamp'] = datetime_range_predictions
-    predictions = predictions.rename(columns={0: energy_type})
-    predictions = predictions[['timestamp', energy_type]]
-    ## Adjust the predictions DataFrame to match the EULP data
-    ## with timestamps representing hour-end values
-    # Create a new DataFrame with the first 1:00 AM entry
-    first_entry = pd.DataFrame({
-        'timestamp': [pd.to_datetime(predictions['timestamp'].iloc[0].date())
-                      + pd.Timedelta(hours=1)],
-        energy_type: [np.nan]})
-    # Append the original DataFrame to the new DataFrame
-    predictions = pd.concat([first_entry, predictions], ignore_index=True)
-    # Use the energy_type value for 2:00 AM to backfill for 1:00 AM
-    predictions.loc[0, energy_type] = predictions.loc[1, energy_type]
-    # Drop the last entry of the DataFrame
-    predictions = predictions[:-1]
+        # Train random forest model
+        rf_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=1)
+        if sw_cross_val:
+            # Perform 5-fold cross-validation
+            kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+            results = cross_val_score(rf_model, X, Y, cv=kfold, scoring='neg_mean_squared_error')
+            print(f'Cross-validated MSE: {results.mean()}')
+            rf_model.fit(X, Y)
+            print('Finished Random Forest Model Training: '+ str(dt.datetime.now() - startTime))
+            if sw_test_base or sw_save_metrics:
+                X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+                Y_pred = rf_model.predict(X_test)
+                test_fit('base', base_year, prefix, upgrade, bldg_id, rf_model, Y_test,
+                        Y_pred, X_train, sw_save_metrics, output_dir, sw_save_fit,
+                        sw_show_fit, i, df_meta, Y, start_index, end_index, 
+                        energy_type)
+        else:
+            X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=.2,
+                                                                random_state=42)
+            rf_model.fit(X_train, Y_train)
+            print('Finished Random Forest Model Training: '+ str(dt.datetime.now() - startTime))
+            if sw_test_base or sw_save_metrics:
+                # Make predictions on the test data
+                Y_pred = rf_model.predict(X_test)
+                test_fit('base', base_year, prefix, upgrade, bldg_id, rf_model,
+                         Y_test, Y_pred, X_train, sw_save_metrics, output_dir,
+                         sw_save_fit, sw_show_fit, i, df_meta, Y, start_index,
+                         end_index, energy_type)
+        rf_predictions = rf_model.predict(X_Predict)
 
-    # Make sure no negative values are present in the predictions & clip to 0
+        # Determine if predictions require extrapolation using the Neural Network
+        min_train = X['Dry Bulb Temperature [°C]'].min()
+        max_train = X['Dry Bulb Temperature [°C]'].max()
+        min_predict = X_Predict['Dry Bulb Temperature [°C]'].min()
+        max_predict = X_Predict['Dry Bulb Temperature [°C]'].max()
+        needs_extrapolation = min_predict < min_train or max_predict > max_train
+
+        # If hybrid model is on and extrapolation needed, use RFR + NN (v just RFR)
+        if sw_hybrid_model and needs_extrapolation:
+            print('Extrapolation required, employing hybrid model.')
+            scaler = StandardScaler()
+            X_scale = scaler.fit_transform(X)
+
+            # Define a simple neural network model
+            tf = _ensure_tf()
+            model = tf.keras.Sequential([
+                tf.keras.layers.Dense(
+                    128,
+                    activation='relu',
+                    input_shape=(X_scale.shape[1],),
+                    kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42)
+                ),
+                tf.keras.layers.Dense(
+                    64,
+                    activation='relu',
+                    kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42)
+                ),
+                tf.keras.layers.Dense(
+                    1,
+                    kernel_initializer=tf.keras.initializers.GlorotUniform(seed=42)
+                )
+            ])
+
+            model.compile(optimizer='adam', loss='mean_squared_error')
+
+            startTime = dt.datetime.now()
+            count_rf = 0
+            count_nn = 0
+
+            if sw_cross_val:
+                kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+                for train_index, test_index in kfold.split(X_scale):
+                    X_train, X_test = X_scale[train_index], X_scale[test_index]
+                    Y_train, Y_test = Y[train_index], Y[test_index]
+                    model.fit(X_train, Y_train, epochs=50, batch_size=10, verbose=0)
+                    mse = model.evaluate(X_test, Y_test, verbose=0)
+                    print(f'Fold MSE: {mse}')
+                print('Finished Neural Network Training with Cross Validation: ' + str(dt.datetime.now() - startTime))
+            else:
+                X_train, X_test, Y_train, Y_test = train_test_split(X_scale, Y, test_size=0.2, random_state=42)
+                model.fit(X_train, Y_train, epochs=50, batch_size=10)
+                print('Finished Neural Network Training without Cross Validation: ' + str(dt.datetime.now() - startTime))
+
+            X_Predict_scale = scaler.transform(X_Predict)
+            nn_predictions = model.predict(X_Predict_scale).flatten()
+
+            predictions = []
+            for j in range(len(X_Predict)):
+                if ((X_Predict['Dry Bulb Temperature [°C]'].iloc[j] >= min_train) & (X_Predict['Dry Bulb Temperature [°C]'].iloc[j] <= max_train)):
+                    predictions.append(rf_predictions[j])
+                    count_rf += 1
+                else:
+                    predictions.append(nn_predictions[j])
+                    count_nn += 1
+            print('Total extrapolation percentage: ' + str((count_nn / (count_rf + count_nn)) * 100) + '%')
+
+        else:
+            predictions = rf_predictions
+            print('Using random forest predictions as no extrapolation is needed.')
+
+    predictions = np.asarray(predictions, dtype=float)
+
+    # Align predictions to hour-end load reporting by year block:
+    # value at 02:00 uses weather at 01:00, so shift each year forward by 1 hour.
+    shifted = predictions.copy()
+    for yr in np.unique(target_year_by_row):
+        mask = (target_year_by_row == yr)
+        vals = predictions[mask]
+        if len(vals) == 0:
+            continue
+        shifted_vals = vals.copy()
+        if len(vals) > 1:
+            shifted_vals[1:] = vals[:-1]
+        # Fill Jan 1 01:00 with the first modeled value for that year.
+        shifted_vals[0] = vals[0]
+        shifted[mask] = shifted_vals
+
+    # Build one continuous timestamp vector across all requested target years.
+    target_timestamps = []
+    for yr in target_years:
+        n_rows = int((target_year_by_row == yr).sum())
+        target_timestamps.extend(
+            pd.date_range(
+                start=dt.datetime(yr, 1, 1, 1, 0, 0),
+                periods=n_rows,
+                freq='H'
+            )
+        )
+
+    predictions = pd.DataFrame({
+        'timestamp': pd.to_datetime(target_timestamps),
+        energy_type: shifted
+    })
+    # Energy consumption cannot be negative.
     predictions[energy_type] = predictions[energy_type].clip(lower=0)
 
+    if is_zero_base:
+        return predictions
+
     if sw_test_target:
+        if len(target_years) != 1:
+            raise ValueError(
+                "sw_test_target=True requires exactly one target year."
+            )
         # Subset the target year EULP data to the building ID
         df_eulp_targ_bldg = df_eulp_targ.loc[bldg_id].copy()
 
@@ -999,7 +1057,7 @@ def prediction(base_year, df_eulp, sw_test_base, target_year, sw_test_target,
         Y = df_eulp_targ_bldg[energy_type].reset_index(drop=True)
         Y_pred = predictions[energy_type]
 
-        test_fit('targ', target_year, prefix, upgrade, bldg_id, rf_model, Y_test,
+        test_fit('targ', target_years[0], prefix, upgrade, bldg_id, rf_model, Y_test,
                  Y_pred, X_Predict, sw_save_metrics, output_dir, sw_save_fit,
                  sw_show_fit, i, df_meta, Y, start_index, end_index,
                  energy_type)
@@ -1053,16 +1111,6 @@ df_bldg = []
 if sw_apply_regression: # TODO: or `individual_building`?
     # Parallel path (HPC only)
     if _is_hpc():
-        
-        # Preload weather per county
-        weather_data_dict = {}
-        unique_counties = {_county_of(bid) for bid in df_meta.index}
-        for county_id in unique_counties:
-            weather_data_dict[county_id] = {
-                'base': weather_data(url_base, base_year, _weather_state(county_id), county_id),
-                'target': weather_data(url_base, target_year, _weather_state(county_id), county_id),
-            }
-
         # Build tasks
         tasks = []
         for bldg_id in df_meta.index:
@@ -1070,12 +1118,11 @@ if sw_apply_regression: # TODO: or `individual_building`?
             df_eulp_pred = ts_agg.loc[bldg_id].copy()
             tasks.append((
                 bldg_id,
+                county_id,
                 df_eulp_pred,
-                weather_data_dict[county_id]['base'],
-                weather_data_dict[county_id]['target'],
                 df_eulp_targ if sw_test_target and sw_apply_regression else None,
                 base_year,
-                target_year,
+                target_years,
                 sw_test_base,
                 sw_test_target
             ))
@@ -1097,13 +1144,8 @@ if sw_apply_regression: # TODO: or `individual_building`?
 
     # Serial path (local machine)
     else:
-        # Create a dictionary to store weather data for each unique county
-        weather_data_dict = {}
-
         # Loop through each building in the metadata DataFrame
         for i, bldg_id in enumerate(df_meta.index):
-            # Get the state of the building (for the URL)
-            state = df_meta.loc[bldg_id, 'in.state']
             # Get the county ID of the building
             if sw_comstock and comstock_year == "2025" and comstock_release == "2":
                 county_id = df_meta.loc[
@@ -1112,15 +1154,16 @@ if sw_apply_regression: # TODO: or `individual_building`?
             else:
                 county_id = df_meta.loc[bldg_id, county]
 
-            # Check if weather data for this county is already in the dictionary
-            if county_id not in weather_data_dict:
-                # If not, get & store weather data for base & target years in dict
-                weather_data_dict[county_id] = {
-                    'base': weather_data(url_base, base_year,
-                                        _weather_state(county_id), county_id),
-                    'target': weather_data(url_base, target_year,
-                                        _weather_state(county_id), county_id)
-                }
+            # Load weather just prior to regression for this county/building.
+            weather_base_df = weather_data(weather_data_base, base_year, county_id)
+            target_weather_frames = []
+            target_year_by_row = []
+            for yr in target_years:
+                year_df = weather_data(weather_data_base, yr, county_id)
+                target_weather_frames.append(year_df)
+                target_year_by_row.extend([yr] * len(year_df))
+            weather_target_df = pd.concat(target_weather_frames, ignore_index=True)
+            target_year_by_row = np.asarray(target_year_by_row)
 
             # Get the EULP data for a specific building for use in the regressions
             df_eulp_pred = ts_agg.loc[bldg_id].copy()
@@ -1128,14 +1171,18 @@ if sw_apply_regression: # TODO: or `individual_building`?
             # HVAC ELECTRICITY
             # Predict HVAC electricity energy consumption
             df_eulp_hvac = prediction(
-                base_year, df_eulp_pred, sw_test_base, target_year, sw_test_target,
-                'HVAC.elec', weather_data_dict[county_id]['base'],
-                weather_data_dict[county_id]['target'], bldg_id, df_eulp_targ
+                base_year, df_eulp_pred, sw_test_base, target_years, sw_test_target,
+                'HVAC.elec', weather_base_df, weather_target_df, bldg_id, df_eulp_targ,
+                target_year_by_row
             )
 
             # Error check: Add regressed annual HVAC.elec to df_meta for a bldg_id
             df_meta.loc[bldg_id, 'HVAC.elec'] = (
-                df_eulp_hvac['HVAC.elec'].iloc[:8760].sum().round(6))
+                df_eulp_hvac.loc[
+                    (df_eulp_hvac['timestamp'] - pd.Timedelta(hours=1)).dt.year
+                    == comparison_year,
+                    'HVAC.elec'
+                ].sum().round(6))
 
             # Rename columns, including `HVAC.elec` to match the building ID
             df_eulp_hvac.columns = ['timestamp_EST', f'{bldg_id}']
@@ -1149,16 +1196,19 @@ if sw_apply_regression: # TODO: or `individual_building`?
             # NATURAL GAS
             # Predict natural gas heating energy consumption
             df_eulp_ng = prediction(
-                base_year, df_eulp_pred, sw_test_base, target_year, sw_test_target,
+                base_year, df_eulp_pred, sw_test_base, target_years, sw_test_target,
                 'natural_gas.heating.energy_consumption',
-                weather_data_dict[county_id]['base'],
-                weather_data_dict[county_id]['target'], bldg_id, df_eulp_targ
+                weather_base_df, weather_target_df, bldg_id, df_eulp_targ,
+                target_year_by_row
             )
 
             # Add regressed annual ng to df_meta for a bldg_id
             df_meta.loc[bldg_id, 'natural_gas.heating.energy_consumption'] = (
-                df_eulp_ng['natural_gas.heating.energy_consumption']
-                .iloc[:8760].sum().round(6))
+                df_eulp_ng.loc[
+                    (df_eulp_ng['timestamp'] - pd.Timedelta(hours=1)).dt.year
+                    == comparison_year,
+                    'natural_gas.heating.energy_consumption'
+                ].sum().round(6))
 
         # Concatenate all building DataFrames into a single DataFrame
         df_eulp = pd.concat(df_bldg, axis=1)
@@ -1177,6 +1227,19 @@ else:
     ts_agg.rename(columns={'timestamp': 'timestamp_EST'}, inplace=True)
     df_eulp = ts_agg.pivot(index='timestamp_EST', columns='bldg_id',
                            values='HVAC.elec')
+
+# Collapse bldg_id (county/sim-county) columns to county columns.
+# First, create lookup to get county from df_meta
+county_labels = df_meta.loc[df_eulp.columns, county].astype(str)
+# Then group by county and sum energy use across all buildings in each county.
+df_eulp = df_eulp.T.groupby(county_labels).sum().T
+
+# Aggregate df_meta to county-level before diagnostics.
+df_meta = (
+    df_meta.groupby([county, 'in.county_name', 'in.state'], as_index=False)
+    .sum()
+    .set_index(county)
+)
 
 # Error checking using ratios and percent differences in df_meta TODO: fxn?
 ## Ratios (note: small_number is to avoid division by zero)
@@ -1244,9 +1307,10 @@ df_meta.to_csv(os.path.join(output_dir,
 # Round df_eulp to 6 decimal places TODO: Move to `prediction` fxn?
 df_eulp = df_eulp.round(6)
 
-# If leap year (currently resstock), drop the last day of `df_eulp`
-if len(df_eulp) == 8784:
-    df_eulp = df_eulp.iloc[:-24]
+# Keep the first 8760 hourly rows in each model year
+# (assign Jan 1 00:00 to the previous year via -1 hour shift).
+model_year = (df_eulp.index - pd.Timedelta(hours=1)).year
+df_eulp = df_eulp.groupby(model_year, group_keys=False).head(8760)
 
 # Save concatenated energy consumption DataFrame (hour x bldg) to CSV file
 df_eulp.to_csv(os.path.join(output_dir,
