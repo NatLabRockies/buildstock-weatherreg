@@ -1151,6 +1151,19 @@ else:
     df_eulp = ts_agg.pivot(index='timestamp_EST', columns='bldg_id',
                            values='HVAC.elec')
 
+# Collapse bldg_id (county/sim-county) columns to county columns.
+# First, create lookup to get county from df_meta
+county_labels = df_meta.loc[df_eulp.columns, county].astype(str)
+# Then group by county and sum energy use across all buildings in each county.
+df_eulp = df_eulp.T.groupby(county_labels).sum().T
+
+# Aggregate df_meta to county-level before diagnostics.
+df_meta = (
+    df_meta.groupby([county, 'in.county_name', 'in.state'], as_index=False)
+    .sum()
+    .set_index(county)
+)
+
 # Error checking using ratios and percent differences in df_meta TODO: fxn?
 ## Ratios (note: small_number is to avoid division by zero)
 df_meta['ratio_HVAC_AWS_meta'] = (
