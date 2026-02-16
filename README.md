@@ -94,18 +94,17 @@ python B_building_stock_parallel_agg.py
 
 ### National Runs
 For national runs, it's best to launch `A_start_building_stock_parallel_agg.sh` instead of `B_building_stock_parallel_agg.py` so that the job can be queued and fully run on compute nodes.
-- Edit `#SBATCH` settings at the top of  `A_start_building_stock_parallel_agg.sh`.
 - In `switches_agg.json`:
   - Deactivate `testmode` by setting to `false`.
   - Select upgrades ("measures") to run with `upgrades` switch, which accepts a list of integers specifying the upgrades to run.
   - Select target years to run with `target_year` switch, which can either be an integer or a list of either integers or strings with ranges, inclusive of the end (e.g. `["2007-2013","2016-2023"]`).
-- Run with `sbatch A_start_building_stock_parallel_agg.sh`
+- Edit `#SBATCH` settings at the top of  `A_start_building_stock_parallel_agg.sh` and run with `sbatch A_start_building_stock_parallel_agg.sh`.
 
 #### ComStock
 ResStock is used by default. For ComStock regressions, change these switches:
 - `"comstock": true,`
 - `"base_run": "comstock_2025_2"`
-- `"chunk_size": 10`
+- `"chunk_size": 10` (indicating that 10 counties should be chunked together)
 
 #### Non-regressed
 To simply pull existing ComStock or ResStock results, rather than running any regressions, change these switches:
@@ -113,6 +112,9 @@ To simply pull existing ComStock or ResStock results, rather than running any re
 - `"target_year"` must be set equal to `"base_year"`
 - Set `"chunk_size"` to `500` for ResStock and `50` for ComStock.
 - For ComStock, also set `"comstock": true,` and `"base_run": "comstock_2025_2"`.
+
+## Outputs
+Outputs will be dropped into a new timestamped folder in the `outputs` subdirectory of this repo. There will be an hourly "eulp_hvac_elec_MWh" csv and an annual "meta" csv for each parallelized chunk of counties that are run.
 
 ## Troubleshooting
 
