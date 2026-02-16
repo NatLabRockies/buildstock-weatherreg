@@ -15,10 +15,6 @@ import shutil
 import subprocess
 from buildstock_query import BuildStockQuery
 import time
-from urllib.error import HTTPError, URLError
-from http.client import IncompleteRead, RemoteDisconnected
-from urllib3.exceptions import ProtocolError
-import traceback
 import re
 import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -100,7 +96,7 @@ lag_hours = switch['lag_hours_temperature']   # Lagged features for the dry bulb
 base_run = switch['base_run'] # The base run type for the BuildStockQuery object
 target_run = switch['target_run'] # The target run type for the BuildStockQuery object
 run_types = switch['run_types'] # Run types for the BuildStockQuery object
-url_base = switch['url_base']
+weather_data_base = switch['weather_data_base']
 
 
 # FUNCTIONS
@@ -142,6 +138,9 @@ def _process_one_building(args):
     sw_save_metrics = False
     sw_show_fit = False
     sw_save_fit = False
+
+    # Load weather just-in-time for this building.
+    weather_base_df = weather_data(weather_data_base, base_year, county_id)
 
     # HVAC
     df_eulp_hvac = prediction(
@@ -585,93 +584,67 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
 
     return ts_agg
 
-def _weather_state(gisjoin: str) -> str:
-    '''
-    Convert GISJOIN to state abbreviation.
-    Parameters:
-    gisjoin (str): GISJOIN string, e.g. 'G3600070'
-    Returns:
-    str: State abbreviation, e.g. 'NY'
-
-    Note: Could alternatively use state_county_map
-    '''
-    # GISJOIN like 'G3600070' -> FIPS '36' -> 'NY'
-    fips2abbr = {
-        1:'AL',2:'AK',4:'AZ',5:'AR',6:'CA',8:'CO',9:'CT',10:'DE',11:'DC',
-        12:'FL',13:'GA',15:'HI',16:'ID',17:'IL',18:'IN',19:'IA',20:'KS',
-        21:'KY',22:'LA',23:'ME',24:'MD',25:'MA',26:'MI',27:'MN',28:'MS',
-        29:'MO',30:'MT',31:'NE',32:'NV',33:'NH',34:'NJ',35:'NM',36:'NY',
-        37:'NC',38:'ND',39:'OH',40:'OK',41:'OR',42:'PA',44:'RI',45:'SC',
-        46:'SD',47:'TN',48:'TX',49:'UT',50:'VT',51:'VA',53:'WA',54:'WV',
-        55:'WI',56:'WY'
-    }
-    return fips2abbr[int(gisjoin[1:3])]
-
-def weather_data(url_base, year, state, county_id, max_retries=20, delay=60):
+def weather_data(url_base, year, county_id):
     """
     Retrieves weather data from a URL and performs data preprocessing.
 
     Parameters:
     url_base (str): The base URL for the weather data.
     year (int): The year for which the weather data is retrieved.
-    state (str): The state for which the weather data is retrieved.
     county_id (str): The county ID for which the weather data is retrieved.
-    max_retries (int): The maximum number of retries for a server error.
-    delay (int): The delay in seconds between retries.
 
     Returns:
     df_weather (DataFrame): The preprocessed weather data as a DataFrame.
     """
-    print(f'Retrieving weather data for {year} in {state} county {county_id}.')
-    # Read the weather data into a DataFrame
-    url_weather = (url_base + 
-        f'2022/resstock_amy{year}_release_1/weather/'
-        f'state={state}/{county_id}_{year}.csv')
+    print(f'Retrieving weather data for {year} county {county_id}.')
 
-    for attempt in range(max_retries):
-        try:
-            df_weather = pd.read_csv(url_weather,
-                                     parse_dates=True,
-                                     index_col='date_time')
-            break
-        except (HTTPError, URLError, RemoteDisconnected,
-                IncompleteRead, ProtocolError) as e:
-            retryable_http = isinstance(e, HTTPError) and e.code in [500, 503]
-            print(f"Weather download failed ({attempt + 1}/{max_retries}): {e}")
-            if attempt < max_retries - 1 and (retryable_http or not isinstance(e, HTTPError)):
-                time.sleep(delay)
-                continue
-            raise
-    else:
-        traceback.print_exc()
-        raise Exception("Server error after multiple retries")
+    # Local EPW path support (e.g., /projects/geohc/EPW/epw_symlinks)
+    epw_path = os.path.join(url_base, f'FIPS_{year}', f'{county_id}_{year}.epw')
+    if not os.path.isfile(epw_path):
+        raise FileNotFoundError(f'Local EPW file not found: {epw_path}')
 
-    df_weather.index = pd.to_datetime(df_weather.index)
+    # EPW has 8 metadata lines, then hourly data with no column header.
+    df_epw = pd.read_csv(epw_path, skiprows=8, header=None)
+    if df_epw.empty:
+        raise ValueError(f'Empty EPW file: {epw_path}')
 
-    # Adding lagged features for the dry bulb temperature
-    for lag in lag_hours:
-        df_weather[f'Dry Bulb Temperature Lag {lag}h'] = df_weather['Dry Bulb Temperature [°C]'].shift(lag)
+    df_weather = pd.DataFrame({
+        'Dry Bulb Temperature [°C]': pd.to_numeric(df_epw.iloc[:, 6], errors='coerce'),
+        'Relative Humidity [%]': pd.to_numeric(df_epw.iloc[:, 8], errors='coerce'),
+        'Wind Speed [m/s]': pd.to_numeric(df_epw.iloc[:, 21], errors='coerce'),
+        'Wind Direction [Deg]': pd.to_numeric(df_epw.iloc[:, 20], errors='coerce'),
+        'Global Horizontal Radiation [W/m2]': pd.to_numeric(df_epw.iloc[:, 13], errors='coerce'),
+        'Direct Normal Radiation [W/m2]': pd.to_numeric(df_epw.iloc[:, 14], errors='coerce'),
+        'Diffuse Horizontal Radiation [W/m2]': pd.to_numeric(df_epw.iloc[:, 15], errors='coerce')
+    })
 
-    # Fill NaN values caused by the lagging operation
-    df_weather.fillna(method='bfill', inplace=True)
-    df_weather.fillna(method='ffill', inplace=True)
+    # Build a time index by row count so downstream features stay consistent.
+    df_weather.index = pd.date_range(
+        start=f'{year}-01-01 01:00:00',
+        periods=len(df_weather),
+        freq='h'
+    )
 
     # Add a column for the time of day as a float
     df_weather['Time of Day'] = df_weather.index.hour
     # Add a column for weekend or weekday as a binary value
     df_weather['Weekend'] = df_weather.index.weekday.isin([5, 6]).astype(int)
 
+    # Adding lagged features for the dry bulb temperature
+    for lag in lag_hours:
+        df_weather[f'Dry Bulb Temperature Lag {lag}h'] = (
+            df_weather['Dry Bulb Temperature [°C]'].shift(lag)
+        )
+
+    # Fill NaN values caused by the lagging operation
+    df_weather.fillna(method='bfill', inplace=True)
+    df_weather.fillna(method='ffill', inplace=True)
+
     # Reset the index for further operations
     df_weather.reset_index(drop=True, inplace=True)
 
-    # Select and return the final set of columns including the new lagged features
-    columns_to_keep = ['Dry Bulb Temperature [°C]',
-        'Relative Humidity [%]', 'Wind Speed [m/s]', 'Wind Direction [Deg]',
-        'Global Horizontal Radiation [W/m2]', 'Direct Normal Radiation [W/m2]',
-        'Diffuse Horizontal Radiation [W/m2]', 'Time of Day', 'Weekend']
-    # Append dynamically generated lag column names
-    columns_to_keep.extend([f'Dry Bulb Temperature Lag {lag}h' for lag in lag_hours])
-    df_weather = df_weather[columns_to_keep]
+    # Match EULP convention: keep only the first 8760 hourly rows per year.
+    df_weather = df_weather.iloc[:8760].copy()
 
     return df_weather
 
