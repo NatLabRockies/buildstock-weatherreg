@@ -17,13 +17,8 @@ output_dir=$6
 script_dir=$7
 counties_str=$8
 
-# Set up nodal environment for run
-. $HOME/.bashrc
-module purge
-module use /nopt/nrel/apps/software/gams/modulefiles
-source /nopt/nrel/apps/env.sh
-module load anaconda3
-conda activate geothermal
+# Ensure uv is on PATH (adjust if installed elsewhere)
+export PATH="$HOME/.local/bin:$PATH"
 
 # Limit per-process threading to avoid oversubscription when using many processes
 export OMP_NUM_THREADS=1
@@ -33,4 +28,4 @@ export NUMEXPR_NUM_THREADS=1
 export TF_NUM_INTRAOP_THREADS=1
 export TF_NUM_INTEROP_THREADS=1
 
-python $output_dir/inputs/D_process_chunk_agg.py $start_index $end_index $meta_path $upgrade $prefix $output_dir $script_dir $counties_str
+uv run python $output_dir/inputs/D_process_chunk_agg.py $start_index $end_index $meta_path $upgrade $prefix $output_dir $script_dir $counties_str

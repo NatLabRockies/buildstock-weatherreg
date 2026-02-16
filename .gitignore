@@ -1,3 +1,8 @@
 # Ignore outputs folders
 outputs_*/
 outputs/
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc

@@ -14,6 +14,17 @@
 
 ## Environment Setup
 
+### Install uv (Python package manager)
+
+uv is a fast, single-binary Python package manager. Install it once:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+On HPC (Kestrel), the same command works in your home directory — no module system or admin access required.
+
 ### Install AWS CLI
 - Follow the [AWS CLI installation instructions](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html).
   - For example, on HPC:
@@ -29,11 +40,11 @@
     source ~/.bashrc
     ```
     And we confirm installation and $PATH changes by seeing a version output from:
-    ``` 
+    ```
     aws --version
     ```
 ### AWS SSO Configuration
-- Follow [AWS SSO configuration instructions](https://github.com/NatLabRockies/buildstock-query/wiki/AWS-setup#with-sso-for-nrel-employees), all the way through step 8! Note that after step 5 a browser should automatically open. We had luck using remote SSH from vscode, and didn't have luck with git bash or direct terminal sshing into kestrel. 
+- Follow [AWS SSO configuration instructions](https://github.com/NatLabRockies/buildstock-query/wiki/AWS-setup#with-sso-for-nrel-employees), all the way through step 8! Note that after step 5 a browser should automatically open. We had luck using remote SSH from vscode, and didn't have luck with git bash or direct terminal sshing into kestrel.
 
 ### Clone Repo
 ```bash
@@ -44,25 +55,17 @@ git clone https://github.com/NatLabRockies/buildstock-weatherreg.git
 git clone git@github.com:NatLabRockies/buildstock-weatherreg.git
 ```
 
-### Install the Geothermal Environment
+### Install Dependencies
 ```bash
 cd buildstock-weatherreg
-conda env create -f geothermal_env.yml
+uv sync
 ```
 
-This step can take ~30 minutes. You may experience errors during this step, but continue through the following steps, which should correct the issues.
-
-```bash
-conda activate geothermal
-conda install git-lfs
-pip install tensorflow
-pip install --upgrade "numpy<2.0"
-pip install "buildstock-query[full] @ git+https://github.com/NatLabRockies/buildstock-query@2024.05.09"
-```
+That's it. `uv sync` reads `pyproject.toml`, resolves all dependencies, creates a virtual environment in `.venv/`, and installs everything — typically in under a minute.
 
 Then, copy the ComStock schema:
 ```bash
-python -c "import site; print(site.getsitepackages())"
+uv run python -c "import site; print(site.getsitepackages())"
 ```
 Locate `comstock_oedi.toml` in the current directory and copy it to:
 ```
@@ -74,7 +77,6 @@ Locate `comstock_oedi.toml` in the current directory and copy it to:
 ## Running the Program
 
 ```bash
-conda activate geothermal
 aws sso login
 ```
 
@@ -84,8 +86,13 @@ aws sso login
 - Edit `#SBATCH` settings at the top of `A_start_building_stock_parallel_agg.sh` and `C_run_bldg_chunk_agg.sh` as needed.
 
 ### Run Aggregation
+
 ```bash
-python B_building_stock_parallel_agg.py
+# Local
+uv run python B_building_stock_parallel_agg.py
+
+# HPC (via SLURM)
+sbatch A_start_building_stock_parallel_agg.sh
 ```
 
 ## Troubleshooting
@@ -97,4 +104,3 @@ We had issues with AWS SSO configuration on Yampa. One solution is to perform au
 
 ## Validation
 See regression validation outputs for resstock and comstock HVAC EULP here: https://drive.google.com/file/d/1qDy9DrraTP7Kkzk1i6_tDVStEf3fzrQn/view?usp=sharing
-

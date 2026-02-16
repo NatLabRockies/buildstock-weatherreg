@@ -10,13 +10,9 @@
 
 #SBATCH --job-name=building_stock_parallel
 
-# Set up nodal environment for run
-. $HOME/.bashrc
-module purge
-module use /nopt/nrel/apps/software/gams/modulefiles
-source /nopt/nrel/apps/env.sh
-module load anaconda3
-conda activate geothermal
+# Ensure uv is on PATH (adjust if installed elsewhere)
+export PATH="$HOME/.local/bin:$PATH"
+
 aws sso login
 
-python B_building_stock_parallel_agg.py
+uv run B_building_stock_parallel_agg.py

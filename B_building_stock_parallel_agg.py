@@ -10,8 +10,8 @@ import json
 
 # Helper function for running parallelized tasks via multiprocessing
 def run_task(cmd):
-    print(f'Running command: {cmd} at {dt.datetime.now()}\n')
-    result = subprocess.run(cmd, shell=True, env=os.environ.copy(), check=True,
+    print(f'Running command: {" ".join(cmd)} at {dt.datetime.now()}\n')
+    result = subprocess.run(cmd, env=os.environ.copy(), check=True,
                             stdout=sys.stdout.buffer, stderr=sys.stderr.buffer)
     return result.returncode
 
@@ -30,9 +30,10 @@ if __name__ == "__main__":
     time = dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     output_dir = f'{script_dir}/outputs/outputs_{time}'
 
-    ## Function to exclude 'outputs' directory (prevents recursion)
+    ## Function to exclude directories that shouldn't be copied into outputs
+    EXCLUDE_DIRS = {'outputs', '.venv', '.git', '.history', '__pycache__', 'aggregates'}
     def exclude_dir(_dirname, filenames):
-        return [name for name in filenames if name == 'outputs']
+        return [name for name in filenames if name in EXCLUDE_DIRS]
 
     ## Create & copy files to the output directory, excluding 'outputs'
     shutil.copytree(script_dir, f'{output_dir}/inputs', ignore=exclude_dir)
@@ -278,19 +279,22 @@ if __name__ == "__main__":
             # Submit job to HPC or run locally
             if hpc:
                 # Call a shell script that creates a compute node and runs a python file
-                os.system(
-                    f'sbatch --job-name=chunk_{prefix}{upgrade}_{start_index}-{end_index} '
-                    f'./C_run_bldg_chunk_agg.sh {start_index} {end_index} {meta_path} '
-                    f'{upgrade} {prefix} {output_dir} {script_dir} {counties_str}'
-                )
+                subprocess.run([
+                    'sbatch',
+                    f'--job-name=chunk_{prefix}{upgrade}_{start_index}-{end_index}',
+                    './C_run_bldg_chunk_agg.sh',
+                    str(start_index), str(end_index), meta_path,
+                    str(upgrade), prefix, output_dir, script_dir, counties_str
+                ], check=True)
 
             else:
                 # Store commands for multiprocessing
-                cmd = (
-                    f'python {output_dir}/inputs/D_process_chunk_agg.py '
-                    f'{start_index} {end_index} {meta_path} {upgrade} {prefix} '
-                    f'{output_dir} {script_dir} {counties_str}'
-                )
+                cmd = [
+                    sys.executable,
+                    f'{output_dir}/inputs/D_process_chunk_agg.py',
+                    str(start_index), str(end_index), meta_path,
+                    str(upgrade), prefix, output_dir, script_dir, counties_str
+                ]
                 tasks.append(cmd)  # Collect tasks to run later
 
     # Run multiprocessing to execute all tasks in parallel

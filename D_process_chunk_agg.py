@@ -653,8 +653,8 @@ def weather_data(url_base, year, state, county_id, max_retries=20, delay=60):
         df_weather[f'Dry Bulb Temperature Lag {lag}h'] = df_weather['Dry Bulb Temperature [°C]'].shift(lag)
 
     # Fill NaN values caused by the lagging operation
-    df_weather.fillna(method='bfill', inplace=True)
-    df_weather.fillna(method='ffill', inplace=True)
+    df_weather.bfill(inplace=True)
+    df_weather.ffill(inplace=True)
 
     # Add a column for the time of day as a float
     df_weather['Time of Day'] = df_weather.index.hour
