@@ -84,12 +84,33 @@ aws sso login
 ### Adjust Configuration
 - Edit `switches_agg.json` to match your desired settings.
   - Ensure that `"workgroup"` matches your Stratus Cloud Handle / AWS Sandbox Workgroup.
-- Edit `#SBATCH` settings at the top of `A_start_building_stock_parallel_agg.sh` and `C_run_bldg_chunk_agg.sh` as needed.
+- Edit `#SBATCH` settings at the top of `C_run_bldg_chunk_agg.sh` as needed.
 
-### Run Aggregation
+### Test run
+By default, `switches_agg.json` has `"testmode": true`, which activates a reduced ResStock run of Vermont only (see `'VT'` in `B_building_stock_parallel_agg.py`). Simply run:
 ```bash
 python B_building_stock_parallel_agg.py
 ```
+
+### National Runs
+For national runs, it's best to launch `A_start_building_stock_parallel_agg.sh` instead of `B_building_stock_parallel_agg.py` so that the job can be queued and fully run on compute nodes.
+- Edit `#SBATCH` settings at the top of  `A_start_building_stock_parallel_agg.sh`.
+- In `switches_agg.json`:
+  - Deactivate `testmode` by setting to `false`.
+  - Select upgrades ("measures") to run with `upgrades` switch, which accepts a list of integers specifying the upgrades to run.
+  - Select target years to run with `target_year` switch, which can either be an integer or a list of either integers or strings with ranges, inclusive of the end (e.g. `["2007-2013","2016-2023"]`).
+
+#### ComStock
+ResStock is used by default. For ComStock regressions, change these switches:
+- `"comstock": true,`
+- `"base_run": "comstock_2025_2"`
+- `"chunk_size": 10`
+
+#### Non-regressed
+To simply pull existing ComStock or ResStock results, rather than running any regressions, change these switches:
+- `"apply_regression": false`
+- `"target_year"` must be set equal to `"base_year"`
+- Set `"chunk_size"` to `500` for ResStock and `50` for ComStock.
 
 ## Troubleshooting
 
