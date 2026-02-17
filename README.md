@@ -92,22 +92,22 @@ By default, `switches_agg.json` has `"testmode": true`, which activates a reduce
 python B_building_stock_parallel_agg.py
 ```
 
-### Full national Runs
-- In `switches_agg.json`, change these switches:
+### Full Runs
+- In `switches_agg.json`, set these switches:
   - `"testmode": false`. This deactivates the Vermont-only test run and runs full national.
   - `"upgrades": [0,4]` (or any list of upgrades/measures to run). Note that for ComStock regressed runs we typically only run one upgrade at a time on HPC.
   - `"target_year": ["2007-2013","2016-2023"]` (or any integer or list of either integers or strings with ranges, as shown). These are the years for which regressed EULP data is output.
-  - Change any other switches as shown in the subsections below.
+  - Change any other switches as shown in the subsections below. By default, `switches_agg.json` is set up to run ResStock regressed from 2018 (`base_year`) to 2007-2024 (`target_year`). In the subsections below we discuss using [ComStock](#comstock-regressed) rather than ResStock, and running the tool [without regressions](#non-regressed) to simply extract existing ResStock/ComStock data.
 - Edit `#SBATCH` settings at the top of  `A_start_building_stock_parallel_agg.sh` and run with `sbatch A_start_building_stock_parallel_agg.sh`. For national runs, it's best to launch `A_start_building_stock_parallel_agg.sh` instead of `B_building_stock_parallel_agg.py` so that the job can be queued and fully run on compute nodes.
 
 #### ComStock regressed
-ResStock is used by default. For ComStock regressions, change these switches in `switches_agg.json`:
+ResStock is used by default. For ComStock regressions, set these switches in `switches_agg.json`:
 - `"comstock": true,`
 - `"base_run": "comstock_2025_2"`
-- `"chunk_size": 10` (indicating that 10 counties should be chunked together)
+- `"chunk_size": 10`. This indicates that 10 counties should be chunked together. We use 10 instead of the default 150 because ComStock requires significantly more resources to regress, as all combinations of county and simulatated county are regressed separately. ResStock, on the other hand, does not have separate simulated counties.
 
 #### Non-regressed
-To simply pull existing ComStock or ResStock results, rather than running any regressions, change these switches in `switches_agg.json`:
+To simply pull existing ComStock or ResStock results, rather than running any regressions, set these switches in `switches_agg.json`:
 - `"apply_regression": false`
 - `"target_year"` must be set equal to `"base_year"`.
 - Set `"chunk_size"` to `500` for ResStock and `50` for ComStock.
