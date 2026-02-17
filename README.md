@@ -87,17 +87,17 @@ aws sso login
 - Edit `#SBATCH` settings at the top of `C_run_bldg_chunk_agg.sh` as needed.
 
 ### Test run
-By default, `switches_agg.json` has `"testmode": true`, which activates a reduced ResStock run of Vermont only (see `'VT'` in `B_building_stock_parallel_agg.py`). Simply run:
 ```bash
 python B_building_stock_parallel_agg.py
 ```
 
 ### Full Runs
-- In `switches_agg.json`, set these switches:
+By default, `switches_agg.json` runs a regression of ResStock Baseline (Upgrade=0) HVAC end use load profiles (EULP), regressed from 2018 to 2007-2024. Also by default, it runs in testmode, a run of Vermont only (see `'VT'` in `B_building_stock_parallel_agg.py`). For full runs:
+- Set these switches in `switches_agg.json`:
   - `"testmode": false`. This deactivates the Vermont-only test run and runs full national.
-  - `"upgrades": [0,4]` (or any list of upgrades/measures to run). Note that for ComStock regressed runs we typically only run one upgrade at a time on HPC.
+  - `"upgrades": [0,4]` (or any list of upgrades/measures to run). Upgrade 0 is Baseline. Note that for ComStock runs we typically only run one upgrade at a time on HPC.
   - `"target_year": ["2007-2013","2016-2023"]` (or any integer or list of either integers or strings with ranges, as shown). These are the years for which regressed EULP data is output.
-  - Change any other switches as shown in the subsections below. By default, `switches_agg.json` is set up to run ResStock regressed from 2018 (`base_year`) to 2007-2024 (`target_year`). In the subsections below we discuss using [ComStock](#comstock-regressed) rather than ResStock, and running the tool [without regressions](#non-regressed) to simply extract existing ResStock/ComStock data.
+  - Change any other switches as shown in the subsections below. In the subsections below we discuss using [ComStock](#comstock-regressed) rather than ResStock, and running the tool [without regressions](#non-regressed) to simply extract existing ResStock/ComStock data.
 - Edit `#SBATCH` settings at the top of  `A_start_building_stock_parallel_agg.sh` and run with `sbatch A_start_building_stock_parallel_agg.sh`. For national runs, it's best to launch `A_start_building_stock_parallel_agg.sh` instead of `B_building_stock_parallel_agg.py` so that the job can be queued and fully run on compute nodes.
 
 #### ComStock regressed
