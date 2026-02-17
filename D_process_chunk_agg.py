@@ -1235,6 +1235,9 @@ county_labels = df_meta.loc[df_eulp.columns, county].astype(str)
 df_eulp = df_eulp.T.groupby(county_labels).sum().T
 
 # Aggregate df_meta to county-level before diagnostics.
+# Drop sim-county column to avoid string concatenation during groupby sum.
+df_meta = df_meta.drop(columns=['in.as_simulated_nhgis_county_gisjoin'],
+                       errors='ignore')
 df_meta = (
     df_meta.groupby([county, 'in.county_name', 'in.state'], as_index=False)
     .sum()
