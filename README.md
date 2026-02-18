@@ -115,7 +115,13 @@ To simply pull existing ComStock or ResStock results, rather than running any re
 - For ComStock, also set `"comstock": true,` and `"base_run": "comstock_2025_2"` as shown above.
 
 ## Outputs
-Outputs will be dropped into a new timestamped folder in the `outputs` subdirectory of this repo. There will be an hourly "eulp_hvac_elec_MWh" csv and an annual "meta" csv for each parallelized chunk of counties that are run. To combine the chunked outputs into one eulp file, edit the `#Inputs` section at the top of `agg_buildings.py` and run it. The resulting file will be dropped into the same `outputs` sub-directory.
+Outputs will be dropped into a new timestamped folder in the `outputs` subdirectory of this repo. There will be an hourly `*_eulp_hvac_elec_MWh_*.csv` and an annual `*_meta_*.csv` for each parallelized chunk of counties that are run. the meta files include regressed annual natural gas usage for a specific year, which is the `base_year` if it is included in `target_year` (and otherwise the first year in `target_year`), as well as comparisons of certain annual outputs between the unregressed base year and the regressed output for the same specific year.
+
+To check if all outputs are complete, Change the `directory`, `file_prefixes`, `upgrades`, and `step_length` in the `__main__` block of `check_files.py` and run the file.
+
+To combine the chunked EULP outputs into one EULP file, edit the `#Inputs` section at the top of `agg_buildings.py` and run it. The resulting file will be dropped into the same `outputs` sub-directory.
+
+Other helpful outputs will be printed into the `slurm-*.out` files where the run is executed.
 
 ## Weather Files
 If running on Kestrel, the .epw weather files will be accessed automatically without any changes. However, if running locally or on a different system, the weather files must first be downloaded. Follow these steps:
