@@ -17,6 +17,5 @@ module use /nopt/nrel/apps/software/gams/modulefiles
 source /nopt/nrel/apps/env.sh
 module load anaconda3
 conda activate geothermal
-aws sso login
 
 python B_building_stock_parallel_agg.py
