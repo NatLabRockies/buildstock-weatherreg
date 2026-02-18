@@ -121,7 +121,7 @@ To check if all outputs are complete, Change the `directory`, `file_prefixes`, `
 
 To combine the chunked EULP outputs into one EULP file, edit the `#Inputs` section at the top of `agg_buildings.py` and run it. The resulting file will be dropped into the same `outputs` sub-directory.
 
-Other helpful outputs will be printed into the `slurm-*.out` files where the run is executed.
+Other helpful outputs will be printed into the `slurm-*.out` files where the run is executed. If a node errors, the error message will be printed in the associated `slurm-*.out` file. Certain transient errors can be solved by simply rerunning that chunk using the `sbatch ...` command in the  `slurm-*.out` file.
 
 ## Weather Files
 If running on Kestrel, the .epw weather files will be accessed automatically without any changes. However, if running locally or on a different system, the weather files must first be downloaded. Follow these steps:
