@@ -104,7 +104,8 @@ By default, `switches_agg.json` runs a regression of ResStock Baseline (Upgrade=
 ResStock is used by default. For ComStock regressions, set these switches in `switches_agg.json`:
 - `"comstock": true,`
 - `"base_run": "comstock_2025_2"`
-- `"chunk_size": 10`. This indicates that 10 counties should be chunked together. We use 10 instead of the default 150 because ComStock requires significantly more resources to regress, as all combinations of county and simulatated county are regressed separately. ResStock, on the other hand, does not have separate simulated counties.
+- `"chunk_size": 10`. This indicates that 10 counties should be chunked together during parallelization. We use 10 instead of the default 150 because ComStock requires significantly more resources to regress, as all combinations of county and simulatated county are regressed separately. ResStock, on the other hand, does not have separate simulated counties.
+- `"sleep_seconds": 300`. This reduces the chance of an AWS token error related to simultaneous requests from the parallel processes.
 
 #### Non-regressed
 To simply pull existing ComStock or ResStock results, rather than running any regressions, set these switches in `switches_agg.json`:
