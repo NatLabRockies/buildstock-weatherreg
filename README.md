@@ -114,7 +114,7 @@ To simply pull existing ComStock or ResStock results, rather than running any re
 - For ComStock, also set `"comstock": true,` and `"base_run": "comstock_2025_2"` as shown above.
 
 ## Outputs
-Outputs will be dropped into a new timestamped folder in the `outputs` subdirectory of this repo. There will be an hourly "eulp_hvac_elec_MWh" csv and an annual "meta" csv for each parallelized chunk of counties that are run.
+Outputs will be dropped into a new timestamped folder in the `outputs` subdirectory of this repo. There will be an hourly "eulp_hvac_elec_MWh" csv and an annual "meta" csv for each parallelized chunk of counties that are run. To combine the chunked outputs into one eulp file, edit the `#Inputs` section at the top of `agg_buildings.py` and run it. The resulting file will be dropped into the same `outputs` sub-directory.
 
 ## Troubleshooting
 
