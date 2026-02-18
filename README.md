@@ -117,6 +117,13 @@ To simply pull existing ComStock or ResStock results, rather than running any re
 ## Outputs
 Outputs will be dropped into a new timestamped folder in the `outputs` subdirectory of this repo. There will be an hourly "eulp_hvac_elec_MWh" csv and an annual "meta" csv for each parallelized chunk of counties that are run. To combine the chunked outputs into one eulp file, edit the `#Inputs` section at the top of `agg_buildings.py` and run it. The resulting file will be dropped into the same `outputs` sub-directory.
 
+## Weather Files
+If running on Kestrel, the .epw weather files will be accessed automatically without any changes. However, if running locally or on a different system, the weather files must first be downloaded. Follow these steps:
+- Update the `_BASE_ROOT` variable in `epw_sync.py` (in the root of this repo).
+- If on Windows, `DEFAULT_MODE` should be changed to `"copy"` rather than `"symlink"`
+- Run `epw_sync.py` on the `geothermal` conda environment (described above).
+- Update `"weather_data_base"` in `switches_agg.json` to point to the newly created weather files directory that is structured with separate subdirectories for each year.
+
 ## Troubleshooting
 
 ### Yampa-specific AWS SSO Configuration/Login
