@@ -85,10 +85,6 @@ def parse_target_years(year_spec):
 script_start_time = dt.datetime.now()
 print('Script start time:', script_start_time)
 
-# Force program to sleep for a random amount of time between 0 and 300 seconds
-# Prevents AWS token errors when multiple jobs are run simultaneously
-time.sleep(random.uniform(0, 30))
-
 # Import command line arguments
 start_index = int(sys.argv[1])
 end_index = int(sys.argv[2])
@@ -120,6 +116,7 @@ with open(os.path.join(output_dir, 'inputs', 'switches_agg.json'), 'r') as f:
 sw_comstock = switch['comstock'] # if `False`, then resstock
 sw_savings_shape = switch['savings_shape'] # if `False`, aggregate_timeseries
 applied_only = switch['applied_only'] # if `True`, only buildings with upgrade applied
+sleep_seconds = switch['sleep_seconds'] # Number of seconds to sleep at the start of the script to prevent AWS token errors when multiple jobs are run simultaneously
 ## Columns to group by; Note: if this changes, language in the 
 ## `process_chunk_agg` function will need to be updated following the AWS call
 bsq_cols =  switch['com_bsq_cols'] if sw_comstock else switch['res_bsq_cols']
@@ -154,6 +151,9 @@ if sw_test_target and len(target_years) != 1:
         "switches_agg.json: sw_test_target=True requires exactly one target_year."
     )
 
+# Force program to sleep for a random amount of seconds between 0 and sleep_seconds
+# Prevents AWS token errors when multiple jobs are run simultaneously
+time.sleep(random.uniform(0, sleep_seconds))
 
 # FUNCTIONS
 # Detect HPC (SLURM or explicit flag)
