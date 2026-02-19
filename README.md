@@ -149,34 +149,34 @@ We had issues with AWS SSO configuration on Yampa. One solution is to perform au
 See regression validation outputs for resstock and comstock HVAC EULP here: https://drive.google.com/file/d/1qDy9DrraTP7Kkzk1i6_tDVStEf3fzrQn/view?usp=sharing
 
 ## Switches (switches_agg.json)
-| Switch | Description |
-|---|---|
-| `testmode` | Enables reduced/diagnostic test behavior for faster checks. |
-| `upgrades` | List of upgrade IDs to run. |
-| `version_comstock` | ComStock release/version selector (major/minor style). |
-| `version_resstock` | ResStock release/version selector (major/minor style). |
-| `url_base` | Base URL for remote OEDI resources. |
-| `weather_data_base` | Base local directory for EPW weather files. |
-| `base_year` | Weather year used for model training (`fit`). |
-| `target_year` | Weather year(s) used for prediction (`predict`); supports ranges/lists. |
-| `chunk_size` | Number of counties/buildings processed per chunk. |
-| `sleep_seconds` | Startup delay between submitted jobs/batches. |
-| `res_bsq_cols` | Metadata columns selected for ResStock query output. |
-| `com_bsq_cols` | Metadata columns selected for ComStock query output. |
-| `apply_regression` | Master switch to run regression-based shaping/prediction. |
-| `test_base` | Runs base-year fit diagnostics. |
-| `save_metrics` | Saves model diagnostics/metrics outputs. |
-| `show_fit` | Displays fit plots/diagnostics interactively. |
-| `save_fit` | Saves fit plots/diagnostics to files. |
-| `test_target` | Compares predictions against target-year EULP when available. |
-| `cross_val` | Enables cross-validation during model training. |
-| `hybrid_model` | Enables RF+NN hybrid extrapolation when outside train range. |
-| `lag_hours_temperature` | Hour offsets used to create lag features for dry bulb temp. |
-| `comstock` | Chooses ComStock (`true`) vs ResStock (`false`) workflow branch. |
-| `savings_shape` | Runs savings-shape mode instead of direct load shape mode. |
-| `applied_only` | Filters to applied measure/building subset only. |
-| `n_bldngs` | (Read but unused) Building sampling mode/count (e.g., `"assign"`). |
-| `mode` | (Read but unused) Thermal/run mode selection (e.g., `heat_and_cool`). |
-| `base_run` | Key in `run_types` used for base-year query source. |
-| `target_run` | Key in `run_types` used for target-year query source. |
-| `run_types` | Catalog of query configs (workgroup, db/schema, table, etc.) keyed by run name. |
+| Switch | Description | Default (as of 2/19/26) |
+|---|---|---|
+| `testmode` | Runs a limited test slice (used in `B_` to restrict counties/states). | `true` |
+| `upgrades` | List of upgrade IDs to process. | `[0]` |
+| `version_comstock` | ComStock version tuple used in source path/table naming logic. | `["2025", "2"]` |
+| `version_resstock` | ResStock version tuple used in source path/table naming logic. | `["2025", "1"]` |
+| `url_base` | Base OEDI URL used in `B_` for remote source paths. | `"https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"` |
+| `weather_data_base` | Base local directory for EPW weather files used in `D_`. | `"/projects/geohc/EPW/epw_symlinks"` |
+| `base_year` | Base weather year used for training and table/path naming logic. | `2018` |
+| `target_year` | Target weather year spec for prediction (year/range/list) parsed in `D_`. | `["2007-2024"]` |
+| `chunk_size` | Number of counties per chunk in `B_` job splitting. | `150` |
+| `sleep_seconds` | Max random startup delay used in `D_` to stagger job starts. | `30` |
+| `res_bsq_cols` | Grouping/selection metadata columns for ResStock workflows. | `["county", "county_name", "state"]` |
+| `com_bsq_cols` | Grouping/selection metadata columns for ComStock workflows. | `["nhgis_county_gisjoin", "county_name", "state", "as_simulated_nhgis_county_gisjoin"]` |
+| `apply_regression` | Enables regression workflow; otherwise uses direct aggregation/query path. | `true` |
+| `test_base` | Enables base-year fit diagnostics/evaluation. | `false` |
+| `save_metrics` | Writes model diagnostic metrics outputs. | `true` |
+| `show_fit` | Displays fit plots during diagnostics. | `false` |
+| `save_fit` | Saves fit plots during diagnostics. | `false` |
+| `test_target` | Enables target-year evaluation against target EULP (single target year only). | `false` |
+| `cross_val` | Enables k-fold cross-validation in training branches. | `true` |
+| `hybrid_model` | Enables RF+NN behavior for extrapolation outside RF train range. | `true` |
+| `lag_hours_temperature` | Temperature lag offsets used to create lagged weather features. | `[-1, 1, 3, 6, 12]` |
+| `comstock` | Chooses ComStock (`true`) vs ResStock (`false`) branch logic. | `false` |
+| `savings_shape` | Chooses savings-shape query path vs aggregate-timeseries path. | `false` |
+| `applied_only` | Filters to applicable/applied buildings in query constraints. | `false` |
+| `n_bldngs` | Inactive in current logic (loaded, not used in runtime branches). | `"assign"` |
+| `mode` | Inactive in current logic (loaded as `sw_mode`, not used downstream). | `"heat_and_cool"` |
+| `base_run` | Key into `run_types` for base run query configuration. | `"resstock_amy2018"` |
+| `target_run` | Key into `run_types` for target run query configuration. | `"resstock_amy2018"` |
+| `run_types` | Named BuildStockQuery configs (workgroup/db/schema/table/flags). | `resstock_amy2012`, `resstock_amy2018`, `resstock_tmy3`, `comstock_oedi`, `comstock_2025_2` |
