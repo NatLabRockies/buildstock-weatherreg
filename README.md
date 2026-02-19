@@ -5,7 +5,7 @@
 ---
 
 ## Introduction
-This tool is used to regress end-use electricity load profiles from ResStock/ComStock to other weather years. It uses a combination of random forest (interpolation) and neural network (extrapolation) regression methods. For ResStock, a regression model is created for each county, and for ComStock a regression model is created for each combination of county and simulated county. Regardless, the output of the tool is hourly regressed electricity load profiles for each county, with hourly data for all of the specified `target_year` years. Multiple building upgrades (i.e. ResStock/ComStock measures) can be run at once with the `upgrades` switch (note that electricity outputs are for the entire ResStock/ComStock building fleet, not just those buildings that were upgraded).
+This tool is used to regress end-use electricity load profiles from ResStock/ComStock to other weather years. It uses a combination of random forest (interpolation) and neural network (extrapolation) regression methods. For ResStock, a regression model is created for each county, and for ComStock a regression model is created for each combination of county and simulated county. Regardless, the output of the tool is hourly regressed electricity load profiles for each county, with hourly data for all of the specified `target_year` years. Multiple building upgrades (i.e. ResStock/ComStock measures) can be run at once with the `upgrades` switch (note that electricity outputs are for the entire ResStock/ComStock building fleet, not just those buildings that were upgraded). On Kestrel, ResStock runs take around 45 mins, while ComStock runs take 3-4 hrs.
 
 ## Accesses
 
