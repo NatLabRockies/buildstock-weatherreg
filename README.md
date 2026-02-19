@@ -148,3 +148,35 @@ We had issues with AWS SSO configuration on Yampa. One solution is to perform au
 ## Validation
 See regression validation outputs for resstock and comstock HVAC EULP here: https://drive.google.com/file/d/1qDy9DrraTP7Kkzk1i6_tDVStEf3fzrQn/view?usp=sharing
 
+## Switches (switches_agg.json)
+| Switch | Description |
+|---|---|
+| `testmode` | Enables reduced/diagnostic test behavior for faster checks. |
+| `upgrades` | List of upgrade IDs to run. |
+| `version_comstock` | ComStock release/version selector (major/minor style). |
+| `version_resstock` | ResStock release/version selector (major/minor style). |
+| `url_base` | Base URL for remote OEDI resources. |
+| `weather_data_base` | Base local directory for EPW weather files. |
+| `base_year` | Weather year used for model training (`fit`). |
+| `target_year` | Weather year(s) used for prediction (`predict`); supports ranges/lists. |
+| `chunk_size` | Number of counties/buildings processed per chunk. |
+| `sleep_seconds` | Startup delay between submitted jobs/batches. |
+| `res_bsq_cols` | Metadata columns selected for ResStock query output. |
+| `com_bsq_cols` | Metadata columns selected for ComStock query output. |
+| `apply_regression` | Master switch to run regression-based shaping/prediction. |
+| `test_base` | Runs base-year fit diagnostics. |
+| `save_metrics` | Saves model diagnostics/metrics outputs. |
+| `show_fit` | Displays fit plots/diagnostics interactively. |
+| `save_fit` | Saves fit plots/diagnostics to files. |
+| `test_target` | Compares predictions against target-year EULP when available. |
+| `cross_val` | Enables cross-validation during model training. |
+| `hybrid_model` | Enables RF+NN hybrid extrapolation when outside train range. |
+| `lag_hours_temperature` | Hour offsets used to create lag features for dry bulb temp. |
+| `comstock` | Chooses ComStock (`true`) vs ResStock (`false`) workflow branch. |
+| `savings_shape` | Runs savings-shape mode instead of direct load shape mode. |
+| `applied_only` | Filters to applied measure/building subset only. |
+| `n_bldngs` | (Read but unused) Building sampling mode/count (e.g., `"assign"`). |
+| `mode` | (Read but unused) Thermal/run mode selection (e.g., `heat_and_cool`). |
+| `base_run` | Key in `run_types` used for base-year query source. |
+| `target_run` | Key in `run_types` used for target-year query source. |
+| `run_types` | Catalog of query configs (workgroup, db/schema, table, etc.) keyed by run name. |
