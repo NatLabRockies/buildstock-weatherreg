@@ -150,7 +150,7 @@ def get_day_of_week(df_index):
     return df_index.dayofweek
 
 
-def match_day_patterns(non_hvac_2018_ts, hvac_index, hvac_year):
+def match_day_patterns(non_hvac, hvac_index, hvac_year):
     """
     Shift non-HVAC 2018 data to match HVAC day-of-week patterns.
     
@@ -159,13 +159,12 @@ def match_day_patterns(non_hvac_2018_ts, hvac_index, hvac_year):
     preserving seasonal trends from 2018.
     
     Algorithm:
-    1. For each day in the HVAC year, determine its day-of-week
-    2. Find a day in 2018 with the same day-of-week and closest month
-    3. Shift that 2018 daily profile to the HVAC date
-    4. Return non-HVAC data indexed to HVAC timestamps
+    1. Calculate the day of week differences between HVAC year and 2018
+    2. Roll that 2018 hourly profile to match HVAC day of week
+    3. Return non-HVAC data indexed to HVAC timestamps
     
     Args:
-        non_hvac_2018_ts: Non-HVAC timeseries from 2018 (source data)
+        non_hvac: Non-HVAC timeseries from 2018 (source data)
         hvac_index: DatetimeIndex from HVAC data (target index/shape)
         hvac_year: Integer year of HVAC data (for context)
     
@@ -173,54 +172,27 @@ def match_day_patterns(non_hvac_2018_ts, hvac_index, hvac_year):
         Series with 2018 non-HVAC data shifted to match HVAC day-of-week patterns,
         indexed to hvac_index timestamps
     """
-    non_hvac_ts = non_hvac_2018_ts.copy()
-    
+    # Ensure hvac index is DateTimeIndex
+    hvac_index = pd.to_datetime(hvac_index)
+        
     # Ensure hourly resolution
-    non_hvac_hourly = non_hvac_ts.resample('H').interpolate(method='linear')
+    non_hvac_hourly = non_hvac.resample('H').interpolate(method='linear')
+
+    hvac_jan1_dow = hvac_index.dayofweek  # Day of week for HVAC data
+    non_hvac_jan1_dow = non_hvac_hourly.index.dayofweek  # Day of week for 2018 non-HVAC data
     
-    # Create result Series with HVAC index
-    shifted_non_hvac = pd.Series(0.0, index=hvac_index, dtype=float)
+    # Calculate the difference in days of week (shift amount in hours)
+    day_diff = hvac_jan1_dow - non_hvac_jan1_dow
+    shift_hours = day_diff * 24  # Convert to hours
     
-    # Group 2018 non-HVAC data by day
-    non_hvac_by_day = non_hvac_hourly.groupby(non_hvac_hourly.index.date)
+    # !!! Add leap year handling here if HVAC year is a leap year
     
-    # Process each day in HVAC year
-    for hvac_date in pd.date_range(hvac_index.min().date(), hvac_index.max().date(), freq='D'):
-        hvac_dow = hvac_date.weekday()  # 0=Monday, 6=Sunday
-        hvac_month = hvac_date.month
-        
-        # Find 2018 days with matching day-of-week
-        matching_2018_days = []
-        for date_2018, group in non_hvac_by_day:
-            dow_2018 = pd.Timestamp(date_2018).weekday()
-            if dow_2018 == hvac_dow:
-                month_2018 = pd.Timestamp(date_2018).month
-                matching_2018_days.append((date_2018, month_2018, group))
-        
-        if matching_2018_days:
-            # Select the 2018 day with the closest month (to preserve seasonality)
-            best_2018_day, best_2018_month, best_group = min(
-                matching_2018_days,
-                key=lambda x: abs(x[1] - hvac_month)
-            )
-            
-            # Shift the 2018 daily profile to HVAC date
-            hours = best_group.index.hour
-            minutes = best_group.index.minute
-            
-            new_index = pd.DatetimeIndex([
-                pd.Timestamp(hvac_date).replace(hour=h, minute=m)
-                for h, m in zip(hours, minutes)
-            ])
-            
-            # Map shifted values to HVAC date
-            shifted_values = best_group.values
-            
-            # Fill in the matched hours on the HVAC date
-            for hvac_idx, value in zip(new_index, shifted_values):
-                if hvac_idx in shifted_non_hvac.index:
-                    shifted_non_hvac[hvac_idx] = value
+    # Shift non-HVAC data by the calculated number of hours
+    shifted_non_hvac = np.roll(non_hvac_hourly.values, shift_hours)
     
+    # Create a new Series with the shifted data and HVAC index
+    shifted_non_hvac = pd.Series(shifted_non_hvac, index=hvac_index, dtype=float)
+ 
     return shifted_non_hvac
 
 
