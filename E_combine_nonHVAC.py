@@ -35,12 +35,12 @@ OUTPUT_DIR = SCRIPT_DIR / "outputs"
 HVAC_DIRECTORY = Path("/projects/geohc/geo_predict/outputs/outputs_2025-12-10-15-53-30")
 
 def extract_state_from_county_id(county_str):
-    """Extract state from county FIPS identifier like ('G0100010', 'County Name', 'ST')."""
+    """Extract state from county FIPS identifier like ('G0101010', 'AL, Montgomery County', 'AL', 'G0100010')."""
     try:
         # Parse the tuple string
         parts = county_str.replace("'", "").replace("(", "").replace(")", "").split(", ")
         if len(parts) >= 3:
-            return parts[-1]  # State is the last part
+            return parts[-2]  # State is the second to last part
     except Exception as e:
         logger.warning(f"Could not parse county string: {county_str}, error: {e}")
     return None
