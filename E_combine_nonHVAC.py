@@ -319,6 +319,9 @@ def save_combined_profiles(combined_data, output_base_dir, building_type='res'):
     df.columns = sorted(by_source_state.keys())
     df_state = df.fillna(0)
     
+    # Convert units from kWh to MWh
+    df_state = df_state / 1000.0
+    
     # Create source-specific subdirectory
     source_dir = output_base_dir / source
     source_dir.mkdir(parents=True, exist_ok=True)
