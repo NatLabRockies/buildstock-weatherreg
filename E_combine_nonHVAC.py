@@ -311,23 +311,21 @@ def save_combined_profiles(combined_data, output_base_dir, building_type='res'):
     # Organize by (source, state)
     by_source_state = {}
     for (source, bldg, state, upgrade), profile in data_filtered.items():
-        key = (source, state)
-        if key not in by_source_state:
-            by_source_state[key] = {}
-        by_source_state[key][upgrade] = profile
+        key = (source)
+        by_source_state[state] = pd.Series(profile,name=state)
+
+    # Save all states in a combined DataFrame
+    df = pd.concat([by_source_state[k] for k in sorted(by_source_state.keys())], axis=1)
+    df.columns = sorted(by_source_state.keys())
+    df_state = df.fillna(0)
     
-    # Save each state
-    for (source, state), upgrades_data in by_source_state.items():
-        # Create DataFrame with each upgrade as a column
-        df_state = pd.DataFrame(upgrades_data)
-        
-        # Create source-specific subdirectory
-        source_dir = output_base_dir / source
-        source_dir.mkdir(parents=True, exist_ok=True)
-        
-        output_file = source_dir / f"{building_type}_{state}.csv"
-        logger.debug(f"  Saving {state}: {output_file}")
-        df_state.to_csv(output_file)
+    # Create source-specific subdirectory
+    source_dir = output_base_dir / source
+    source_dir.mkdir(parents=True, exist_ok=True)
+    
+    output_file = source_dir / f"{building_type}.csv"
+    logger.debug(f"  Saving {building_type}: {output_file}")
+    df_state.to_csv(output_file)
 
 
 def get_hvac_directories(base_path, min_date=None):
