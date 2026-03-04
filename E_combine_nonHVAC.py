@@ -8,8 +8,13 @@ This script:
 3. Aggregates county-level HVAC data to state-level
 4. Matches day-of-week patterns between HVAC weather years and 2018
 5. Combines the two load profiles by state and upgrade level
-"""
 
+By default the output is a single CSV per upgrade (e.g. ``upgrade_0.csv``) with
+an hourly index matching the HVAC input data and one column per state.  The
+file sums loads across both residential and commercial building types and
+across any number of HVAC source directories (specified by ``RES_HVAC_DIRCTORY``
+and ``COM_HVAC_DIRECTORY``). 
+"""
 import os
 import pandas as pd
 import numpy as np
@@ -28,21 +33,44 @@ HVAC_OUTPUTS_BASE = Path("/projects/geohc/geo_predict/outputs")
 OUTPUT_DIR = SCRIPT_DIR / "outputs"
 
 # USER CONFIGURATION: Specify HVAC directory to process
-# Set to a specific directory path to process only that directory
-# Example: HVAC_DIRECTORY = Path("/projects/geohc/geo_predict/outputs/outputs_2026-01-12-15-22-22")
-# Set to None to scan all directories in HVAC_OUTPUTS_BASE
-# !!! update to timestamped folder in outputs subdirectory for batch runs
-HVAC_DIRECTORY = Path("/projects/geohc/geo_predict/outputs/outputs_2025-12-10-15-53-30")
+RES_HVAC_DIRCTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-15-14-51-32"
+COM_HVAC_DIRECTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-10-15-53-30"
 
 def extract_state_from_county_id(county_str):
-    """Extract state from county FIPS identifier like ('G0101010', 'AL, Montgomery County', 'AL', 'G0100010')."""
+    """
+    Extract the two-letter state abbreviation from a county identifier column
+    in the HVAC output files.  The string can take one of two forms:
+
+    * ComStock:  ("G0101010", "AL, Montgomery County", "AL", "G0100010")
+    * ResStock:  ("G0100010", "Autauga County", "AL")
+
+    1. Search for any two‑letter uppercase code between single quotes.  This
+       picks up the state entry in both ResStock and ComStock tuples and
+       ignores FIPS codes containing digits.
+    2. If that fails, fall back to the old splitting logic and pick the first
+       two‑letter element encountered.
+    3. If nothing sane is found, return ``None`` and the caller will skip that
+       column.
+    """
+    import re
+
+    # look for two-letter state codes inside single quotes
+    m = re.findall(r"'([A-Z]{2})'", county_str)
+    if m:
+        # return the first match; normally there will be two identical
+        # occurrences in a ComStock tuple and one in a ResStock tuple
+        return m[0]
+
+    # fallback: try naive parsing but be careful about extra
+    # commas inside the county name
     try:
-        # Parse the tuple string
         parts = county_str.replace("'", "").replace("(", "").replace(")", "").split(", ")
-        if len(parts) >= 3:
-            return parts[-2]  # State is the second to last part
+        for part in parts:
+            if part.isalpha() and len(part) == 2:
+                return part
     except Exception as e:
         logger.warning(f"Could not parse county string: {county_str}, error: {e}")
+
     return None
 
 
@@ -135,11 +163,13 @@ def load_hvac_profiles(hvac_output_path, building_type='res'):
         # Process each county column and aggregate to state
         for county_col in df.columns:
             state = extract_state_from_county_id(county_col)
-            if state:
-                key = (upgrade, state)
-                if key not in profiles_by_state:
-                    profiles_by_state[key] = pd.Series(0.0, index=df.index, dtype=float)
-                profiles_by_state[key] += df[county_col]
+            if not state:
+                logger.debug(f"    skipping column {county_col!r}: could not determine state")
+                continue
+            key = (upgrade, state)
+            if key not in profiles_by_state:
+                profiles_by_state[key] = pd.Series(0.0, index=df.index, dtype=float)
+            profiles_by_state[key] += df[county_col]
     
     logger.debug(f"  -> Loaded {len(profiles_by_state)} state-upgrade combinations")
     return profiles_by_state
@@ -291,46 +321,56 @@ def process_hvac_directory(hvac_dir_path, non_hvac_data_res, non_hvac_data_com):
     return combined_data
 
 
-def save_combined_profiles(combined_data, output_base_dir, building_type='res'):
+def save_combined_profiles(combined_data, output_dir):
     """
-    Save combined profiles to CSV files organized by HVAC source and state.
-    
-    Args:
-        combined_data: Dictionary of combined profiles
-        output_base_dir: Base output directory
-        building_type: Building type for file naming ('res' or 'com')
-    """
-    output_base_dir = Path(output_base_dir)
-    output_base_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Filter by building type
-    data_filtered = {k: v for k, v in combined_data.items() if k[1] == building_type}
-    
-    if not data_filtered:
-        logger.info(f"  No {building_type} data to save")
-        return
-    
-    # Organize by (source, state)
-    by_source_state = {}
-    for (source, bldg, state, upgrade), profile in data_filtered.items():
-        key = (source)
-        by_source_state[state] = pd.Series(profile,name=state)
+    Save combined profiles to CSV files organized by upgrade with one column per state.
 
-    # Save all states in a combined DataFrame
-    df = pd.concat([by_source_state[k] for k in sorted(by_source_state.keys())], axis=1)
-    df.columns = sorted(by_source_state.keys())
-    df_state = df.fillna(0)
-    
-    # Convert units from kWh to MWh
-    df_state = df_state / 1000.0
-    
-    # Create source-specific subdirectory
-    source_dir = output_base_dir / source
-    source_dir.mkdir(parents=True, exist_ok=True)
-    
-    output_file = source_dir / f"{building_type}.csv"
-    logger.debug(f"  Saving {building_type}: {output_file}")
-    df_state.to_csv(output_file)
+    This function aggregates across both ResStock and ComStock results as well as
+    across any HVAC source directories that were processed. The resulting files
+    have an hourly time index matching the HVAC data and columns for each state.
+
+    Args:
+        combined_data: Dictionary of combined profiles keyed by
+            (source, bldg, state, upgrade)
+        output_dir: Output directory for saving files
+    """
+    output_base_dir = Path(output_dir)
+    output_base_dir.mkdir(parents=True, exist_ok=True)
+
+    if not combined_data:
+        logger.info(f"  No data to save")
+        return
+
+    # Group profiles by upgrade, then by state.  Sum together any entries that
+    # belong to the same state/upgrade regardless of building type or source.
+    upgrades = {}
+    for (source, bldg, state, upgrade), profile in combined_data.items():
+        # ensure we have a dict for this upgrade
+        state_dict = upgrades.setdefault(upgrade, {})
+        if state not in state_dict:
+            # start with a zero series using the profile's index
+            state_dict[state] = pd.Series(0.0, index=profile.index, dtype=float)
+        # align indices in case they differ and add
+        existing = state_dict[state]
+        # reindex both series to the union of their indices to avoid dropping
+        union_idx = existing.index.union(profile.index)
+        existing = existing.reindex(union_idx, fill_value=0.0)
+        to_add = profile.reindex(union_idx, fill_value=0.0)
+        state_dict[state] = existing + to_add
+
+    # now write one file per upgrade
+    for upgrade, state_dict in upgrades.items():
+        # create a DataFrame sorted by state name
+        df = pd.concat([state_dict[state] for state in sorted(state_dict.keys())],
+                       axis=1)
+        df.columns = sorted(state_dict.keys())
+
+        # fill any remaining NaNs and convert units from kWh to MWh
+        df = df.fillna(0) / 1000.0
+
+        output_file = output_base_dir / f"upgrade_{upgrade}.csv"
+        logger.debug(f"  Saving aggregated Upgrade {upgrade}: {output_file}")
+        df.to_csv(output_file)
 
 
 def get_hvac_directories(base_path, min_date=None):
@@ -372,28 +412,29 @@ def main():
     logger.info(f"Total ResStock non-HVAC: {len(res_non_hvac)} state-upgrade combinations")
     logger.info(f"Total ComStock non-HVAC: {len(com_non_hvac)} state-upgrade combinations")
     
-    # Get HVAC directory to process
+    # Get HVAC directory (or directories) to process
     logger.info("\nPreparing HVAC data...")
     logger.info("-" * 70)
-    
-    if HVAC_DIRECTORY:
-        # Use specified directory
-        hvac_path = Path(HVAC_DIRECTORY)
-        if not hvac_path.exists():
-            logger.error(f"Specified HVAC directory does not exist: {hvac_path}")
-            return
-        hvac_dirs_to_process = [hvac_path]
-        logger.info(f"Processing specified HVAC directory: {hvac_path.name}")
-    else:
-        # Scan for all available directories
+
+    hvac_dirs_to_process = []
+    # if specific paths are configured, add them
+    for HVAC_DIRECTORY in [RES_HVAC_DIRCTORY, COM_HVAC_DIRECTORY]:
+        if HVAC_DIRECTORY:
+            hvac_path = Path(HVAC_DIRECTORY)
+            if not hvac_path.exists():
+                logger.error(f"Specified HVAC directory does not exist: {hvac_path}")
+                return
+            hvac_dirs_to_process.append(hvac_path)
+            logger.info(f"Processing specified HVAC directory: {hvac_path.name}")
+
+    # if no explicit directories were provided, scan the base directory
+    if not hvac_dirs_to_process:
         logger.info("Scanning HVAC output directories...")
         all_hvac_dirs = get_hvac_directories(HVAC_OUTPUTS_BASE)
         logger.info(f"Found {len(all_hvac_dirs)} total HVAC output directories")
-        
         if not all_hvac_dirs:
             logger.error("No HVAC directories found. Exiting.")
             return
-        
         hvac_dirs_to_process = all_hvac_dirs
     
     # Process HVAC directories
@@ -414,8 +455,8 @@ def main():
     logger.info("\nSaving combined profiles...")
     logger.info("-" * 70)
     
-    save_combined_profiles(all_combined, OUTPUT_DIR / "resstock", 'res')
-    save_combined_profiles(all_combined, OUTPUT_DIR / "comstock", 'com')
+    # write aggregated files to the main output directory
+    save_combined_profiles(all_combined, OUTPUT_DIR)
     
     logger.info("\n" + "=" * 70)
     logger.info("Script complete!")
