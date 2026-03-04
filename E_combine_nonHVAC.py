@@ -178,14 +178,16 @@ def match_day_patterns(non_hvac, hvac_index, hvac_year):
     # Ensure hourly resolution
     non_hvac_hourly = non_hvac.resample('H').interpolate(method='linear')
 
-    hvac_jan1_dow = hvac_index.dayofweek  # Day of week for HVAC data
-    non_hvac_jan1_dow = non_hvac_hourly.index.dayofweek  # Day of week for 2018 non-HVAC data
-    
+    hvac_jan1_dow = hvac_index.dayofweek[0]  # Day of week for HVAC data
+    non_hvac_jan1_dow = non_hvac_hourly.index.dayofweek[0]  # Day of week for 2018 non-HVAC data
+
     # Calculate the difference in days of week (shift amount in hours)
-    day_diff = hvac_jan1_dow - non_hvac_jan1_dow
+    day_diff = non_hvac_jan1_dow - hvac_jan1_dow
+    if hvac_index.is_leap_year[0] and not non_hvac_hourly.index.is_leap_year[0]:
+        # If HVAC year is leap year but non-HVAC is not, roll the non-HVAC data 
+        # back by one more day to account for the extra day in HVAC year
+        day_diff += -1
     shift_hours = day_diff * 24  # Convert to hours
-    
-    # !!! Add leap year handling here if HVAC year is a leap year
     
     # Shift non-HVAC data by the calculated number of hours
     shifted_non_hvac = np.roll(non_hvac_hourly.values, shift_hours)
