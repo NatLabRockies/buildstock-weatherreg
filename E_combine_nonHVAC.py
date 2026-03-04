@@ -175,11 +175,6 @@ def load_hvac_profiles(hvac_output_path, building_type='res'):
     return profiles_by_state
 
 
-def get_day_of_week(df_index):
-    """Get day of week (0=Monday, 6=Sunday) for each timestamp."""
-    return df_index.dayofweek
-
-
 def match_day_patterns(non_hvac, hvac_index, hvac_year):
     """
     Shift non-HVAC 2018 data to match HVAC day-of-week patterns.
