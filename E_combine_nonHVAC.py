@@ -363,6 +363,9 @@ def save_combined_profiles(combined_data, output_dir):
         # fill any remaining NaNs and convert units from kWh to MWh
         df = df.fillna(0) / 1000.0
 
+        # shift index back an hour to match ReEDS hour-beginning convention
+        df.index = df.index - pd.Timedelta(hours=1)
+        
         output_file = output_base_dir / f"upgrade_{upgrade}.csv"
         logger.debug(f"  Saving aggregated Upgrade {upgrade}: {output_file}")
         df.to_csv(output_file)
