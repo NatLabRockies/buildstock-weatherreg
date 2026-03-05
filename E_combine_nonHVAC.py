@@ -9,11 +9,11 @@ This script:
 4. Matches day-of-week patterns between HVAC weather years and 2018
 5. Combines the two load profiles by state and upgrade level
 
-By default the output is a single CSV per upgrade (e.g. ``upgrade_0.csv``) with
-an hourly index matching the HVAC input data and one column per state.  The
-file sums loads across both residential and commercial building types and
-across any number of HVAC source directories (specified by ``RES_HVAC_DIRCTORY``
-and ``COM_HVAC_DIRECTORY``). 
+By default the output is a single CSV per upgrade or scenario (e.g. ``Baseline.csv``
+or ``upgrade_3.csv``) with an hourly index matching the HVAC input data and one
+column per state.  The file sums loads across both residential and commercial
+building types and across any number of HVAC source directories (specified by
+``RES_HVAC_DIRCTORY`` and ``COM_HVAC_DIRECTORY``). 
 """
 import os
 import pandas as pd
@@ -34,7 +34,28 @@ OUTPUT_DIR = SCRIPT_DIR / "outputs"
 
 # USER CONFIGURATION: Specify HVAC directory to process
 RES_HVAC_DIRCTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-15-14-51-32"
-COM_HVAC_DIRECTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-10-15-53-30"
+COM_HVAC_DIRECTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-12-09-27-07"
+
+# SCENARIO MAPPING
+# Map a combination of ResStock and ComStock upgrade levels to a scenario name.
+# Each scenario can be defined by the pair of upgrades used for res/com data.  If
+# only one building type applies the other may be set to None.
+SCENARIO_MAPPING = {
+    "Baseline": {"res": "0", "com": "0"},
+    "ASHP":     {"res": "4", "com": "1"},
+    "GHP":      {"res": "8", "com": "55"},
+}
+
+
+def scenario_for(building_type, upgrade):
+    """Return the scenario name for a given building type and upgrade.
+
+    If the upgrade is not found in any scenario mapping, return ``None``.
+    """
+    for scenario, mapping in SCENARIO_MAPPING.items():
+        if mapping.get(building_type) == str(upgrade):
+            return scenario
+    return None
 
 def extract_state_from_county_id(county_str):
     """
@@ -318,11 +339,8 @@ def process_hvac_directory(hvac_dir_path, non_hvac_data_res, non_hvac_data_com):
 
 def save_combined_profiles(combined_data, output_dir):
     """
-    Save combined profiles to CSV files organized by upgrade with one column per state.
+    Save combined profiles to CSV files organized by scenario with one column per state.
 
-    This function aggregates across both ResStock and ComStock results as well as
-    across any HVAC source directories that were processed. The resulting files
-    have an hourly time index matching the HVAC data and columns for each state.
 
     Args:
         combined_data: Dictionary of combined profiles keyed by
@@ -336,28 +354,45 @@ def save_combined_profiles(combined_data, output_dir):
         logger.info(f"  No data to save")
         return
 
-    # Group profiles by upgrade, then by state.  Sum together any entries that
-    # belong to the same state/upgrade regardless of building type or source.
-    upgrades = {}
+    # Group profiles by scenario (or fallback to upgrade string) then state.
+    # Keep track of which building types contribute to each named scenario
+    # to enforce the requirement that both ResStock and ComStock data be present before writing a scenario file.
+    scenarios = {}
+    scenario_buildings = {}
+
     for (source, bldg, state, upgrade), profile in combined_data.items():
-        # ensure we have a dict for this upgrade
-        state_dict = upgrades.setdefault(upgrade, {})
+        scen_name = scenario_for(bldg, upgrade)
+        scen_key = scen_name or str(upgrade)
+
+        # record building type only for genuine scenarios, not fallback upgrades
+        if scen_name:
+            scenario_buildings.setdefault(scen_name, set()).add(bldg)
+
+        state_dict = scenarios.setdefault(scen_key, {})
         if state not in state_dict:
-            # start with a zero series using the profile's index
             state_dict[state] = pd.Series(0.0, index=profile.index, dtype=float)
-        # align indices in case they differ and add
         existing = state_dict[state]
-        # reindex both series to the union of their indices to avoid dropping
         union_idx = existing.index.union(profile.index)
         existing = existing.reindex(union_idx, fill_value=0.0)
         to_add = profile.reindex(union_idx, fill_value=0.0)
         state_dict[state] = existing + to_add
 
-    # now write one file per upgrade
-    for upgrade, state_dict in upgrades.items():
-        # create a DataFrame sorted by state name
-        df = pd.concat([state_dict[state] for state in sorted(state_dict.keys())],
-                       axis=1)
+    # now write one file per scenario
+    for scen, state_dict in scenarios.items():
+        # if this key corresponds to a declared scenario that expects both
+        # res/com, ensure we actually saw both building types, otherwise skip.
+        if scen in SCENARIO_MAPPING:
+            mapping = SCENARIO_MAPPING[scen]
+            if mapping.get('res') and mapping.get('com'):
+                buildings = scenario_buildings.get(scen, set())
+                if not ({'res', 'com'} <= buildings):
+                    logger.info(
+                        f"Skipping output for scenario '{scen}' - ``res`` and ``com`` "
+                        f"data not both present (found: {buildings})"
+                    )
+                    continue
+
+        df = pd.concat([state_dict[state] for state in sorted(state_dict.keys())], axis=1)
         df.columns = sorted(state_dict.keys())
 
         # fill any remaining NaNs and convert units from kWh to MWh
@@ -365,9 +400,11 @@ def save_combined_profiles(combined_data, output_dir):
 
         # shift index back an hour to match ReEDS hour-beginning convention
         df.index = df.index - pd.Timedelta(hours=1)
-        
-        output_file = output_base_dir / f"upgrade_{upgrade}.csv"
-        logger.debug(f"  Saving aggregated Upgrade {upgrade}: {output_file}")
+
+        # name using scenario label rather than raw upgrade
+        filename = f"{scen}.csv" if scen.isidentifier() else f"scenario_{scen}.csv"
+        output_file = output_base_dir / filename
+        logger.debug(f"  Saving aggregated scenario '{scen}': {output_file}")
         df.to_csv(output_file)
 
 
