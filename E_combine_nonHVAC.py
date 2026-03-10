@@ -229,10 +229,6 @@ def match_day_patterns(non_hvac, hvac_index, hvac_year):
 
     # Calculate the difference in days of week (shift amount in hours)
     day_diff = non_hvac_jan1_dow - hvac_jan1_dow
-    if hvac_index.is_leap_year[0] and not non_hvac_hourly.index.is_leap_year[0]:
-        # If HVAC year is leap year but non-HVAC is not, roll the non-HVAC data 
-        # back by one more day to account for the extra day in HVAC year
-        day_diff += -1
     shift_hours = day_diff * 24  # Convert to hours
     
     # Shift non-HVAC data by the calculated number of hours
