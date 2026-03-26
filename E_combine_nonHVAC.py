@@ -337,6 +337,8 @@ def save_combined_profiles(combined_data, output_dir):
     """
     Save combined profiles to CSV files organized by scenario with one column per state.
 
+    This function only outputs scenarios that are explicitly defined in SCENARIO_MAPPING.
+    Any profiles with upgrades that do not map to a scenario are excluded from output.
 
     Args:
         combined_data: Dictionary of combined profiles keyed by
@@ -350,21 +352,30 @@ def save_combined_profiles(combined_data, output_dir):
         logger.info(f"  No data to save")
         return
 
-    # Group profiles by scenario (or fallback to upgrade string) then state.
-    # Keep track of which building types contribute to each named scenario
-    # to enforce the requirement that both ResStock and ComStock data be present before writing a scenario file.
+    # Filter combined_data to only include profiles that map to a defined scenario.
+    # Exclude any upgrades that don't match SCENARIO_MAPPING.
+    filtered_data = {}
+    for key, profile in combined_data.items():
+        source, bldg, state, upgrade = key
+        scen_name = scenario_for(bldg, upgrade)
+        if scen_name:
+            filtered_data[key] = profile
+
+    if not filtered_data:
+        logger.info("  No profiles matching defined scenarios. No output files created.")
+        return
+
+    # Group profiles by scenario then state.
+    # Keep track of which building types contribute to each scenario
+    # to enforce the requirement that both ResStock and ComStock data be present before writing.
     scenarios = {}
     scenario_buildings = {}
 
-    for (source, bldg, state, upgrade), profile in combined_data.items():
+    for (source, bldg, state, upgrade), profile in filtered_data.items():
         scen_name = scenario_for(bldg, upgrade)
-        scen_key = scen_name or str(upgrade)
+        scenario_buildings.setdefault(scen_name, set()).add(bldg)
 
-        # record building type only for genuine scenarios, not fallback upgrades
-        if scen_name:
-            scenario_buildings.setdefault(scen_name, set()).add(bldg)
-
-        state_dict = scenarios.setdefault(scen_key, {})
+        state_dict = scenarios.setdefault(scen_name, {})
         if state not in state_dict:
             state_dict[state] = pd.Series(0.0, index=profile.index, dtype=float)
         existing = state_dict[state]
@@ -375,18 +386,17 @@ def save_combined_profiles(combined_data, output_dir):
 
     # now write one file per scenario
     for scen, state_dict in scenarios.items():
-        # if this key corresponds to a declared scenario that expects both
-        # res/com, ensure we actually saw both building types, otherwise skip.
-        if scen in SCENARIO_MAPPING:
-            mapping = SCENARIO_MAPPING[scen]
-            if mapping.get('res') and mapping.get('com'):
-                buildings = scenario_buildings.get(scen, set())
-                if not ({'res', 'com'} <= buildings):
-                    logger.info(
-                        f"Skipping output for scenario '{scen}' - ``res`` and ``com`` "
-                        f"data not both present (found: {buildings})"
-                    )
-                    continue
+        # Ensure both res and com building types are present for this scenario
+        mapping = SCENARIO_MAPPING[scen]
+        buildings = scenario_buildings.get(scen, set())
+        
+        if mapping.get('res') and mapping.get('com'):
+            if not ({'res', 'com'} <= buildings):
+                logger.info(
+                    f"Skipping output for scenario '{scen}' - ``res`` and ``com`` "
+                    f"data not both present (found: {buildings})"
+                )
+                continue
 
         df = pd.concat([state_dict[state] for state in sorted(state_dict.keys())], axis=1)
         df.columns = sorted(state_dict.keys())
