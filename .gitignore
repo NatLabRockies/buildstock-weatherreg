@@ -1,3 +1,4 @@
 # Ignore outputs folders
 outputs_*/
 outputs/
+inputs/
