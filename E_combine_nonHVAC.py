@@ -31,10 +31,12 @@ SCRIPT_DIR = Path(__file__).parent
 NON_HVAC_BASE_PATH = SCRIPT_DIR / "inputs" / "non-hvac"
 HVAC_OUTPUTS_BASE = Path("/projects/geohc/geo_predict/outputs")
 OUTPUT_DIR = SCRIPT_DIR / "outputs"
+COMSTOCK_GAP_FILE = NON_HVAC_BASE_PATH / "ComStock Gap Model" / "gap_by_state.csv"
 
 # USER CONFIGURATION: Specify HVAC directory to process
 RES_HVAC_DIRCTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-15-14-51-32"
-COM_HVAC_DIRECTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-12-09-27-07"
+COM_HVAC_DIRECTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-10-15-53-30" # Baseline
+# COM_HVAC_DIRECTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-12-09-27-07" # ASHP
 
 # SCENARIO MAPPING
 # Map a combination of ResStock and ComStock upgrade levels to a scenario name.
@@ -45,6 +47,26 @@ SCENARIO_MAPPING = {
     "ASHP":     {"res": "4", "com": "1"},
     "GHP":      {"res": "8", "com": "55"},
 }
+
+
+def load_comstock_gap_profiles(downscale_factor=0.5035):
+    """
+    Load additional ComStock gap profiles by state.
+
+    This data should be added to every ComStock upgrade level.
+    """
+    if not COMSTOCK_GAP_FILE.exists():
+        logger.warning(f"ComStock gap file not found: {COMSTOCK_GAP_FILE}")
+        return {}
+
+    df = pd.read_csv(COMSTOCK_GAP_FILE, parse_dates=["timestamp"], index_col="timestamp")
+    elec_col = next((col for col in df.columns if "electricity" in col.lower()), df.columns[0])
+
+    profiles = {}
+    for state in df['State'].unique():
+        profiles[state] = df[df['State'] == state][elec_col] * downscale_factor
+    logger.info(f"Loaded ComStock gap profiles for {len(profiles)} states")
+    return profiles
 
 
 def scenario_for(building_type, upgrade):
@@ -120,6 +142,9 @@ def load_non_hvac_profiles(building_type='res'):
         return {}
     
     profiles_by_state = {}
+    gap_profiles = {}
+    if building_type.lower() == 'com':
+        gap_profiles = load_comstock_gap_profiles()
     
     # Find all upgrade files
     files = sorted(search_dir.glob(file_pattern))
@@ -139,6 +164,16 @@ def load_non_hvac_profiles(building_type='res'):
         # Group by state to get state-level timeseries
         for state in df['state'].unique():
             state_data = df[df['state'] == state][elec_col]
+            if state in gap_profiles:
+                # roll gap profiles to match state data timestamp if needed
+                if not gap_profiles[state].index.equals(state_data.index): 
+                    index_diff = int((gap_profiles[state].index[0] - state_data.index[0]).total_seconds() / 3600)
+                    shifted_gap_profiles = np.roll(gap_profiles[state].values, index_diff)
+                else:
+                    shifted_gap_profiles = gap_profiles[state]
+                state_data = state_data.add(shifted_gap_profiles, fill_value=0.0)
+            elif building_type.lower() == 'com':
+                logger.debug(f"  No gap profile for state {state}, using non-HVAC data as-is")
             key = (building_type, state, upgrade)
             profiles_by_state[key] = state_data
     
