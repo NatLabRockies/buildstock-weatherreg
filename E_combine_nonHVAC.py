@@ -66,7 +66,7 @@ def load_comstock_gap_profiles(downscale_factor=0.5035):
 
     profiles = {}
     for state in df['State'].unique():
-        profiles[state] = df[df['State'] == state][elec_col] * downscale_factor / 1e3 # Convert kWh to MWh
+        profiles[state] = df[df['State'] == state][elec_col] * downscale_factor
     logger.info(f"Loaded ComStock gap profiles for {len(profiles)} states")
     return profiles
 
