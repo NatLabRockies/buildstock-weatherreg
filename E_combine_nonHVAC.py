@@ -54,6 +54,8 @@ def load_comstock_gap_profiles(downscale_factor=0.5035):
     Load additional ComStock gap profiles by state.
 
     This data should be added to every ComStock upgrade level.
+    
+    Returns a dictionary of {state: Series} with hourly gap profiles in MWh (converted from kWh).
     """
     if not COMSTOCK_GAP_FILE.exists():
         logger.warning(f"ComStock gap file not found: {COMSTOCK_GAP_FILE}")
@@ -64,7 +66,7 @@ def load_comstock_gap_profiles(downscale_factor=0.5035):
 
     profiles = {}
     for state in df['State'].unique():
-        profiles[state] = df[df['State'] == state][elec_col] * downscale_factor
+        profiles[state] = df[df['State'] == state][elec_col] * downscale_factor / 1e3 # Convert kWh to MWh
     logger.info(f"Loaded ComStock gap profiles for {len(profiles)} states")
     return profiles
 
@@ -125,7 +127,7 @@ def load_non_hvac_profiles(building_type='res'):
         building_type: 'res' for ResStock or 'com' for ComStock
     
     Returns:
-        Dictionary of {(bldg, state, upgrade): Series} with hourly non-HVAC loads
+        Dictionary of {(bldg, state, upgrade): Series} with hourly non-HVAC loads in MWh (converted from kWh).
     """
     logger.info(f"Loading {building_type.upper()} non-HVAC profiles...")
     
@@ -175,7 +177,7 @@ def load_non_hvac_profiles(building_type='res'):
             elif building_type.lower() == 'com':
                 logger.debug(f"  No gap profile for state {state}, using non-HVAC data as-is")
             key = (building_type, state, upgrade)
-            profiles_by_state[key] = state_data
+            profiles_by_state[key] = state_data / 1e3  # Convert kWh to MWh
     
     logger.info(f"  -> Loaded {len(profiles_by_state)} state-upgrade combinations")
     return profiles_by_state
@@ -436,8 +438,8 @@ def save_combined_profiles(combined_data, output_dir):
         df = pd.concat([state_dict[state] for state in sorted(state_dict.keys())], axis=1)
         df.columns = sorted(state_dict.keys())
 
-        # fill any remaining NaNs and convert units from kWh to MWh
-        df = df.fillna(0) / 1000.0
+        # fill any remaining NaNs
+        df = df.fillna(0)
 
         # shift index back an hour to match ReEDS hour-beginning convention
         df.index = df.index - pd.Timedelta(hours=1)
