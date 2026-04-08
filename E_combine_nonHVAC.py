@@ -34,9 +34,9 @@ OUTPUT_DIR = SCRIPT_DIR / "outputs"
 COMSTOCK_GAP_FILE = NON_HVAC_BASE_PATH / "ComStock Gap Model" / "gap_by_state.csv"
 
 # USER CONFIGURATION: Specify HVAC directory to process
-RES_HVAC_DIRCTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-15-14-51-32"
-COM_HVAC_DIRECTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-10-15-53-30" # Baseline
-# COM_HVAC_DIRECTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-12-09-27-07" # ASHP
+RES_HVAC_DIRCTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-15-14-51-32" # 2012 reference
+COM_HVAC_DIRECTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-10-15-53-30" # 2012 Baseline reference
+# COM_HVAC_DIRECTORY = HVAC_OUTPUTS_BASE / "outputs_2025-12-12-09-27-07" # 2012 ASHP, reference
 
 # SCENARIO MAPPING
 # Map a combination of ResStock and ComStock upgrade levels to a scenario name.
@@ -178,7 +178,8 @@ def load_non_hvac_profiles(building_type='res'):
                 logger.debug(f"  No gap profile for state {state}, using non-HVAC data as-is")
             key = (building_type, state, upgrade)
             profiles_by_state[key] = state_data / 1e3  # Convert kWh to MWh
-    
+            logger.debug(f"  Total non-HVAC demand for {key}: {round(sum(state_data)/1e9,1)} TWh")
+
     logger.info(f"  -> Loaded {len(profiles_by_state)} state-upgrade combinations")
     return profiles_by_state
 
@@ -451,6 +452,71 @@ def save_combined_profiles(combined_data, output_dir):
         df.to_csv(output_file)
 
 
+def aggregate_national_sector_totals(combined_data):
+    """Aggregate national totals by scenario and building sector."""
+    sector_totals = {}
+    for (_, bldg, _, upgrade), profile in combined_data.items():
+        scen_name = scenario_for(bldg, upgrade)
+        if not scen_name:
+            continue
+        key = (scen_name, bldg)
+        sector_totals.setdefault(key, []).append(profile)
+
+    aggregated = {}
+    for (scen_name, bldg), profiles in sector_totals.items():
+        aggregated_series = pd.concat(profiles, axis=1).sum(axis=1)
+        aggregated[(scen_name, bldg)] = aggregated_series.sort_index()
+    return aggregated
+
+
+def save_national_sector_totals(combined_data, output_dir):
+    """Save national residential and commercial totals for each scenario."""
+    output_base_dir = Path(output_dir) / "sector_totals"
+    output_base_dir.mkdir(parents=True, exist_ok=True)
+
+    if not combined_data:
+        logger.info("  No combined data available to save sector totals")
+        return
+
+    sector_totals = aggregate_national_sector_totals(combined_data)
+    scenario_names = sorted({scen for scen, _ in sector_totals.keys()})
+
+    for scen_name in scenario_names:
+        # Check if both residential and commercial data are present
+        has_res = (scen_name, 'res') in sector_totals
+        has_com = (scen_name, 'com') in sector_totals
+        
+        if not (has_res and has_com):
+            logger.warning(
+                f"Skipping sector totals output for scenario '{scen_name}': "
+                f"both residential and commercial data must be present. "
+                f"Found: residential={has_res}, commercial={has_com}"
+            )
+            continue
+        
+        res_series = sector_totals[(scen_name, 'res')]
+        com_series = sector_totals[(scen_name, 'com')]
+
+        series_index = res_series.index.union(com_series.index).sort_values()
+        res_series = res_series.reindex(series_index, fill_value=0.0)
+        com_series = com_series.reindex(series_index, fill_value=0.0)
+
+        df = pd.DataFrame({
+            'residential_MWh': res_series,
+            'commercial_MWh': com_series,
+            'total_MWh': res_series + com_series,
+        }, index=series_index)
+
+        # shift index back an hour to match ReEDS hour-beginning convention
+        df.index = df.index - pd.Timedelta(hours=1)
+        df.index.name = 'timestamp'
+
+        filename = f"{scen_name}_national_sector_totals.csv"
+        output_file = output_base_dir / filename
+        logger.debug(f"  Saving national sector totals for scenario '{scen_name}': {output_file}")
+        df.to_csv(output_file)
+
+
 def get_hvac_directories(base_path, min_date=None):
     """
     Get list of HVAC output directories, optionally filtered by date.
@@ -535,6 +601,7 @@ def main():
     
     # write aggregated files to the main output directory
     save_combined_profiles(all_combined, OUTPUT_DIR)
+    save_national_sector_totals(all_combined, OUTPUT_DIR)
     
     logger.info("\n" + "=" * 70)
     logger.info("Script complete!")
