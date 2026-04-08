@@ -16,8 +16,8 @@ import shutil
 from pdb import set_trace as b
 
 #Inputs
-bldg_type = 'com' # 'com' for comstock or 'res' for resstock
-bldg_path = r'/projects/geohc/geo_predict/outputs/outputs_2025-12-02-09-29-48'
+bldg_type = 'res' # 'com' for comstock or 'res' for resstock
+bldg_path = r'/home/radhikar/weather_regression/buildstock-weatherreg/outputs/outputs_2026-02-19-11-49-52'
 bldg_tech = 'upgrade0'
 
 shutil.copy2(os.path.realpath(__file__), bldg_path)

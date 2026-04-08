@@ -17,24 +17,24 @@ import re
 COMPARISONS = [
     {
         "name": "ComStock Upgrade 0 (Baseline)",
-        "ref": "/projects/geohc/geo_predict/outputs/outputs_2025-12-10-15-53-30/agg_com_eulp_hvac_elec_GWh_upgrade0.csv",
-        "reg": "/projects/geohc/geo_predict/outputs/outputs_2025-12-02-09-29-48/agg_com_eulp_hvac_elec_GWh_upgrade0.csv",
+        "ref": "/home/radhikar/weather_regression/buildstock-weatherreg/outputs/outputs_2026-02-19-11-49-52/agg_res_eulp_hvac_elec_GWh_upgrade0.csv",
+        "reg": "/home/radhikar/weather_regression/buildstock-weatherreg/outputs/outputs_2026-02-19-10-34-15/agg_res_eulp_hvac_elec_GWh_upgrade0.csv",
     },
-    {
-        "name": "ComStock Upgrade 1 (Air-Source Heat Pump)",
-        "ref": "/projects/geohc/geo_predict/outputs/outputs_2025-12-12-09-27-07/agg_com_eulp_hvac_elec_GWh_upgrade1.csv",
-        "reg": "/projects/geohc/geo_predict/outputs/outputs_2025-12-03-16-16-21/agg_com_eulp_hvac_elec_GWh_upgrade1.csv",
-    },
-    {
-        "name": "ResStock Upgrade 0 (Baseline)",
-        "ref": "/projects/geohc/geo_predict/outputs/outputs_2025-12-15-14-51-32/agg_res_eulp_hvac_elec_GWh_upgrade0.csv",
-        "reg": "/projects/geohc/geo_predict/outputs/outputs_2025-12-03-13-50-22/agg_res_eulp_hvac_elec_GWh_upgrade0.csv",
-    },
-    {
-        "name": "ResStock Upgrade 4 (Air-Source Heat Pump)",
-        "ref": "/projects/geohc/geo_predict/outputs/outputs_2025-12-15-14-51-32/agg_res_eulp_hvac_elec_GWh_upgrade4.csv",
-        "reg": "/projects/geohc/geo_predict/outputs/outputs_2025-12-03-13-50-22/agg_res_eulp_hvac_elec_GWh_upgrade4.csv",
-    },
+    # {
+    #     "name": "ComStock Upgrade 1 (Air-Source Heat Pump)",
+    #     "ref": "/projects/geohc/geo_predict/outputs/outputs_2025-12-12-09-27-07/agg_com_eulp_hvac_elec_GWh_upgrade1.csv",
+    #     "reg": "/projects/geohc/geo_predict/outputs/outputs_2025-12-03-16-16-21/agg_com_eulp_hvac_elec_GWh_upgrade1.csv",
+    # },
+    # {
+    #     "name": "ResStock Upgrade 0 (Baseline)",
+    #     "ref": "/projects/geohc/geo_predict/outputs/outputs_2025-12-15-14-51-32/agg_res_eulp_hvac_elec_GWh_upgrade0.csv",
+    #     "reg": "/projects/geohc/geo_predict/outputs/outputs_2025-12-03-13-50-22/agg_res_eulp_hvac_elec_GWh_upgrade0.csv",
+    # },
+    # {
+    #     "name": "ResStock Upgrade 4 (Air-Source Heat Pump)",
+    #     "ref": "/projects/geohc/geo_predict/outputs/outputs_2025-12-15-14-51-32/agg_res_eulp_hvac_elec_GWh_upgrade4.csv",
+    #     "reg": "/projects/geohc/geo_predict/outputs/outputs_2025-12-03-13-50-22/agg_res_eulp_hvac_elec_GWh_upgrade4.csv",
+    # },
 ]
 OUTPUT_DIR = Path("validation_outputs")
 OUTPUT_SUBDIR = None
