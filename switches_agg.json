@@ -8,6 +8,7 @@
     "base_year": 2018,
     "target_year": ["2007-2024"],
     "chunk_size": 150,
+    "sleep_seconds": 30,
     "res_bsq_cols": ["county", "county_name", "state"],
     "com_bsq_cols": ["nhgis_county_gisjoin", "county_name", "state", "as_simulated_nhgis_county_gisjoin"],
 
