@@ -95,6 +95,11 @@ By default, `switches_agg.json` runs a regression of ResStock Baseline (Upgrade=
 python B_building_stock_parallel_agg.py
 ```
 
+### Non-HVAC Load Queries (Aggregate Notebooks)
+
+ Use the notebooks in `aggregates/` for queries of non-HVAC electricity loads by state and hour.
+
+
 ### Full Runs
 Set these switches in `switches_agg.json`:
 - `"testmode": false`. This deactivates the Vermont-only test run and runs full national.
