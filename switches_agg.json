@@ -4,9 +4,11 @@
     "version_comstock": ["2025", "2"],
     "version_resstock": ["2025", "1"],
     "url_base": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/",
+    "weather_data_base": "/projects/geohc/EPW/epw_symlinks",
     "base_year": 2018,
-    "target_year": 2012,
+    "target_year": ["2007-2024"],
     "chunk_size": 150,
+    "sleep_seconds": 30,
     "res_bsq_cols": ["county", "county_name", "state"],
     "com_bsq_cols": ["nhgis_county_gisjoin", "county_name", "state", "as_simulated_nhgis_county_gisjoin"],
 
