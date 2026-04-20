@@ -88,6 +88,10 @@ aws sso login
 python B_building_stock_parallel_agg.py
 ```
 
+### Non-HVAC Load Queries (Aggregate Notebooks)
+
+ Use the notebooks in `aggregates/` for queries of non-HVAC electricity loads by state and hour.
+
 ## Troubleshooting
 
 ### Yampa-specific AWS SSO Configuration/Login
