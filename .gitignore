@@ -1,6 +1,7 @@
 # Ignore outputs folders
 outputs_*/
 outputs/
+inputs/
 
 # Python / uv
 .venv/
