@@ -12,22 +12,17 @@ dependencies = [
     "scikit-learn>=1.1",
     "matplotlib>=3.8",
     "seaborn>=0.12",
-
     # Data / IO
     "pyarrow>=14",
     "polars>=0.20",
-
     # AWS
     "boto3>=1.29",
-
     # ML
     "tensorflow>=2.16",
-
     # Data querying
     "buildstock-query[full]",
     "pyathena>=3",
     "sqlalchemy>=1.4,<2",
-
     # Web / dashboards
     "requests>=2.31",
     "plotly>=5.22",
@@ -36,12 +31,12 @@ dependencies = [
     "dash-extensions>=1.0",
     "dash-iconify>=0.1",
     "dash-mantine-components>=0.10,<1",
-
     # Utilities
     "pyyaml>=6",
     "rich>=13",
     "tabulate>=0.9",
     "joblib>=1.2",
+    "s3fs>=2026.3.0",
 ]
 
 [tool.uv.sources]

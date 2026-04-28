@@ -12,7 +12,5 @@
 
 # Ensure uv is on PATH (adjust if installed elsewhere)
 export PATH="$HOME/.local/bin:$PATH"
-source /kfs2/shared-projects/buildstock/aws_credentials.sh
-# aws sso login
 
-uv run B_building_stock_parallel_agg.py
+uv run E_combine_nonHVAC.py

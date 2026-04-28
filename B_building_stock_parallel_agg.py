@@ -1,12 +1,149 @@
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 import os
 import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import sys
 import shutil
 import datetime as dt
 import subprocess
+import time as pytime
+import logging
 import pandas as pd
 import numpy as np
 import json
+
+# Bypass SSL certificate verification for all HTTPS requests in this script.
+
+
+LOG_LEVEL = os.environ.get("BUILDSTOCK_LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s | %(levelname)s | pid=%(process)d | %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# S3 options for this environment: anonymous access with certificate checks disabled.
+S3_STORAGE_OPTIONS = {
+    "anon": True,
+    "client_kwargs": {"verify": False},
+}
+
+# Helper function to load a single county's parquet in parallel
+def _load_county_parquet(state, county, upgrade, url_bldg, parquet_cols, max_retries=5, initial_backoff=1.0):
+    """Load a single county's parquet file with exponential backoff retry logic for S3 rate limits."""
+    url = (
+        f"{url_bldg}metadata_and_annual_results_aggregates/by_state_and_county/full/parquet/"
+        f"state={state}/county={county}/{state}_{county}_upgrade{upgrade}_agg.parquet"
+    )
+    key = url.replace("s3://", "")
+    t0 = pytime.perf_counter()
+
+    logger.debug(
+        "County read start | state=%s county=%s upgrade=%s key=%s",
+        state,
+        county,
+        upgrade,
+        key,
+    )
+    
+    backoff = initial_backoff
+    for attempt in range(max_retries):
+        try:
+            logger.debug(
+                "County read attempt | state=%s county=%s upgrade=%s attempt=%s/%s",
+                state,
+                county,
+                upgrade,
+                attempt + 1,
+                max_retries,
+            )
+            df = pd.read_parquet(
+                url,
+                columns=parquet_cols,
+                storage_options=S3_STORAGE_OPTIONS,
+            )
+            df["in.state"] = state
+            df["in.nhgis_county_gisjoin"] = county
+            elapsed = pytime.perf_counter() - t0
+            logger.info(
+                "County read success | state=%s county=%s upgrade=%s rows=%s elapsed=%.2fs",
+                state,
+                county,
+                upgrade,
+                len(df),
+                elapsed,
+            )
+            return df
+        except Exception as e:
+            if isinstance(e, FileNotFoundError):
+                elapsed = pytime.perf_counter() - t0
+                logger.warning(
+                    f"{url} | County parquet missing | state=%s county=%s upgrade=%s elapsed=%.2fs key=%s",
+                    state,
+                    county,
+                    upgrade,
+                    elapsed,
+                    key,
+                )
+                return None
+            if attempt < max_retries - 1:
+                # Check if it's a rate limit or connection error worth retrying
+                error_str = str(e).lower()
+                retry_tokens = [
+                    'throttling',
+                    'slowdown',
+                    'too many requests',
+                    'timed out',
+                    'timeout',
+                    'temporarily unavailable',
+                    'connection reset',
+                    '503',
+                    '429',
+                ]
+                if any(token in error_str for token in retry_tokens):
+                    logger.warning(
+                        "County read retry | state=%s county=%s upgrade=%s attempt=%s/%s backoff=%.1fs error_type=%s error=%s",
+                        state,
+                        county,
+                        upgrade,
+                        attempt + 1,
+                        max_retries,
+                        backoff,
+                        type(e).__name__,
+                        e,
+                    )
+                    pytime.sleep(backoff)
+                    backoff = min(backoff * 2, 60)  # Cap backoff at 60 seconds
+                    continue
+                else:
+                    # Other errors, don't retry
+                    elapsed = pytime.perf_counter() - t0
+                    logger.error(
+                        "County read failed (non-retryable) | state=%s county=%s upgrade=%s elapsed=%.2fs error_type=%s error=%s key=%s",
+                        state,
+                        county,
+                        upgrade,
+                        elapsed,
+                        type(e).__name__,
+                        e,
+                        key,
+                    )
+                    return None
+            else:
+                elapsed = pytime.perf_counter() - t0
+                logger.error(
+                    "County read failed (retries exhausted) | state=%s county=%s upgrade=%s retries=%s elapsed=%.2fs error_type=%s error=%s key=%s",
+                    state,
+                    county,
+                    upgrade,
+                    max_retries,
+                    elapsed,
+                    type(e).__name__,
+                    e,
+                    key,
+                )
+                return None
 
 # Helper function for running parallelized tasks via multiprocessing
 def run_task(cmd):
@@ -17,18 +154,19 @@ def run_task(cmd):
 
 if __name__ == "__main__":
     # Detect if running on HPC
-    hpc = bool(int(os.environ.get('REEDS_USE_SLURM', 0)))
-    print(f"Running on HPC: {hpc}")
+    # hpc = bool(int(os.environ.get('REEDS_USE_SLURM', 0)))
+    hpc = 'SLURM_JOB_ID' in os.environ
+    logger.info("Running on HPC: %s", hpc)
 
     if not hpc:
         # Detect available CPU cores dynamically
         num_cores = max(2, os.cpu_count() - 2)  # Leave 2 cores free
-        print(f"Using {num_cores} parallel processes")
+        logger.info("Using %s parallel processes", num_cores)
 
     # Create outputs directory & copy input files to `/inputs` subdirectory
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    time = dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    output_dir = f'{script_dir}/outputs/outputs_{time}'
+    run_timestamp = dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    output_dir = f'/projects/geohc/radhikar/outputs/outputs_{run_timestamp}'
 
     ## Function to exclude directories that shouldn't be copied into outputs
     EXCLUDE_DIRS = {'outputs', '.venv', '.git', '.history', '__pycache__', 'aggregates'}
@@ -37,14 +175,14 @@ if __name__ == "__main__":
 
     ## Create & copy files to the output directory, excluding 'outputs'
     shutil.copytree(script_dir, f'{output_dir}/inputs', ignore=exclude_dir)
-
+    logger.info("Created output directory at %s and copied input files.", output_dir)
     ## Write the commit hash to a text file in the output folder
     with open(f'{output_dir}/inputs/commit_hash.txt', 'w') as f:
         f.write(subprocess.check_output(['git', 'rev-parse', 'HEAD'])
                         .strip()
                         .decode('utf-8'))
 
-
+    logger.info("Loading switches from JSON file...")
     # SWITCHES #TODO: Only import necessary for this script & reorder
     with open(os.path.join(script_dir, 'switches_agg.json'), 'r') as f:
         switch = json.load(f)
@@ -62,6 +200,46 @@ if __name__ == "__main__":
     bsq_cols = switch['com_bsq_cols'] if sw_comstock else switch['res_bsq_cols'] # columns to group by
     applied_only = switch['applied_only'] # if `True`, only buildings with upgrade applied
 
+    # Define columns to load from parquet files to speed up reads
+    parquet_cols = [
+        'upgrade',
+        'in.state',
+        'in.nhgis_county_gisjoin' if sw_comstock else 'in.county',
+        'applicability',
+        'in.sqft..ft2',
+        'weight',
+    ]
+    # Add all groupby columns
+    parquet_cols.extend([f'in.{col}' for col in bsq_cols])
+    
+    # Add energy enduse columns
+    if sw_comstock:
+        elec_cols = [
+            'out.electricity.heating.energy_consumption',
+            'out.electricity.cooling.energy_consumption',
+            'out.electricity.fans.energy_consumption',
+            'out.electricity.heat_recovery.energy_consumption',
+            'out.electricity.heat_rejection.energy_consumption',
+            'out.electricity.pumps.energy_consumption'
+        ]
+    else:
+        elec_cols = [
+            'out.electricity.heating.energy_consumption',
+            'out.electricity.heating_fans_pumps.energy_consumption',
+            'out.electricity.heating_hp_bkup.energy_consumption',
+            'out.electricity.heating_hp_bkup_fa.energy_consumption',
+            'out.electricity.cooling.energy_consumption',
+            'out.electricity.cooling_fans_pumps.energy_consumption'
+        ]
+    
+    parquet_cols.extend([col + '..kwh' for col in elec_cols])
+    parquet_cols.append('out.natural_gas.heating.energy_consumption..kwh')
+    parquet_cols = list(set(parquet_cols))  # Remove any duplicates
+
+    county_parquet_cols = parquet_cols
+    if sw_comstock:
+        county_parquet_cols = [col for col in parquet_cols if col != 'in.county_name']
+
     # URLs
     url_base = switch['url_base']
     url_comstock = f'{url_base}{comstock_year}/comstock_amy{base_year}_release_{comstock_release}/'
@@ -71,10 +249,10 @@ if __name__ == "__main__":
     # Load the state_county_map outside the loop
     state_county_map = pd.read_csv(
         f"{url_base}2025/comstock_amy2018_release_2/geographic_information/"
-        "spatial_tract_lookup_table_publish_v8+1.csv",
-        storage_options={"anon": True}
+        "spatial_tract_lookup_table_publish_v8 1.csv",
+        storage_options=S3_STORAGE_OPTIONS,
     )
-
+    logger.info("Loaded state_county_map with shape: %s", state_county_map.shape)
     # Subset the DataFrame to include only the specified columns
     state_county_map = state_county_map[
         ["nhgis_county_gisjoin", "resstock_county_id", "state_abbreviation"]
@@ -85,38 +263,78 @@ if __name__ == "__main__":
         os.path.join(output_dir, "inputs", "spatial_tract_lookup_table.csv"),
         index=False
     )
+    logger.info("Saved spatial_tract_lookup_table.csv to output directory.")
 
     # MAIN
     for upgrade in upgrades: 
         if sw_comstock and comstock_year == "2025" and comstock_release == "2":
-            print("Using custom metadata load logic for ComStock 2025 Release 2")
+            logger.info("Using custom metadata load logic for ComStock 2025 Release 2")
 
             if sw_testmode:
                 state_meta = ['VT']
             else:
                 state_meta = state_county_map["state_abbreviation"].unique().tolist()
 
-            all_meta = []
+            # Collect all (state, county) pairs to load in parallel
+            county_pairs = []
             for state in state_meta:
                 state_county_map_iter = state_county_map[state_county_map["state_abbreviation"].isin([state])]
                 county_meta = state_county_map_iter["nhgis_county_gisjoin"].unique().tolist()
+                logger.info(
+                    "Processing state %s with %s counties for upgrade %s",
+                    state,
+                    len(county_meta),
+                    upgrade,
+                )
+                county_pairs.extend([(state, county, upgrade) for county in county_meta])
 
-                # county_meta = ['G5000030'] # TESTING
-                for county in county_meta:
+            # Load all counties in parallel.
+            # ThreadPoolExecutor is used (not ProcessPoolExecutor) because S3 reads are
+            # I/O-bound and threads share the event loop, avoiding aiobotocore asyncio
+            # conflicts that occur when forking processes with an active async S3 client.
+            all_meta = []
+            num_workers = max(2, min(num_cores, 16)) if not hpc else 8  # Threads are lighter; use more
+            logger.info(
+                "Loading %s counties in parallel with %s threads for upgrade %s",
+                len(county_pairs),
+                num_workers,
+                upgrade,
+            )
+
+            loaded_count = 0
+            missing_or_failed_count = 0
+            crashed_future_count = 0
+            
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = {
+                    executor.submit(_load_county_parquet, state, county, upgrade, url_bldg, county_parquet_cols)
+                    for state, county, upgrade in county_pairs
+                }
+                for future in as_completed(futures):
                     try:
-                        url = (
-                            f"{url_bldg}metadata_and_annual_results_aggregates/by_state_and_county/full/parquet/"
-                            f"state%3D{state}/county%3D{county}/{state}_{county}_upgrade{upgrade}_agg.parquet"
-                            # if upgrade > 0 else
-                            # f"{url_bldg}metadata_and_annual_results_aggregates/by_state_and_county/full/parquet/"
-                            # f"state%3D{state}/county%3D{county}/{state}_{county}_baseline_agg.parquet"
-                        )
-                        df = pd.read_parquet(url, storage_options={"anon": True})
-                        df["in.state"] = state
-                        df["in.nhgis_county_gisjoin"] = county
-                        all_meta.append(df)
+                        df = future.result()
+                        if df is not None:
+                            loaded_count += 1
+                            all_meta.append(df)
+                        else:
+                            missing_or_failed_count += 1
                     except Exception as e:
-                        print(f"Failed to load metadata for {state}, {county}: {e}")
+                        crashed_future_count += 1
+                        logger.exception(
+                            "County worker crashed for upgrade %s with error_type=%s error=%s",
+                            upgrade,
+                            type(e).__name__,
+                            e,
+                        )
+
+            logger.info(
+                "County read summary | upgrade=%s requested=%s loaded=%s missing_or_failed=%s worker_crashes=%s",
+                upgrade,
+                len(county_pairs),
+                loaded_count,
+                missing_or_failed_count,
+                crashed_future_count,
+            )
 
             if not all_meta:
                 raise RuntimeError(f"No metadata loaded for upgrade {upgrade}.")
@@ -143,7 +361,11 @@ if __name__ == "__main__":
             url_meta = f'metadata_and_annual_results/national/full/parquet/upgrade{upgrade}.parquet'
 
             # Read Parquet file into a DataFrame
-            df_meta = pd.read_parquet(url_bldg + url_meta)
+            df_meta = pd.read_parquet(
+                url_bldg + url_meta,
+                columns=parquet_cols,
+                storage_options=S3_STORAGE_OPTIONS,
+            )
 
             if sw_testmode:
                 df_meta = df_meta[df_meta['in.state'] == 'VT']
