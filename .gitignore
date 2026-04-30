@@ -2,3 +2,7 @@
 outputs_*/
 outputs/
 .DS_Store
+
+# Ignore temp files starting with ~$ or .~ (common for Microsoft Office temp files)
+~$*
+.~*
