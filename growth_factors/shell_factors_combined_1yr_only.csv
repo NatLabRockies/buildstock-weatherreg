@@ -1,0 +1,201 @@
+﻿Sector,Source,Year,Type,State,"Shell factor (1=2020 res stock, 1=2018 com stock)"
+Commercial,,2019,Heating,Alabama,0.698600048
+Commercial,,2019,Cooling,Alabama,0.690491599
+Commercial,,2019,Heating,Alaska,0.674411262
+Commercial,,2019,Cooling,Alaska,0.754670941
+Commercial,,2019,Heating,Arizona,0.672152122
+Commercial,,2019,Cooling,Arizona,0.743046037
+Commercial,,2019,Heating,Arkansas,0.616663513
+Commercial,,2019,Cooling,Arkansas,0.653423320
+Commercial,,2019,Heating,California,0.674411262
+Commercial,,2019,Cooling,California,0.754670941
+Commercial,,2019,Heating,Colorado,0.672152122
+Commercial,,2019,Cooling,Colorado,0.743046037
+Commercial,,2019,Heating,Connecticut,0.603652707
+Commercial,,2019,Cooling,Connecticut,0.779318269
+Commercial,,2019,Heating,Delaware,0.683317257
+Commercial,,2019,Cooling,Delaware,0.680798482
+Commercial,,2019,Heating,District of Columbia,0.683317257
+Commercial,,2019,Cooling,District of Columbia,0.680798482
+Commercial,,2019,Heating,Florida,0.683317257
+Commercial,,2019,Cooling,Florida,0.680798482
+Commercial,,2019,Heating,Georgia,0.683317257
+Commercial,,2019,Cooling,Georgia,0.680798482
+Commercial,,2019,Heating,Hawaii,0.674411262
+Commercial,,2019,Cooling,Hawaii,0.754670941
+Commercial,,2019,Heating,Idaho,0.672152122
+Commercial,,2019,Cooling,Idaho,0.743046037
+Commercial,,2019,Heating,Illinois,0.647606040
+Commercial,,2019,Cooling,Illinois,0.814995379
+Commercial,,2019,Heating,Indiana,0.647606040
+Commercial,,2019,Cooling,Indiana,0.814995379
+Commercial,,2019,Heating,Iowa,0.599955459
+Commercial,,2019,Cooling,Iowa,0.726431248
+Commercial,,2019,Heating,Kansas,0.599955459
+Commercial,,2019,Cooling,Kansas,0.726431248
+Commercial,,2019,Heating,Kentucky,0.698600048
+Commercial,,2019,Cooling,Kentucky,0.690491599
+Commercial,,2019,Heating,Louisiana,0.616663513
+Commercial,,2019,Cooling,Louisiana,0.653423320
+Commercial,,2019,Heating,Maine,0.603652707
+Commercial,,2019,Cooling,Maine,0.779318269
+Commercial,,2019,Heating,Maryland,0.683317257
+Commercial,,2019,Cooling,Maryland,0.680798482
+Commercial,,2019,Heating,Massachusetts,0.603652707
+Commercial,,2019,Cooling,Massachusetts,0.779318269
+Commercial,,2019,Heating,Michigan,0.647606040
+Commercial,,2019,Cooling,Michigan,0.814995379
+Commercial,,2019,Heating,Minnesota,0.599955459
+Commercial,,2019,Cooling,Minnesota,0.726431248
+Commercial,,2019,Heating,Mississippi,0.698600048
+Commercial,,2019,Cooling,Mississippi,0.690491599
+Commercial,,2019,Heating,Missouri,0.599955459
+Commercial,,2019,Cooling,Missouri,0.726431248
+Commercial,,2019,Heating,Montana,0.672152122
+Commercial,,2019,Cooling,Montana,0.743046037
+Commercial,,2019,Heating,Nebraska,0.599955459
+Commercial,,2019,Cooling,Nebraska,0.726431248
+Commercial,,2019,Heating,Nevada,0.672152122
+Commercial,,2019,Cooling,Nevada,0.743046037
+Commercial,,2019,Heating,New Hampshire,0.603652707
+Commercial,,2019,Cooling,New Hampshire,0.779318269
+Commercial,,2019,Heating,New Jersey,0.652086119
+Commercial,,2019,Cooling,New Jersey,0.746279548
+Commercial,,2019,Heating,New Mexico,0.672152122
+Commercial,,2019,Cooling,New Mexico,0.743046037
+Commercial,,2019,Heating,New York,0.652086119
+Commercial,,2019,Cooling,New York,0.746279548
+Commercial,,2019,Heating,North Carolina,0.683317257
+Commercial,,2019,Cooling,North Carolina,0.680798482
+Commercial,,2019,Heating,North Dakota,0.599955459
+Commercial,,2019,Cooling,North Dakota,0.726431248
+Commercial,,2019,Heating,Ohio,0.647606040
+Commercial,,2019,Cooling,Ohio,0.814995379
+Commercial,,2019,Heating,Oklahoma,0.616663513
+Commercial,,2019,Cooling,Oklahoma,0.653423320
+Commercial,,2019,Heating,Oregon,0.674411262
+Commercial,,2019,Cooling,Oregon,0.754670941
+Commercial,,2019,Heating,Pennsylvania,0.652086119
+Commercial,,2019,Cooling,Pennsylvania,0.746279548
+Commercial,,2019,Heating,Rhode Island,0.603652707
+Commercial,,2019,Cooling,Rhode Island,0.779318269
+Commercial,,2019,Heating,South Carolina,0.683317257
+Commercial,,2019,Cooling,South Carolina,0.680798482
+Commercial,,2019,Heating,South Dakota,0.599955459
+Commercial,,2019,Cooling,South Dakota,0.726431248
+Commercial,,2019,Heating,Tennessee,0.698600048
+Commercial,,2019,Cooling,Tennessee,0.690491599
+Commercial,,2019,Heating,Texas,0.616663513
+Commercial,,2019,Cooling,Texas,0.653423320
+Commercial,,2019,Heating,Utah,0.672152122
+Commercial,,2019,Cooling,Utah,0.743046037
+Commercial,,2019,Heating,Vermont,0.603652707
+Commercial,,2019,Cooling,Vermont,0.779318269
+Commercial,,2019,Heating,Virginia,0.683317257
+Commercial,,2019,Cooling,Virginia,0.680798482
+Commercial,,2019,Heating,Washington,0.674411262
+Commercial,,2019,Cooling,Washington,0.754670941
+Commercial,,2019,Heating,West Virginia,0.683317257
+Commercial,,2019,Cooling,West Virginia,0.680798482
+Commercial,,2019,Heating,Wisconsin,0.647606040
+Commercial,,2019,Cooling,Wisconsin,0.814995379
+Commercial,,2019,Heating,Wyoming,0.672152122
+Commercial,,2019,Cooling,Wyoming,0.743046037
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Alabama,0.711208553
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Arizona,0.780195345
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Arkansas,0.924350252
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,California,0.529742262
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Colorado,0.829421588
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Connecticut,0.587049985
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Delaware,0.899280424
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,District of Columbia,0.855815948
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Florida,0.718991407
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Georgia,0.797466691
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Idaho,0.935175248
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Illinois,0.903670306
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Indiana,0.747470261
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Iowa,0.483485485
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Kansas,0.673995276
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Kentucky,0.601758986
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Louisiana,0.602751405
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Maine,0.981485035
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Maryland,0.730227640
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Massachusetts,0.696433917
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Michigan,0.646878025
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Minnesota,0.937854583
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Mississippi,0.803425936
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Missouri,0.657927816
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Montana,0.912711378
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Nebraska,0.616827291
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Nevada,0.834900724
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,New Hampshire,0.576555477
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,New Jersey,0.658719464
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,New Mexico,0.823505115
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,New York,0.596586756
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,North Carolina,0.694333538
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,North Dakota,0.723296509
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Ohio,0.734424376
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Oklahoma,0.745546946
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Oregon,0.932509662
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Pennsylvania,0.658058218
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Rhode Island,0.674911514
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,South Carolina,0.841553063
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,South Dakota,0.706598926
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Tennessee,0.738193341
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Texas,0.765232146
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Utah,0.881301092
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Vermont,0.767201730
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Virginia,0.767335675
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Washington,0.672228571
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,West Virginia,0.645596507
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Wisconsin,0.867937643
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/clg_proj,2020,Cooling,Wyoming,0.763587050
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Alabama,0.735160131
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Arizona,0.617178004
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Arkansas,0.700182604
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,California,0.530953259
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Colorado,0.734671825
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Connecticut,0.514769856
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Delaware,0.612338760
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,District of Columbia,0.412959632
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Florida,0.494464663
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Georgia,0.669541101
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Idaho,0.792938603
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Illinois,0.663801305
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Indiana,0.708771030
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Iowa,0.545614254
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Kansas,0.813896389
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Kentucky,0.693415069
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Louisiana,0.560485116
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Maine,0.514803797
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Maryland,0.569252592
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Massachusetts,0.453654620
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Michigan,0.740152151
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Minnesota,0.640554708
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Mississippi,0.688880835
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Missouri,0.761349133
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Montana,0.659091783
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Nebraska,0.600025838
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Nevada,0.675749544
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,New Hampshire,0.445484182
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,New Jersey,0.639523716
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,New Mexico,0.520065816
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,New York,0.610478194
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,North Carolina,0.616683226
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,North Dakota,0.707510761
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Ohio,0.503069678
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Oklahoma,0.713567251
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Oregon,0.735399111
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Pennsylvania,0.533572954
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Rhode Island,0.548080519
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,South Carolina,0.732108167
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,South Dakota,0.693713453
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Tennessee,0.814594352
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Texas,0.730580174
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Utah,0.758515929
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Vermont,0.537079840
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Virginia,0.551097607
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Washington,0.721430895
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,West Virginia,0.727709249
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Wisconsin,0.588489332
+Residential,shell_factors_res_recs2020+aeo2026_rdm.xlsx/htg_proj,2020,Heating,Wyoming,0.564577014
