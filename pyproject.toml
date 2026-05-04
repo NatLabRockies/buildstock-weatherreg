@@ -20,9 +20,7 @@ dependencies = [
     # ML
     "tensorflow>=2.16",
     # Data querying
-    "buildstock-query[full]",
     "pyathena>=3",
-    "sqlalchemy>=1.4,<2",
     # Web / dashboards
     "requests>=2.31",
     "plotly>=5.22",
@@ -37,8 +35,9 @@ dependencies = [
     "tabulate>=0.9",
     "joblib>=1.2",
     "s3fs>=2026.3.0",
+    "buildstock-query",
 ]
 
 [tool.uv.sources]
-buildstock-query = { git = "https://github.com/NatLabRockies/buildstock-query", tag = "2024.05.09" }
+buildstock-query = { git = "https://github.com/NatLabRockies/buildstock-query.git", rev = "v0.4.0" }
 

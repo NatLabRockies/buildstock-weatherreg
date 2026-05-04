@@ -333,11 +333,6 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
 
     restrict_county = ('in.nhgis_county_gisjoin' if sw_comstock else 
                         'in.county')
-    restrict_bldg_type = ('in.comstock_building_type' if sw_comstock else
-                            'in.geometry_building_type_recs')
-    restrict_heating_fuel = 'in.heating_fuel'
-
-    # Create a BuildStockQuery object based on the run type
     my_run = BuildStockQuery(**aws_run_type)
 
     # TODO? Simplify my_run.X.Y() with dict unpacking (**) to avoid duplication
