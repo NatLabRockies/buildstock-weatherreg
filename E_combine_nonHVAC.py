@@ -15,6 +15,8 @@ column per state.  The file sums loads across both residential and commercial
 building types and across any number of HVAC source directories (specified by
 ``RES_HVAC_DIRCTORY`` and ``COM_HVAC_DIRECTORY``). 
 """
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 import os
 import json
 import pandas as pd

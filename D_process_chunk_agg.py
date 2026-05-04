@@ -1,5 +1,7 @@
 # IMPORTS
 # Import libraries
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 import pandas as pd
 import sys
 import numpy as np
@@ -256,7 +258,7 @@ def query_execution(query, my_run, retries=5, delay=10):
     """
     for attempt in range(retries):
         try:
-            print(f"Executing query, attempt {attempt + 1}...")
+            print(f"Executing query: {query} \n attempt {attempt + 1}...")
             return my_run.execute(query)
         except Exception as e:
             print(f"Query execution failed: {e}")
