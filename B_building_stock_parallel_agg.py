@@ -1,6 +1,12 @@
+import os
+import certifi
+_CA = certifi.where()
+os.environ.setdefault("AWS_CA_BUNDLE", _CA)
+os.environ.setdefault("CURL_CA_BUNDLE", _CA)
+os.environ.setdefault("SSL_CERT_FILE", _CA)
+os.environ.setdefault("REQUESTS_CA_BUNDLE", _CA)
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
-import os
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import sys
@@ -12,6 +18,10 @@ import logging
 import pandas as pd
 import numpy as np
 import json
+import hashlib
+from pathlib import Path
+
+COUNTY_PARQUET_CACHE_DIR = Path("/projects/geohc/radhikar/outputs/county_parquet_cache")
 
 # Bypass SSL certificate verification for all HTTPS requests in this script.
 
@@ -30,6 +40,18 @@ S3_STORAGE_OPTIONS = {
 }
 
 # Helper function to load a single county's parquet in parallel
+def _county_cache_path(state, county, upgrade, url_bldg, parquet_cols):
+    """Build a deterministic cache path for a county parquet load.
+
+    The hash covers `url_bldg` and the sorted `parquet_cols` so that any change
+    to dataset source or requested columns invalidates the cache.
+    """
+    cols_key = "|".join(sorted(parquet_cols)) if parquet_cols else ""
+    digest = hashlib.sha1(f"{url_bldg}||{cols_key}".encode("utf-8")).hexdigest()[:12]
+    fname = f"{state}_{county}_upgrade{upgrade}_{digest}.parquet"
+    return COUNTY_PARQUET_CACHE_DIR / fname
+
+
 def _load_county_parquet(state, county, upgrade, url_bldg, parquet_cols, max_retries=5, initial_backoff=1.0):
     """Load a single county's parquet file with exponential backoff retry logic for S3 rate limits."""
     url = (
@@ -38,6 +60,22 @@ def _load_county_parquet(state, county, upgrade, url_bldg, parquet_cols, max_ret
     )
     key = url.replace("s3://", "")
     t0 = pytime.perf_counter()
+
+    cache_path = _county_cache_path(state, county, upgrade, url_bldg, parquet_cols)
+    if cache_path.exists():
+        try:
+            df = pd.read_parquet(cache_path)
+            elapsed = pytime.perf_counter() - t0
+            logger.info(
+                "County read cache hit | state=%s county=%s upgrade=%s rows=%s elapsed=%.2fs path=%s",
+                state, county, upgrade, len(df), elapsed, cache_path,
+            )
+            return df
+        except Exception as e:
+            logger.warning(
+                "County cache read failed, falling back to S3 | path=%s error_type=%s error=%s",
+                cache_path, type(e).__name__, e,
+            )
 
     logger.debug(
         "County read start | state=%s county=%s upgrade=%s key=%s",
@@ -74,6 +112,17 @@ def _load_county_parquet(state, county, upgrade, url_bldg, parquet_cols, max_ret
                 len(df),
                 elapsed,
             )
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = cache_path.with_suffix(cache_path.suffix + f".tmp.{os.getpid()}")
+                df.to_parquet(tmp_path, index=False)
+                os.replace(tmp_path, cache_path)
+                logger.debug("County cache write | path=%s", cache_path)
+            except Exception as e:
+                logger.warning(
+                    "County cache write failed | path=%s error_type=%s error=%s",
+                    cache_path, type(e).__name__, e,
+                )
             return df
         except Exception as e:
             if isinstance(e, FileNotFoundError):
@@ -200,6 +249,9 @@ if __name__ == "__main__":
     bsq_cols = switch['com_bsq_cols'] if sw_comstock else switch['res_bsq_cols'] # columns to group by
     applied_only = switch['applied_only'] # if `True`, only buildings with upgrade applied
 
+    # set chunk_size to 500 for resStock and 50 for ComStock if passed -1
+    if chunk_size == -1:
+        chunk_size = 500 if not sw_comstock else 50
     # Define columns to load from parquet files to speed up reads
     parquet_cols = [
         'upgrade',

@@ -1,5 +1,12 @@
 # IMPORTS
 # Import libraries
+import os
+import certifi
+_CA = certifi.where()
+os.environ.setdefault("AWS_CA_BUNDLE", _CA)
+os.environ.setdefault("CURL_CA_BUNDLE", _CA)
+os.environ.setdefault("SSL_CERT_FILE", _CA)
+os.environ.setdefault("REQUESTS_CA_BUNDLE", _CA)
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 import pandas as pd
@@ -289,24 +296,9 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
     Returns:
     ts_agg (DataFrame): Aggregated timeseries HVAC electricity.
     """
-    # TODO: Make `is_oedi/else` sections into one section each if 2 aws calls
-    # Copy variables to avoid modifying the variables in the main script
-    aws_cols = [c for c in bsq_cols if c != "as_simulated_nhgis_county_gisjoin"]
+    aws_cols = [c for c in bsq_cols]
     aws_counties = counties.copy()
     aws_run_type = run_types[run_type].copy()
-    aws_upgrade = upgrade
-
-    # Create a string of chunk_states for query modification
-    chunk_states_str = ', '.join(f"'{state}'" for state in chunk_states)
-
-    # Check if the run type is OEDI
-    is_oedi = ('db_schema' in aws_run_type 
-               and 'oedi' in aws_run_type['db_schema'])
-
-    # Set the relevant variables based on the run type
-    heating_fuel = (['NaturalGas', 'Electricity'] if sw_comstock else
-                    ['Natural Gas', 'Electricity'])
-
     natural_gas = ['out.natural_gas.heating.energy_consumption']
 
     if sw_comstock:
@@ -335,140 +327,17 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
                         'in.county')
     my_run = BuildStockQuery(**aws_run_type)
 
-    # TODO? Simplify my_run.X.Y() with dict unpacking (**) to avoid duplication
-
-    if not sw_comstock:
-        # Bypass BuildstockQuery upgrade validation/report lookups for this run
-        my_run.agg._validate_upgrade = lambda upgrade_id: str(upgrade_id)
-        my_run.report.get_success_report = (
-            lambda *args, **kwargs: pd.DataFrame(index=[str(aws_upgrade)],
-                                                data={"success": [1], "fail": [0], "Sum": [1]})
-        )
-
-    ts_agg_query = my_run.agg.aggregate_timeseries(
-        upgrade_id=0 if sw_comstock else aws_upgrade,
+    ts_agg_query = my_run.query(
+        upgrade_id=upgrade,
+        applied_only=False,
         enduses=elec_enduse + natural_gas,
-        restrict=[('state', chunk_states), # partition in the AWS query
-                    ('upgrade', [int(aws_upgrade)]), # partition in the AWS query
-                    *([('applicability', [True])] if applied_only else []),
-                    (restrict_county, aws_counties)],
+        restrict=[('state', chunk_states),
+                  (restrict_county, aws_counties)],
+        timestamp_grouping_func="hour",
         group_by=aws_cols,
         get_query_only=True,
         annual_only=False
     )
-
-    # ts_agg is a query string; Modify for OEDI data query
-    table_name = aws_run_type['table_name']
-    ts_agg_query = ts_agg_query.replace(
-        f'{table_name}_by_state.timestamp',
-        f'from_unixtime_nanos({table_name}_by_state.timestamp)')
-
-    if sw_comstock:
-        # Comstock OEDI query string requires additional modification
-        ts_agg_query = ts_agg_query.replace(
-            f"metadata.upgrade = {aws_upgrade}",
-            f"metadata.upgrade = {aws_upgrade} AND "
-            f"comstock_amy2018_release_1_by_state.upgrade = '{aws_upgrade}'"
-        )
-        if comstock_year == "2025" and comstock_release == "2":
-            # Derive table names by base year/release to support 2012/2018
-            com_ts_table = (
-                f"comstock_amy{base_year}_r{comstock_release}_{comstock_year}_ts_by_state"
-            )
-            com_md_table = (
-                f"comstock_amy{base_year}_r{comstock_release}_{comstock_year}_md_agg_by_state_and_county_parquet"
-            )
-            weather_counties_str = ', '.join(
-                f"'{c}'" for c in df_meta[
-                    'in.as_simulated_nhgis_county_gisjoin'].unique()
-            )
-            ts_agg_query = (
-                ts_agg_query.replace(
-                    'comstock_amy2018_release_1_by_state',
-                    com_ts_table
-                )
-                .replace(
-                    'comstock_2024_amy2018_release_1_by_state',
-                    com_ts_table
-                )
-                .replace(
-                    'comstock_2024_amy2018_release_1_metadata',
-                    com_md_table
-                )
-                .replace(
-                    f"_by_state.upgrade = '{aws_upgrade}'",
-                    f"_by_state.upgrade = {aws_upgrade}"
-                )
-                .replace(
-                    'in.county_name',
-                    'county'
-                )
-                .replace(
-                    'in.nhgis_county_gisjoin',
-                    'county'
-                )
-                .replace(
-                    '1, 2, 3, 4',
-                    '1, 2, 3, 4, 5'
-                )
-                .replace(
-                    '"county" AS nhgis_county_gisjoin, ',
-                    '"county" AS nhgis_county_gisjoin, '
-                    f'{com_md_table}."in.as_simulated_nhgis_county_gisjoin" AS '
-                    'as_simulated_nhgis_county_gisjoin, '
-                )
-                .replace(
-                    f'WHERE comstock_amy{base_year}_r{comstock_release}_{comstock_year}',
-                    f'WHERE {com_md_table}."in.as_simulated_nhgis_county_gisjoin" IN '
-                    f'({weather_counties_str}) AND '
-                    f'{com_md_table}."state" IN ({chunk_states_str}) AND '
-                    f'comstock_amy{base_year}_r{comstock_release}_{comstock_year}'
-                )
-            )
-
-        hour_expr = (
-            f"date_trunc('hour', {com_ts_table}.timestamp + interval '59' minute)"
-        )
-        ts_agg_query = ts_agg_query.replace(
-            f'from_unixtime_nanos({com_ts_table}.timestamp)',
-            hour_expr
-        )
-
-        aws_cols = bsq_cols.copy()
-
-    else:
-        # ResStock OEDI query string requires additional modification
-        res_ts_table = (
-            f"resstock_amy{base_year}_r{resstock_release}_{resstock_year}_ts_by_state"
-        )
-        res_md_table = (
-            f"resstock_amy{base_year}_r{resstock_release}_{resstock_year}_md_by_state_parquet"
-        )
-
-        ts_agg_query = ts_agg_query.replace(
-            f"baseline.upgrade = {aws_upgrade}",
-            f"baseline.upgrade = {aws_upgrade} "
-            f"AND {res_ts_table}.upgrade = {aws_upgrade} "
-            f"AND {res_ts_table}.state IN ({chunk_states_str})"
-        )
-        ts_agg_query = ts_agg_query.replace(
-            f"CAST({res_md_table}.upgrade AS VARCHAR) = '0'",
-            f"CAST({res_md_table}.upgrade AS VARCHAR) = "
-            f"'{aws_upgrade}'"
-        )
-
-        hour_expr = (
-            f"date_trunc('hour', {res_ts_table}.timestamp + interval '59' minute)"
-        )
-        ts_agg_query = ts_agg_query.replace(
-            f'from_unixtime_nanos({res_ts_table}.timestamp)',
-            hour_expr
-        )
-        # Fallback: force any raw timestamp selections to use the hourly truncation
-        ts_agg_query = ts_agg_query.replace(
-            f'{res_ts_table}.timestamp AS timestamp',
-            f'{hour_expr} AS timestamp'
-        )
 
     ts_agg = query_execution(ts_agg_query, my_run)
     elec_enduse = [item.replace('out.', '') for item in elec_enduse]
@@ -479,7 +348,7 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
     # Remove '..kwh' from elec_enduse list for grouping
     elec_enduse = [item.replace('..kwh', '') for item in elec_enduse]
 
-    if sw_comstock and comstock_year == "2025" and comstock_release == "2":
+    if sw_comstock:
         state_county_map = pd.read_csv(
             os.path.join(
                 output_dir, "inputs", "spatial_tract_lookup_table.csv")
