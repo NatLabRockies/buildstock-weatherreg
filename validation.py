@@ -3,7 +3,33 @@ This file is for validating regressed electricity demand data from resstock and 
 
 This script was tested with the buildstock-weatherreg project environment (see pyproject.toml).
 '''
+import certifi
+import os
+import sys
+import time
+# Force line buffering even when stdout is a pipe (e.g. under srun). Without
+# this, prints accumulate in a 4KB block buffer and the user sees no output
+# until the interpreter exits — making jobs look hung when they're just quiet.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except AttributeError:
+    pass
 
+_T0 = time.monotonic()
+
+
+def log(msg: str):
+    elapsed = time.monotonic() - _T0
+    print(f"[{elapsed:7.1f}s] {msg}", flush=True)
+
+
+_CA = certifi.where()
+os.environ.setdefault("AWS_CA_BUNDLE", _CA)
+os.environ.setdefault("CURL_CA_BUNDLE", _CA)
+os.environ.setdefault("SSL_CERT_FILE", _CA)
+os.environ.setdefault("REQUESTS_CA_BUNDLE", _CA)
+import ssl
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -14,11 +40,13 @@ from pathlib import Path
 import shutil
 import re
 
+
+TARGET_YEAR = 2018
 COMPARISONS = [
     {
         "name": "ComStock Upgrade 0 (Baseline)",
-        "ref": "/home/radhikar/weather_regression/buildstock-weatherreg/outputs/outputs_2026-02-19-11-49-52/agg_res_eulp_hvac_elec_GWh_upgrade0.csv",
-        "reg": "/home/radhikar/weather_regression/buildstock-weatherreg/outputs/outputs_2026-02-19-10-34-15/agg_res_eulp_hvac_elec_GWh_upgrade0.csv",
+        "ref": "/projects/geohc/radhikar/outputs/outputs_2026-04-28-13-09-19 - comstock-old-no-regression/agg_com_eulp_hvac_elec_GWh_upgrade0.csv",
+        "reg": "/projects/geohc/radhikar/outputs/from Yunzhi/com/agg_com_eulp_hvac_elec_GWh_upgrade0_2018.csv",
     },
     # {
     #     "name": "ComStock Upgrade 1 (Air-Source Heat Pump)",
@@ -36,7 +64,11 @@ COMPARISONS = [
     #     "reg": "/projects/geohc/geo_predict/outputs/outputs_2025-12-03-13-50-22/agg_res_eulp_hvac_elec_GWh_upgrade4.csv",
     # },
 ]
-OUTPUT_DIR = Path("validation_outputs")
+# Per-run timestamp so successive runs land in distinct directories instead
+# of colliding inside one shared output dir. Format matches the project's
+# upstream outputs_<timestamp> convention from B_building_stock_parallel_agg.
+RUN_TIMESTAMP = time.strftime("%Y-%m-%d-%H-%M-%S")
+OUTPUT_DIR = Path(f"validation_outputs-{RUN_TIMESTAMP}")
 OUTPUT_SUBDIR = None
 COUNTY_MAP_URL = "https://raw.githubusercontent.com/NREL/ReEDS-2.0/refs/heads/main/inputs/county2zone.csv"
 TARGET_BA = "p10"
@@ -98,9 +130,14 @@ def ensure_output_dir(path: Path):
     if path.exists():
         contents = list(path.iterdir())
         if contents:
-            resp = input(f"Output directory '{path}' exists and has {len(contents)} item(s). Delete it? [y/N]: ").strip().lower()
-            if resp not in ("y", "yes"):
-                raise SystemExit("Aborting; output directory not cleared.")
+            if sys.stdin.isatty():
+                resp = input(f"Output directory '{path}' exists and has {len(contents)} item(s). Delete it? [y/N]: ").strip().lower()
+                if resp not in ("y", "yes"):
+                    raise SystemExit("Aborting; output directory not cleared.")
+            else:
+                # Non-interactive (srun/sbatch): can't prompt — clear silently
+                # and log it so the action is visible in the job output.
+                log(f"  non-interactive: clearing existing {path} ({len(contents)} items)")
             shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
 
@@ -120,10 +157,12 @@ def normalize_fips(val) -> str:
 
 
 def load_county_metadata(counties):
+    log(f"  fetching county mapping from {COUNTY_MAP_URL}")
     try:
         mapping = pd.read_csv(COUNTY_MAP_URL, dtype={"FIPS": str})
     except Exception as exc:
         raise SystemExit(f"Failed to load county mapping from {COUNTY_MAP_URL}: {exc}")
+    log(f"  county mapping fetched: {len(mapping):,} rows")
     mapping["FIPS"] = mapping["FIPS"].astype(str).str.strip()
     mapping["ba"] = mapping["ba"].astype(str).str.strip()
     mapping["fips_norm"] = mapping["FIPS"].apply(normalize_fips)
@@ -375,13 +414,21 @@ def plot_specific_county_scatters(df_ref: pd.DataFrame, df_reg: pd.DataFrame, co
 
 def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
     global OUTPUT_SUBDIR
+    log(f"=== run_comparison: {comp_name} ===")
+    log(f"  ref: {ref_path}")
+    log(f"  reg: {reg_path}")
     OUTPUT_DIR.mkdir(exist_ok=True)
     comp_slug = slugify(comp_name or f"{ref_path.stem}_vs_{reg_path.stem}")
     OUTPUT_SUBDIR = OUTPUT_DIR / comp_slug
     ensure_output_dir(get_out_dir())
+    log(f"  output dir: {get_out_dir()}")
 
+    log("loading ref CSV...")
     counties_ref, df_ref_raw = load_csv(ref_path)
+    log(f"  loaded ref: {len(df_ref_raw):,} rows x {len(counties_ref):,} counties")
+    log("loading reg CSV...")
     counties_reg, df_reg_raw = load_csv(reg_path)
+    log(f"  loaded reg: {len(df_reg_raw):,} rows x {len(counties_reg):,} counties")
     if counties_ref != counties_reg:
         raise SystemExit("Header mismatch")
     rename_map = {c: normalize_fips(c) for c in counties_ref}
@@ -390,9 +437,13 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
     counties = [rename_map[c] for c in counties_ref]
     n = len(counties)
 
+    log("aligning frames (common index, dropping missing)...")
     df_ref, df_reg, common_idx, miss_ref_only, miss_reg_only = align_frames(df_ref_raw, df_reg_raw)
+    log(f"  aligned: {len(common_idx):,} common hours, {len(miss_ref_only)} ref-only, {len(miss_reg_only)} reg-only")
 
+    log(f"loading county metadata from {COUNTY_MAP_URL} ...")
     county_meta, missing_meta = load_county_metadata(counties)
+    log(f"  county metadata: {len(county_meta):,} matched, {len(missing_meta):,} missing")
     ba_states, multi_state = ba_state_lookup_from_meta(county_meta)
     fmt_county = lambda f: county_label(f, county_meta)
     fmt_ba = lambda b: ba_label(b, ba_states)
@@ -410,12 +461,15 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
     county_ann_reg = df_reg.sum(axis=0)
     monthly_county_ref = monthly_totals(df_ref)
     monthly_county_reg = monthly_totals(df_reg)
+    log("computing BA-level totals...")
     if not county_meta.empty:
         df_ref_ba = df_ref[county_meta.index].groupby(county_meta["ba"], axis=1).sum()
         df_reg_ba = df_reg[county_meta.index].groupby(county_meta["ba"], axis=1).sum()
+        log(f"  BA grouping: {df_ref_ba.shape[1]:,} balancing areas")
     else:
         df_ref_ba = pd.DataFrame(index=df_ref.index)
         df_reg_ba = pd.DataFrame(index=df_reg.index)
+        log("  BA grouping: county_meta empty, skipping")
 
     annual_ref = float(nat_ref.sum())
     annual_reg = float(nat_reg.sum())
@@ -578,14 +632,22 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
         peak_min_idx = county_peak_pct.idxmin()
 
     nat_nmae_pct = nat_nmae * 100 if np.isfinite(nat_nmae) else float("nan")
+    log("metrics computed; starting plots")
 
+    log("  plot: monthly_percent_diff.png")
     plot_monthly_pct(monthly_pct, get_out_dir() / "monthly_percent_diff.png")
+    log("  plot: county_percent_diff_top.png")
     plot_top_county_pct(county_pct, get_out_dir() / "county_percent_diff_top.png", label_lookup=fmt_county)
+    log("  plot: daily_totals_scatter.png")
     plot_daily_scatter(daily_ref, daily_reg, get_out_dir() / "daily_totals_scatter.png")
+    log("  plot: hourly_totals_scatter.png")
     plot_hourly_scatter(nat_ref, nat_reg, get_out_dir() / "hourly_totals_scatter.png")
+    log(f"  plot: county_hourly_scatter (ranked, ~9 figures across {len(county_nmae):,} counties)")
     plot_ranked_hourly_scatters(df_ref, df_reg, county_nmae, fmt_county, "county_hourly_scatter")
     if not ba_nmae.empty:
+        log(f"  plot: ba_hourly_scatter (ranked, ~9 figures across {len(ba_nmae):,} BAs)")
         plot_ranked_hourly_scatters(df_ref_ba, df_reg_ba, ba_nmae, fmt_ba, "ba_hourly_scatter")
+    log(f"  plot: target_county_hourly_scatter ({len(target_counties):,} counties in BA {TARGET_BA})")
     plot_specific_county_scatters(
         df_ref,
         df_reg,
@@ -602,14 +664,17 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
         ("Hourly totals scatter", "hourly_totals_scatter.png"),
     ]
 
+    log("  plot: national_8760_by_month.png")
     national_8760_title = "National hourly profile by month (ref vs reg)"
     if plot_8760_month_rows(nat_ref, nat_reg, get_out_dir() / "national_8760_by_month.png", national_8760_title):
         charts.append((national_8760_title, "national_8760_by_month.png"))
 
     if target_ba_ref is not None and target_ba_reg is not None:
+        log(f"  plot: target_ba_8760_by_month.png (BA {target_ba_label})")
         ba_8760_title = f"BA {target_ba_label} hourly profile by month (ref vs reg)"
         if plot_8760_month_rows(target_ba_ref, target_ba_reg, get_out_dir() / "target_ba_8760_by_month.png", ba_8760_title):
             charts.append((ba_8760_title, "target_ba_8760_by_month.png"))
+    log("all plots done; building HTML")
 
     summary_rows = [
         ("Comparison", comp_name),
@@ -933,25 +998,43 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
     html_parts.append("</body></html>")
 
     report_path = get_out_dir() / "report.html"
+    log(f"writing report.html ({len(html_parts):,} parts)")
     report_path.write_text("\n".join(html_parts), encoding="utf-8")
+    log("report.html written")
 
+    log("copying script into output dir")
     try:
         shutil.copy(Path(__file__).resolve(), get_out_dir() / Path(__file__).name)
     except Exception as exc:
-        print(f"Warning: failed to copy script into outputs: {exc}")
+        print(f"Warning: failed to copy script into outputs: {exc}", flush=True)
 
-    print(f"Report written to {report_path.resolve()}")
+    log(f"DONE — report at {report_path.resolve()}")
 
 
 def main():
     if not COMPARISONS:
         raise SystemExit("No comparisons defined in COMPARISONS")
-    for comp in COMPARISONS:
+    log(f"main(): {len(COMPARISONS)} comparison(s) queued")
+    for i, comp in enumerate(COMPARISONS, 1):
         ref_path = Path(comp["ref"])
         reg_path = Path(comp["reg"])
         comp_name = comp.get("name") or f"{ref_path.stem} vs {reg_path.stem}"
+        log(f"main(): starting comparison {i}/{len(COMPARISONS)}: {comp_name}")
         run_comparison(ref_path, reg_path, comp_name)
+        log(f"main(): finished comparison {i}/{len(COMPARISONS)}")
+    log("main(): all comparisons done, returning")
 
 
 if __name__ == "__main__":
+    log(f"__main__: run timestamp = {RUN_TIMESTAMP}")
+    log(f"__main__: output root   = {OUTPUT_DIR.resolve()}")
+    log("__main__: entering main()")
     main()
+    log("__main__: main() returned, flushing and calling os._exit(0)")
+    # Flush stdio explicitly before _exit, since os._exit skips Python's
+    # normal stdio cleanup. Then fast-exit to avoid multi-minute interpreter
+    # shutdown from lingering urllib/SSL pools and matplotlib font-cache
+    # writeback. All output files are already on disk by this point.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)

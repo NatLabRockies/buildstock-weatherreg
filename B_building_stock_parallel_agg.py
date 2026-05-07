@@ -9,6 +9,7 @@ import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+import fnmatch
 import sys
 import shutil
 import datetime as dt
@@ -212,37 +213,93 @@ if __name__ == "__main__":
         num_cores = max(2, os.cpu_count() - 2)  # Leave 2 cores free
         logger.info("Using %s parallel processes", num_cores)
 
-    # Create outputs directory & copy input files to `/inputs` subdirectory
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    run_timestamp = dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    output_dir = f'/projects/geohc/radhikar/outputs/outputs_{run_timestamp}'
 
-    ## Function to exclude directories that shouldn't be copied into outputs
-    EXCLUDE_DIRS = {'outputs', '.venv', '.git', '.history', '__pycache__', 'aggregates'}
+    # Optional CLI arg: path to a switches JSON. Lets a user maintain separate
+    # ResStock/ComStock switch files and submit them back-to-back via:
+    #   sbatch A_start_building_stock_parallel_agg.sh switches_resstock.json
+    # Defaults to script_dir/switches_agg.json for backwards compatibility.
+    if len(sys.argv) > 1:
+        switches_path = os.path.abspath(sys.argv[1])
+    else:
+        switches_path = os.path.join(script_dir, 'switches_agg.json')
+    if not os.path.isfile(switches_path):
+        raise FileNotFoundError(f"Switches file not found: {switches_path}")
+    logger.info("Using switches file: %s", switches_path)
+
+    # Pre-read switches to resolve output_dir before touching the filesystem.
+    # The full canonical load happens later from the snapshot copy.
+    with open(switches_path, 'r') as _f:
+        _pre_switch = json.load(_f)
+    output_dir = _pre_switch['output_dir']
+    if os.path.exists(output_dir):
+        raise FileExistsError(
+            f"Output directory already exists: {output_dir}. Refusing to "
+            f"clobber prior results. Edit `output_dir` in {switches_path} "
+            f"or remove/rename the existing directory."
+        )
+    os.makedirs(output_dir, exist_ok=False)
+    logger.info("Created output directory at %s", output_dir)
+
+    ## Function to exclude directories and files that shouldn't be copied into outputs
+    EXCLUDE_DIRS = {'outputs', '__pycache__', 'aggregates'}
+    EXCLUDE_PATTERNS = ['slurm-*.out']
     def exclude_dir(_dirname, filenames):
-        return [name for name in filenames if name in EXCLUDE_DIRS]
+        return [
+            name for name in filenames
+            if name.startswith('.')
+            or name in EXCLUDE_DIRS
+            or any(fnmatch.fnmatch(name, pat) for pat in EXCLUDE_PATTERNS)
+        ]
 
-    ## Create & copy files to the output directory, excluding 'outputs'
+    ## Copy script_dir into output_dir/inputs (output_dir already exists; copytree creates the inputs/ leaf).
     shutil.copytree(script_dir, f'{output_dir}/inputs', ignore=exclude_dir)
-    logger.info("Created output directory at %s and copied input files.", output_dir)
+    logger.info("Copied input files into %s/inputs", output_dir)
+    ## Canonicalize the chosen switches file at inputs/switches_agg.json so D
+    ## (and any other consumer) finds it at one well-known path. Overwrites
+    ## whatever the copytree default placed there.
+    snapshot_switches_path = f'{output_dir}/inputs/switches_agg.json'
+    shutil.copy2(switches_path, snapshot_switches_path)
     ## Write the commit hash to a text file in the output folder
     with open(f'{output_dir}/inputs/commit_hash.txt', 'w') as f:
         f.write(subprocess.check_output(['git', 'rev-parse', 'HEAD'])
                         .strip()
                         .decode('utf-8'))
 
-    logger.info("Loading switches from JSON file...")
+    logger.info("Loading switches from snapshot at %s", snapshot_switches_path)
     # SWITCHES #TODO: Only import necessary for this script & reorder
-    with open(os.path.join(script_dir, 'switches_agg.json'), 'r') as f:
+    # Read from the snapshot (not the source) so B and D are guaranteed to see
+    # identical bytes regardless of edits to the source between submissions.
+    with open(snapshot_switches_path, 'r') as f:
         switch = json.load(f)
     sw_testmode = switch['testmode']
     ## Switch that designates comstock or resstock data
     sw_comstock = switch['comstock'] # if `False`, then resstock
-    ## Note: resstock upgrades do not correspond to the same # as comstock
-    upgrades = switch['upgrades'] # default: comstock = [0, 1, 18], resstock = [0, 1, 5]
+    ## Each spec is {"upgrade_id": int, "apply_regression": bool,
+    ## "base_year": int, "target_year": list}. The same upgrade_id may appear
+    ## with different base_year/regression combinations to produce ref+reg
+    ## across multiple training years in one run; outputs are disambiguated
+    ## by an `<id>_<reg|ref>_b<base_year>` tag.
+    run_specs = switch['run_specs']
+
+    ## Validate that all specs produce unique upgrade_tags. Two specs that
+    ## differ only in target_year would collide and overwrite each other.
+    seen_tags = set()
+    for s in run_specs:
+        tag = (
+            f"{s['upgrade_id']}_"
+            f"{'reg' if s['apply_regression'] else 'ref'}_"
+            f"b{s['base_year']}"
+        )
+        if tag in seen_tags:
+            raise ValueError(
+                f"Duplicate upgrade_tag {tag!r} across run_specs. "
+                f"Each (upgrade_id, apply_regression, base_year) triple "
+                f"must be unique within a single switches file."
+            )
+        seen_tags.add(tag)
+
     n_bldngs = switch['n_bldngs'] # 'all' for all buildings, 'assign' for assigned building id list from csv
-    base_year = switch['base_year'] # Base year for the building stock
-    target_year = switch['target_year'] # Target year for the building stock
     comstock_year, comstock_release = switch['version_comstock'][0], switch['version_comstock'][1]
     resstock_year, resstock_release = switch['version_resstock'][0], switch['version_resstock'][1]
     chunk_size = switch['chunk_size'] # number of combinations to pull at a time
@@ -292,11 +349,9 @@ if __name__ == "__main__":
     if sw_comstock:
         county_parquet_cols = [col for col in parquet_cols if col != 'in.county_name']
 
-    # URLs
+    # URLs (the base/target year vary per spec, so url_bldg is built inside
+    # the loop below).
     url_base = switch['url_base']
-    url_comstock = f'{url_base}{comstock_year}/comstock_amy{base_year}_release_{comstock_release}/'
-    url_resstock = f'{url_base}{resstock_year}/resstock_amy{base_year}_release_{resstock_release}/'
-    url_bldg = url_comstock if sw_comstock else url_resstock
 
     # Load the state_county_map outside the loop
     state_county_map = pd.read_csv(
@@ -318,7 +373,19 @@ if __name__ == "__main__":
     logger.info("Saved spatial_tract_lookup_table.csv to output directory.")
 
     # MAIN
-    for upgrade in upgrades: 
+    for spec_index, spec in enumerate(run_specs):
+        upgrade = spec['upgrade_id']
+        apply_regression = spec['apply_regression']
+        base_year = spec['base_year']
+        target_year = spec['target_year']  # noqa: F841 (D consumes via spec_index)
+        regression_tag = 'reg' if apply_regression else 'ref'
+        upgrade_tag = f'{upgrade}_{regression_tag}_b{base_year}'
+
+        # Per-spec dataset URLs (base_year now varies per spec).
+        url_comstock = f'{url_base}{comstock_year}/comstock_amy{base_year}_release_{comstock_release}/'
+        url_resstock = f'{url_base}{resstock_year}/resstock_amy{base_year}_release_{resstock_release}/'
+        url_bldg = url_comstock if sw_comstock else url_resstock
+
         if sw_comstock and comstock_year == "2025" and comstock_release == "2":
             logger.info("Using custom metadata load logic for ComStock 2025 Release 2")
 
@@ -392,7 +459,7 @@ if __name__ == "__main__":
                 raise RuntimeError(f"No metadata loaded for upgrade {upgrade}.")
 
             df_meta = pd.concat(all_meta, ignore_index=True)
-            # TODO: It doesn't make sense to filter by upgrade here - should be above `for upgrade in upgrades`
+            # TODO: It doesn't make sense to filter by upgrade here - should be above `for spec in run_specs`
             df_meta = df_meta[df_meta["upgrade"] == upgrade]
 
             # Merge state_county_map w/ df_meta to bring in resstock_county_id
@@ -530,50 +597,110 @@ if __name__ == "__main__":
             'in.nhgis_county_gisjoin' if sw_comstock else 'in.county',
         ])
 
-        # Save single upgrade DataFrame to CSV file
+        # Save single upgrade DataFrame to CSV file (one per spec; the
+        # `<id>_<reg|ref>` tag keeps regressed and direct runs separate).
         prefix = 'com_' if sw_comstock else 'res_'
         meta_path = os.path.join(
-            output_dir, f'{prefix}meta_master_upgrade{upgrade}.csv')
+            output_dir, f'{prefix}meta_master_upgrade{upgrade_tag}.csv')
         df_meta.to_csv(meta_path)
 
         unique_counties = df_meta[county].unique()
 
-        # Store all processes for non-HPC mode in `tasks` list
-        try:
-            tasks  # Check if it exists
-        except NameError:
-            tasks = []
-        # Process counties in parallelized chunks
+        # Build the chunks list (used by both HPC and local paths). Each
+        # entry is (start_index, end_index, counties_str).
+        chunks = []
         for i in range(0, len(unique_counties), chunk_size):
-            # Get the chunk of counties
             start_index = i
             end_index = i + chunk_size
             county_chunk = unique_counties[i:i + chunk_size]
             counties_str = '_'.join(county_chunk)
-            # Submit job to HPC or run locally
-            if hpc:
-                # Call a shell script that creates a compute node and runs a python file
-                subprocess.run([
-                    'sbatch',
-                    f'--job-name=chunk_{prefix}{upgrade}_{start_index}-{end_index}',
-                    './C_run_bldg_chunk_agg.sh',
-                    str(start_index), str(end_index), meta_path,
-                    str(upgrade), prefix, output_dir, script_dir, counties_str
-                ], check=True)
+            chunks.append((start_index, end_index, counties_str))
 
-            else:
-                # Store commands for multiprocessing
+        # Initialize cross-iteration accumulators on first spec.
+        try:
+            tasks  # Check if it exists
+        except NameError:
+            tasks = []
+        try:
+            local_specs  # Check if it exists
+        except NameError:
+            local_specs = []
+
+        if hpc:
+            if not chunks:
+                logger.warning("No counties to chunk for upgrade_tag %s; skipping array submission.", upgrade_tag)
+                continue
+
+            # Write the per-spec manifest. C reads its row by SLURM_ARRAY_TASK_ID.
+            manifest_path = f'{output_dir}/inputs/manifest_upgrade{upgrade_tag}.csv'
+            with open(manifest_path, 'w') as mf:
+                mf.write('chunk_idx,start_index,end_index,counties_str\n')
+                for idx, (s_idx, e_idx, c_str) in enumerate(chunks):
+                    mf.write(f'{idx},{s_idx},{e_idx},{c_str}\n')
+            logger.info("Wrote manifest with %d chunks at %s", len(chunks), manifest_path)
+
+            # Submit one array job per spec, capped at 100 concurrent tasks.
+            n_chunks = len(chunks)
+            result = subprocess.run([
+                'sbatch',
+                f'--job-name={prefix}chunk_{upgrade_tag}',
+                f'--array=0-{n_chunks - 1}%100',
+                './C_run_bldg_chunk_agg.sh',
+                manifest_path, meta_path, str(upgrade), prefix,
+                output_dir, script_dir, str(spec_index),
+            ], check=True, capture_output=True, text=True)
+            array_job_id = result.stdout.strip().split()[-1]
+            logger.info(
+                "Submitted array job %s with %d tasks (%%100 concurrency) for upgrade_tag %s",
+                array_job_id, n_chunks, upgrade_tag,
+            )
+
+            # Aggregation depends on the entire array completing successfully.
+            # afterok on an array is satisfied only when every task exits 0;
+            # --kill-on-invalid-dep=yes cancels the agg job if any task fails.
+            bldg_type = prefix.rstrip('_')  # 'res' or 'com'
+            agg_result = subprocess.run([
+                'sbatch',
+                f'--job-name={prefix}agg_{upgrade_tag}',
+                f'--dependency=afterok:{array_job_id}',
+                '--kill-on-invalid-dep=yes',
+                './F_aggregate_chunks.sh',
+                output_dir, bldg_type, upgrade_tag,
+            ], check=True, capture_output=True, text=True)
+            agg_job_id = agg_result.stdout.strip().split()[-1]
+            logger.info(
+                "Queued aggregation job %s for upgrade_tag %s (depends on array %s)",
+                agg_job_id, upgrade_tag, array_job_id,
+            )
+
+        else:
+            # Local: queue each chunk for the multiprocessing pool below.
+            for start_index, end_index, counties_str in chunks:
                 cmd = [
                     sys.executable,
                     f'{output_dir}/inputs/D_process_chunk_agg.py',
                     str(start_index), str(end_index), meta_path,
-                    str(upgrade), prefix, output_dir, script_dir, counties_str
+                    str(upgrade), prefix, output_dir, script_dir, counties_str,
+                    str(spec_index),
                 ]
-                tasks.append(cmd)  # Collect tasks to run later
+                tasks.append(cmd)
+            if upgrade_tag not in {s['upgrade_tag'] for s in local_specs}:
+                local_specs.append({'upgrade_tag': upgrade_tag, 'prefix': prefix})
 
-    # Run multiprocessing to execute all tasks in parallel
+    # Local: run all chunks in parallel, then aggregate per spec in series.
     if not hpc and tasks:
         with multiprocessing.Pool(processes=num_cores) as pool:
             pool.map(run_task, tasks)
+        for s in local_specs:
+            tag = s['upgrade_tag']
+            bldg_type = s['prefix'].rstrip('_')
+            logger.info("Aggregating chunks for upgrade_tag %s", tag)
+            subprocess.run([
+                sys.executable,
+                f'{output_dir}/inputs/agg_buildings.py',
+                '--bldg-path', output_dir,
+                '--bldg-type', bldg_type,
+                '--upgrade-tag', tag,
+            ], check=True)
 
     print("All chunks processed successfully!")

@@ -23,6 +23,7 @@ import json
 import shutil
 import subprocess
 from buildstock_query import BuildStockQuery
+import sqlglot
 import time
 import re
 import random
@@ -103,6 +104,24 @@ prefix = sys.argv[5]
 output_dir = sys.argv[6]
 script_dir = sys.argv[7]
 counties_str = sys.argv[8]
+spec_index = int(sys.argv[9])
+
+# Import switches first so we can resolve per-spec values from spec_index.
+with open(os.path.join(output_dir, 'inputs', 'switches_agg.json'), 'r') as f:
+    switch = json.load(f)
+
+# Per-spec values: each run_specs entry carries its own
+# apply_regression / base_year / target_year, so two specs with the same
+# upgrade_id can produce different outputs in one run.
+spec = switch['run_specs'][spec_index]
+sw_apply_regression = bool(spec['apply_regression'])
+base_year = spec['base_year']
+target_years = parse_target_years(spec['target_year'])
+comparison_year = (
+    base_year if base_year in target_years else target_years[0]
+) # Year used for df_meta annual regression comparison columns
+regression_tag = 'reg' if sw_apply_regression else 'ref'
+upgrade_tag = f'{upgrade}_{regression_tag}_b{base_year}'
 
 print('start_index:', start_index)
 print('end_index:', end_index)
@@ -112,33 +131,30 @@ print('prefix:', prefix)
 print('output_dir:', output_dir)
 print('script_dir:', script_dir)
 print('counties_str:', counties_str)
+print('spec_index:', spec_index)
+print('apply_regression:', sw_apply_regression)
+print('base_year:', base_year)
+print('target_years:', target_years)
+print('upgrade_tag:', upgrade_tag)
 
-print('Script to rerun this file with the same arguments:')
-print(f'sbatch --job-name=chunk_{prefix}{upgrade}_{start_index}-{end_index} '
-      f'./C_run_bldg_chunk_agg.sh {start_index} {end_index} {meta_path} '
-      f'{upgrade} {prefix} {output_dir} {script_dir} {counties_str}')
+print('To rerun just this chunk as a single-task array:')
+_task_id = os.environ.get('SLURM_ARRAY_TASK_ID', '<task_idx_from_manifest>')
+_manifest_path = f'{output_dir}/inputs/manifest_upgrade{upgrade_tag}.csv'
+print(f'sbatch --job-name={prefix}chunk_{upgrade_tag} '
+      f'--array={_task_id} ./C_run_bldg_chunk_agg.sh '
+      f'{_manifest_path} {meta_path} {upgrade} {prefix} '
+      f'{output_dir} {script_dir} {spec_index}')
 
-# Import switches #TODO: Only import necessary for this script & reorder
-with open(os.path.join(output_dir, 'inputs', 'switches_agg.json'), 'r') as f:
-    switch = json.load(f)
 ## Switch that designates comstock or resstock data
 sw_comstock = switch['comstock'] # if `False`, then resstock
 sw_savings_shape = switch['savings_shape'] # if `False`, aggregate_timeseries
 applied_only = switch['applied_only'] # if `True`, only buildings with upgrade applied
 sleep_seconds = switch['sleep_seconds'] # Number of seconds to sleep at the start of the script to prevent AWS token errors when multiple jobs are run simultaneously
-## Columns to group by; Note: if this changes, language in the 
+## Columns to group by; Note: if this changes, language in the
 ## `process_chunk_agg` function will need to be updated following the AWS call
 bsq_cols =  switch['com_bsq_cols'] if sw_comstock else switch['res_bsq_cols']
-## Note: resstock upgrades do not correspond to the same # as comstock
-upgrades = switch['upgrades'] # default: comstock = [0, 1, 14, 55], resstock = [0, 4, 8]
 ## Number of buildings to pull per upgrade
 n_bldngs = switch['n_bldngs'] # 'all' for all buildings, 'assign' for assigned building id list from csv
-base_year = switch['base_year'] # Base year for the building stock
-target_years = parse_target_years(switch['target_year']) # Target weather years
-comparison_year = (
-    base_year if base_year in target_years else target_years[0]
-) # Year used for df_meta annual regression comparison columns
-sw_apply_regression = switch['apply_regression']
 sw_test_base = switch['test_base']
 sw_save_metrics = switch['save_metrics']
 sw_show_fit = switch['show_fit']
@@ -150,14 +166,15 @@ sw_mode = switch['mode'] # Choose HVAC electricity usage, "heat_and_cool" for al
 comstock_year, comstock_release = switch['version_comstock'][0], switch['version_comstock'][1]
 resstock_year, resstock_release = switch['version_resstock'][0], switch['version_resstock'][1]
 lag_hours = switch['lag_hours_temperature']   # Lagged features for the dry bulb temperature to include the load inertia
-base_run = switch['base_run'] # The base run type for the BuildStockQuery object
-target_run = switch['target_run'] # The target run type for the BuildStockQuery object
+base_run = spec['base_run']     # Per-spec BuildStockQuery base run type
+target_run = spec['target_run'] # Per-spec BuildStockQuery target run type
 run_types = switch['run_types'] # Run types for the BuildStockQuery object
 weather_data_base = switch['weather_data_base']
 
 if sw_test_target and len(target_years) != 1:
     raise ValueError(
-        "switches_agg.json: sw_test_target=True requires exactly one target_year."
+        f"sw_test_target=True requires exactly one target_year per spec; "
+        f"run_specs[{spec_index}] has {len(target_years)}: {target_years}."
     )
 
 # Force program to sleep for a random amount of seconds between 0 and sleep_seconds
@@ -274,8 +291,27 @@ def query_execution(query, my_run, retries=5, delay=10):
             else:
                 raise  # Re-raise the exception if out of retries
 
+def write_pretty_sql(sql, path):
+    """Write `sql` to `path`, pretty-printed via sqlglot when possible.
+
+    Falls back to writing the raw SQL on any sqlglot failure — capturing
+    the query is the primary goal; formatting is best-effort.
+    """
+    raw = str(sql)
+    try:
+        formatted = sqlglot.transpile(
+            raw, read='athena', write='athena', pretty=True
+        )[0]
+    except Exception as e:
+        print(f'sqlglot pretty-format failed ({type(e).__name__}: {e}); writing raw SQL.')
+        formatted = raw
+    with open(path, 'w') as f:
+        f.write(formatted)
+
+
 def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
-                      chunk_states, sw_savings_shape, df_meta, applied_only):
+                      chunk_states, sw_savings_shape, df_meta, applied_only,
+                      query_label='base'):
     """
     This function aggregates timeseries data for a specific run type, upgrade,
     enduse, and set of counties.
@@ -292,6 +328,9 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
     sw_savings_shape (bool): Method - savings_shape or aggregate_timeseries.
     df_meta (DataFrame): The metadata DataFrame.
     applied_only (bool): If True, only buildings with upgrade applied are used.
+    query_label (str): Role of this call ('base' or 'target'). Controls the
+        filename of the saved Athena SQL — 'base' uses no suffix so it sits
+        next to the chunk's meta CSV; other labels are appended.
 
     Returns:
     ts_agg (DataFrame): Aggregated timeseries HVAC electricity.
@@ -326,20 +365,29 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
     restrict_county = ('in.nhgis_county_gisjoin' if sw_comstock else 
                         'in.county')
     my_run = BuildStockQuery(**aws_run_type)
-
     ts_agg_query = my_run.query(
         upgrade_id=upgrade,
         applied_only=False,
         enduses=elec_enduse + natural_gas,
         restrict=[('state', chunk_states),
-                  (restrict_county, aws_counties)],
+                  (restrict_county, aws_counties),
+                 ],
         timestamp_grouping_func="hour",
         group_by=aws_cols,
         get_query_only=True,
         annual_only=False
     )
 
+    sql_suffix = '' if query_label == 'base' else f'_{query_label}'
+    sql_path = os.path.join(
+        output_dir,
+        f'{prefix}meta_upgrade{upgrade_tag}_{start_index:04}-{end_index:04}{sql_suffix}.sql'
+    )
+    write_pretty_sql(ts_agg_query, sql_path)
+
     ts_agg = query_execution(ts_agg_query, my_run)
+    ts_agg = ts_agg.sort_values(aws_cols + ['timestamp']).reset_index(drop=True)
+    ts_agg['timestamp'] = pd.to_datetime(ts_agg['timestamp']) + pd.Timedelta(hours=1)
     elec_enduse = [item.replace('out.', '') for item in elec_enduse]
 
     # Remove '..kwh' suffix from elec_enduse columns for grouping
@@ -447,7 +495,7 @@ def weather_data(url_base, year, county_id):
 
     return df_weather
 
-def test_fit(yr_type, year, prefix, upgrade, bldg_id, model, Y_test, Y_pred, 
+def test_fit(yr_type, year, prefix, upgrade_tag, bldg_id, model, Y_test, Y_pred,
              X_train, sw_save_metrics, output_dir, sw_save_fit, sw_show_fit, i,
              df_meta, Y, start_index, end_index, energy_type):
     """
@@ -502,12 +550,12 @@ def test_fit(yr_type, year, prefix, upgrade, bldg_id, model, Y_test, Y_pred,
     print('\n')
 
     fig_dir = f'{output_dir}/{yr_type}{year}'
-    metrics = f'{prefix}metrics_upgrade{upgrade}_{start_index:04}-{end_index:04}'
+    metrics = f'{prefix}metrics_upgrade{upgrade_tag}_{start_index:04}-{end_index:04}'
     if sw_save_metrics:
         os.makedirs(fig_dir, exist_ok=True) # DELETE TODO: duplicated code that will unnecessarily run for each building
         # Save the metrics and feature importances to a .txt file
         with open(f'{fig_dir}/{metrics}.txt', 'a') as f:
-            f.write(f'{prefix}up{upgrade:02}_{str(bldg_id)}_{energy_out}\n')
+            f.write(f'{prefix}up{upgrade_tag}_{str(bldg_id)}_{energy_out}\n')
             f.write(f'MAE: {mae}\n')
             f.write(f'MSE: {mse}\n')
             f.write(f'R2 Score: {r2}\n')
@@ -520,7 +568,7 @@ def test_fit(yr_type, year, prefix, upgrade, bldg_id, model, Y_test, Y_pred,
         ## Output metrics to a CSV file
         # Create a dictionary with metrics and feature importances
         data = {'Building ID': [
-                    f'{prefix}up{upgrade:02}_{str(bldg_id)}_{energy_out}'],
+                    f'{prefix}up{upgrade_tag}_{str(bldg_id)}_{energy_out}'],
                 'MAE': [mae],
                 'MSE': [mse],
                 'R2 Score': [r2]}
@@ -544,7 +592,7 @@ def test_fit(yr_type, year, prefix, upgrade, bldg_id, model, Y_test, Y_pred,
             # Convert the Series to a DataFrame and transpose it
             averages_df = pd.DataFrame(averages)
             # Write the DataFrame to a CSV file
-            averages_df.to_csv(f'{fig_dir}/averages_{prefix}metrics{upgrade}_{start_index:04}-{end_index:04}.csv', header=False)
+            averages_df.to_csv(f'{fig_dir}/averages_{prefix}metrics{upgrade_tag}_{start_index:04}-{end_index:04}.csv', header=False)
 
     # Output and/or show the fit plot
     if sw_save_fit or sw_show_fit:
@@ -562,7 +610,7 @@ def test_fit(yr_type, year, prefix, upgrade, bldg_id, model, Y_test, Y_pred,
             plt.legend()
             if sw_save_fit:
                 os.makedirs(fig_dir, exist_ok=True) # DELETE TODO: duplicated code that will unnecessarily run for each building
-                plt.savefig(f'{fig_dir}/{prefix}up{upgrade:02}_{str(bldg_id)}.png')
+                plt.savefig(f'{fig_dir}/{prefix}up{upgrade_tag}_{str(bldg_id)}.png')
             if sw_show_fit:
                 plt.show()
 
@@ -576,7 +624,7 @@ def test_fit(yr_type, year, prefix, upgrade, bldg_id, model, Y_test, Y_pred,
         plt.ylabel('Predicted')
         if sw_save_fit:
             os.makedirs(fig_dir, exist_ok=True) # DELETE TODO: duplicated code that will unnecessarily run for each building
-            plt.savefig(f'{fig_dir}/fit_{prefix}up{upgrade:02}_{str(bldg_id)}.png')
+            plt.savefig(f'{fig_dir}/fit_{prefix}up{upgrade_tag}_{str(bldg_id)}.png')
         if sw_show_fit:
             plt.show()
 
@@ -640,9 +688,9 @@ def prediction(base_year, df_eulp, sw_test_base, target_years, sw_test_target,
             if sw_test_base or sw_save_metrics:
                 X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
                 Y_pred = rf_model.predict(X_test)
-                test_fit('base', base_year, prefix, upgrade, bldg_id, rf_model, Y_test,
+                test_fit('base', base_year, prefix, upgrade_tag, bldg_id, rf_model, Y_test,
                         Y_pred, X_train, sw_save_metrics, output_dir, sw_save_fit,
-                        sw_show_fit, i, df_meta, Y, start_index, end_index, 
+                        sw_show_fit, i, df_meta, Y, start_index, end_index,
                         energy_type)
         else:
             X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=.2,
@@ -652,7 +700,7 @@ def prediction(base_year, df_eulp, sw_test_base, target_years, sw_test_target,
             if sw_test_base or sw_save_metrics:
                 # Make predictions on the test data
                 Y_pred = rf_model.predict(X_test)
-                test_fit('base', base_year, prefix, upgrade, bldg_id, rf_model,
+                test_fit('base', base_year, prefix, upgrade_tag, bldg_id, rf_model,
                          Y_test, Y_pred, X_train, sw_save_metrics, output_dir,
                          sw_save_fit, sw_show_fit, i, df_meta, Y, start_index,
                          end_index, energy_type)
@@ -779,7 +827,7 @@ def prediction(base_year, df_eulp, sw_test_base, target_years, sw_test_target,
         Y = df_eulp_targ_bldg[energy_type].reset_index(drop=True)
         Y_pred = predictions[energy_type]
 
-        test_fit('targ', target_years[0], prefix, upgrade, bldg_id, rf_model, Y_test,
+        test_fit('targ', target_years[0], prefix, upgrade_tag, bldg_id, rf_model, Y_test,
                  Y_pred, X_Predict, sw_save_metrics, output_dir, sw_save_fit,
                  sw_show_fit, i, df_meta, Y, start_index, end_index,
                  energy_type)
@@ -813,7 +861,8 @@ ts_agg = process_chunk_agg(
 df_eulp_targ = (
     process_chunk_agg(
         target_run, upgrade, counties, bsq_cols, sw_comstock, chunk_states,
-        sw_savings_shape, df_meta, applied_only
+        sw_savings_shape, df_meta, applied_only,
+        query_label='target',
     )
     if sw_test_target and sw_apply_regression
     else None
@@ -1027,7 +1076,7 @@ df_meta.insert(len(bsq_cols) + 1, 'gas_heating_MWh',
 
 # Save metadata DataFrame to CSV file
 df_meta.to_csv(os.path.join(output_dir,
-    f'{prefix}meta_upgrade{upgrade}_{start_index:04}-{end_index:04}.csv'))
+    f'{prefix}meta_upgrade{upgrade_tag}_{start_index:04}-{end_index:04}.csv'))
 
 # Round df_eulp to 6 decimal places TODO: Move to `prediction` fxn?
 df_eulp = df_eulp.round(6)
@@ -1039,7 +1088,7 @@ df_eulp = df_eulp.groupby(model_year, group_keys=False).head(8760)
 
 # Save concatenated energy consumption DataFrame (hour x bldg) to CSV file
 df_eulp.to_csv(os.path.join(output_dir,
-    f'{prefix}eulp_hvac_elec_MWh_upgrade{upgrade}_'
+    f'{prefix}eulp_hvac_elec_MWh_upgrade{upgrade_tag}_'
     f'{start_index:04}-{end_index:04}.csv'))
 
 print('\nChunk done at:', dt.datetime.now())

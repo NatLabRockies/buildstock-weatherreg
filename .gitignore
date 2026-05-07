@@ -7,3 +7,7 @@ inputs/
 .venv/
 __pycache__/
 *.pyc
+slurm-*.out
+.bsq_cache
+.claude
+validation_outputs*/
