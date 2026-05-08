@@ -39,6 +39,9 @@ import calendar
 from pathlib import Path
 import shutil
 import re
+import argparse
+import json
+import itertools
 
 
 TARGET_YEAR = 2018
@@ -217,7 +220,16 @@ def select_best_middle_worst(series: pd.Series, k: int = 3):
     return {"best": best, "middle": middle, "worst": worst}
 
 
-def load_csv(path: Path):
+def load_csv(path: Path, year: int = None):
+    """Load an aggregated EULP CSV, optionally truncating to a single year.
+
+    Reg files concatenate multiple target years (e.g., 2018 + 2012) when the
+    spec's `target_year` is a list; ref files contain only one year. Passing
+    `year=N` filters rows to only that model year, which is required when
+    comparing a multi-year reg against a single-year ref. EULP convention:
+    timestamp marks end-of-period, so a row's true model year is
+    `(timestamp - 1hr).year` (Jan 1 00:00 belongs to the prior year).
+    """
     df = pd.read_csv(path)
     if df.empty:
         raise SystemExit(f"No data in {path}")
@@ -234,6 +246,13 @@ def load_csv(path: Path):
     df = df.set_index(ts_col)
     # If there are duplicate timestamps, keep the last occurrence to match prior dict overwrite behavior.
     df = df[~df.index.duplicated(keep="last")]
+    if year is not None:
+        model_year = (df.index - pd.Timedelta(hours=1)).year
+        before = len(df)
+        df = df[model_year == year]
+        log(f"  filtered to year {year}: {len(df):,}/{before:,} rows kept")
+        if df.empty:
+            raise SystemExit(f"No rows for year {year} in {path}")
     return counties, df[counties]
 
 
@@ -412,22 +431,36 @@ def plot_specific_county_scatters(df_ref: pd.DataFrame, df_reg: pd.DataFrame, co
         plot_hourly_scatter(df_ref[idx], df_reg[idx], out_path, title=title)
 
 
-def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
+def run_comparison(ref_path: Path, reg_path: Path, comp_name: str,
+                   target_year: int = None, slug: str = None):
+    """Run one ref-vs-reg comparison.
+
+    target_year, if provided, is used to truncate the reg file (which may
+    contain multiple years) to just the year that matches ref. ref files
+    are typically single-year so this is a no-op for them, but applying it
+    symmetrically keeps the alignment honest.
+
+    slug, if provided, is used as the comparison output subfolder name
+    instead of slugifying comp_name. Useful when callers want a deterministic
+    folder name like `validation_ref2012_reg_b2018`.
+    """
     global OUTPUT_SUBDIR
     log(f"=== run_comparison: {comp_name} ===")
     log(f"  ref: {ref_path}")
     log(f"  reg: {reg_path}")
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    comp_slug = slugify(comp_name or f"{ref_path.stem}_vs_{reg_path.stem}")
+    if target_year is not None:
+        log(f"  target_year: {target_year} (reg will be truncated)")
+    OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
+    comp_slug = slug if slug else slugify(comp_name or f"{ref_path.stem}_vs_{reg_path.stem}")
     OUTPUT_SUBDIR = OUTPUT_DIR / comp_slug
     ensure_output_dir(get_out_dir())
     log(f"  output dir: {get_out_dir()}")
 
     log("loading ref CSV...")
-    counties_ref, df_ref_raw = load_csv(ref_path)
+    counties_ref, df_ref_raw = load_csv(ref_path, year=target_year)
     log(f"  loaded ref: {len(df_ref_raw):,} rows x {len(counties_ref):,} counties")
     log("loading reg CSV...")
-    counties_reg, df_reg_raw = load_csv(reg_path)
+    counties_reg, df_reg_raw = load_csv(reg_path, year=target_year)
     log(f"  loaded reg: {len(df_reg_raw):,} rows x {len(counties_reg):,} counties")
     if counties_ref != counties_reg:
         raise SystemExit("Header mismatch")
@@ -1011,17 +1044,106 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str):
     log(f"DONE — report at {report_path.resolve()}")
 
 
+def build_comparisons_from_switches(switches_path: Path):
+    """Build the comparison set from a switches JSON file.
+
+    For each upgrade_id in run_specs, takes the cross-product of ref specs
+    (apply_regression=False) and reg specs (apply_regression=True), producing
+    one comparison per pair. The ref's `base_year` is the comparison year;
+    reg files (which may carry multiple target years) are truncated to that
+    year at load time.
+
+    Returns (comparisons, output_dir) where output_dir is the run dir from
+    the switches file (used as the parent for the per-comparison subfolders).
+    """
+    with open(switches_path) as f:
+        switches = json.load(f)
+    output_dir = Path(switches['output_dir'])
+    is_comstock = switches.get('comstock', False)
+    bldg_type = 'com' if is_comstock else 'res'
+
+    # Group specs by upgrade_id; only pair refs and regs within the same
+    # upgrade so we never compare a baseline against an HVAC measure or vice
+    # versa.
+    by_upgrade = {}
+    for spec in switches['run_specs']:
+        by_upgrade.setdefault(spec['upgrade_id'], []).append(spec)
+
+    comparisons = []
+    for upgrade_id, specs in by_upgrade.items():
+        refs = [s for s in specs if not s['apply_regression']]
+        regs = [s for s in specs if s['apply_regression']]
+        for ref, reg in itertools.product(refs, regs):
+            ref_y = ref['base_year']
+            reg_y = reg['base_year']
+            ref_tag = f"{upgrade_id}_ref_b{ref_y}"
+            reg_tag = f"{upgrade_id}_reg_b{reg_y}"
+            ref_path = output_dir / f"agg_{bldg_type}_eulp_hvac_elec_GWh_upgrade{ref_tag}.csv"
+            reg_path = output_dir / f"agg_{bldg_type}_eulp_hvac_elec_GWh_upgrade{reg_tag}.csv"
+            comparisons.append({
+                'name': f"upgrade {upgrade_id}: ref_b{ref_y} vs reg_b{reg_y}",
+                'ref': ref_path,
+                'reg': reg_path,
+                'target_year': ref_y,
+                'slug': f"validation_ref{ref_y}_reg_b{reg_y}",
+            })
+    return comparisons, output_dir
+
+
 def main():
-    if not COMPARISONS:
-        raise SystemExit("No comparisons defined in COMPARISONS")
-    log(f"main(): {len(COMPARISONS)} comparison(s) queued")
-    for i, comp in enumerate(COMPARISONS, 1):
-        ref_path = Path(comp["ref"])
-        reg_path = Path(comp["reg"])
-        comp_name = comp.get("name") or f"{ref_path.stem} vs {reg_path.stem}"
-        log(f"main(): starting comparison {i}/{len(COMPARISONS)}: {comp_name}")
-        run_comparison(ref_path, reg_path, comp_name)
-        log(f"main(): finished comparison {i}/{len(COMPARISONS)}")
+    parser = argparse.ArgumentParser(
+        description="Run validation comparisons. With --switches, builds the "
+                    "ref×reg cross-product from a run's switches JSON; without "
+                    "it, falls back to the hardcoded COMPARISONS list."
+    )
+    parser.add_argument(
+        '--switches', type=Path,
+        help="Path to a run's switches JSON. Comparisons are built from "
+             "run_specs (cross of refs × regs per upgrade_id). Output "
+             "subfolders named 'validation_ref<RY>_reg_b<BY>' land directly "
+             "in the run's output_dir.",
+    )
+    args = parser.parse_args()
+
+    global OUTPUT_DIR
+
+    if args.switches:
+        comparisons, run_output_dir = build_comparisons_from_switches(args.switches)
+        OUTPUT_DIR = run_output_dir
+        log(f"main(): switches mode — output_dir={OUTPUT_DIR}")
+        log(f"main(): built {len(comparisons)} comparison(s) from {args.switches}")
+        if not comparisons:
+            raise SystemExit("No ref/reg pairs found in run_specs")
+
+        for i, comp in enumerate(comparisons, 1):
+            comp_name = comp['name']
+            log(f"main(): starting comparison {i}/{len(comparisons)}: {comp_name}")
+            # Skip if either input is missing on disk (e.g., agg job failed).
+            missing = []
+            if not comp['ref'].exists():
+                missing.append(f"ref: {comp['ref']}")
+            if not comp['reg'].exists():
+                missing.append(f"reg: {comp['reg']}")
+            if missing:
+                log(f"  [skip] {comp_name}: missing input(s): {'; '.join(missing)}")
+                continue
+            run_comparison(
+                comp['ref'], comp['reg'], comp_name,
+                target_year=comp['target_year'], slug=comp['slug'],
+            )
+            log(f"main(): finished comparison {i}/{len(comparisons)}")
+    else:
+        # Legacy hardcoded-list path.
+        if not COMPARISONS:
+            raise SystemExit("No comparisons: provide --switches or populate COMPARISONS")
+        log(f"main(): legacy mode — {len(COMPARISONS)} comparison(s) queued")
+        for i, comp in enumerate(COMPARISONS, 1):
+            ref_path = Path(comp["ref"])
+            reg_path = Path(comp["reg"])
+            comp_name = comp.get("name") or f"{ref_path.stem} vs {reg_path.stem}"
+            log(f"main(): starting comparison {i}/{len(COMPARISONS)}: {comp_name}")
+            run_comparison(ref_path, reg_path, comp_name)
+            log(f"main(): finished comparison {i}/{len(COMPARISONS)}")
     log("main(): all comparisons done, returning")
 
 

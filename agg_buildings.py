@@ -20,25 +20,42 @@ import shutil
 import pandas as pd
 
 
+def _chunks_eulp_dir(bldg_path: str, upgrade_tag: str) -> str:
+    '''Path to the per-spec EULP chunks subfolder.
+
+    upgrade_tag is `<upgrade_id>_<reg|ref>_b<base_year>`. The folder
+    convention is `chunks_<reg|ref>_b<base_year>` — i.e., the upgrade_tag
+    minus its leading `<upgrade_id>_` segment.
+    '''
+    suffix = upgrade_tag.split('_', 1)[1]  # e.g. "reg_b2018"
+    return os.path.join(bldg_path, f'chunks_{suffix}')
+
+
 def aggregate(bldg_path: str, bldg_type: str, upgrade_tag: str) -> str:
     '''Stitch chunk MWh CSVs for one (bldg_type, upgrade_tag) into a single GWh CSV.
 
-    Returns the output file path. Raises FileNotFoundError if no chunk files
-    are found.
+    Returns the output file path. Raises FileNotFoundError if the chunks
+    subfolder is missing or contains no matching files.
     '''
     bldg_tech = f'upgrade{upgrade_tag}'
+    chunks_dir = _chunks_eulp_dir(bldg_path, upgrade_tag)
+
+    if not os.path.isdir(chunks_dir):
+        raise FileNotFoundError(
+            f'Chunks subfolder not found: {chunks_dir}'
+        )
 
     # Trailing underscore on the prefix is required: without it,
     # `upgrade0_reg_*.csv` would also match a `upgrade0_*` query.
     chunk_prefix = f'{bldg_type}_eulp_hvac_elec_MWh_{bldg_tech}_'
     eulp_files = [
-        f'{bldg_path}/{f}'
-        for f in os.listdir(bldg_path)
+        os.path.join(chunks_dir, f)
+        for f in os.listdir(chunks_dir)
         if f.startswith(chunk_prefix)
     ]
     if not eulp_files:
         raise FileNotFoundError(
-            f'No chunk files found matching {chunk_prefix}* in {bldg_path}'
+            f'No chunk files matching {chunk_prefix}* in {chunks_dir}'
         )
 
     ls_df = []

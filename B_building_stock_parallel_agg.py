@@ -202,6 +202,31 @@ def run_task(cmd):
                             stdout=sys.stdout.buffer, stderr=sys.stderr.buffer)
     return result.returncode
 
+
+def _compress_array_indices(indices):
+    """Format an iterable of ints as a SLURM --array index spec with ranges.
+
+    Examples
+    --------
+    >>> _compress_array_indices([0, 1, 2, 5, 7, 8, 9])
+    '0-2,5,7-9'
+    >>> _compress_array_indices([3])
+    '3'
+    """
+    indices = sorted(set(indices))
+    if not indices:
+        return ''
+    parts = []
+    start = prev = indices[0]
+    for i in indices[1:]:
+        if i == prev + 1:
+            prev = i
+            continue
+        parts.append(str(start) if start == prev else f'{start}-{prev}')
+        start = prev = i
+    parts.append(str(start) if start == prev else f'{start}-{prev}')
+    return ','.join(parts)
+
 if __name__ == "__main__":
     # Detect if running on HPC
     # hpc = bool(int(os.environ.get('REEDS_USE_SLURM', 0)))
@@ -232,14 +257,12 @@ if __name__ == "__main__":
     with open(switches_path, 'r') as _f:
         _pre_switch = json.load(_f)
     output_dir = _pre_switch['output_dir']
-    if os.path.exists(output_dir):
-        raise FileExistsError(
-            f"Output directory already exists: {output_dir}. Refusing to "
-            f"clobber prior results. Edit `output_dir` in {switches_path} "
-            f"or remove/rename the existing directory."
-        )
-    os.makedirs(output_dir, exist_ok=False)
-    logger.info("Created output directory at %s", output_dir)
+    is_resume = os.path.isdir(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    if is_resume:
+        logger.info("RESUMING existing run at %s", output_dir)
+    else:
+        logger.info("Created output directory at %s", output_dir)
 
     ## Function to exclude directories and files that shouldn't be copied into outputs
     EXCLUDE_DIRS = {'outputs', '__pycache__', 'aggregates'}
@@ -252,9 +275,20 @@ if __name__ == "__main__":
             or any(fnmatch.fnmatch(name, pat) for pat in EXCLUDE_PATTERNS)
         ]
 
-    ## Copy script_dir into output_dir/inputs (output_dir already exists; copytree creates the inputs/ leaf).
-    shutil.copytree(script_dir, f'{output_dir}/inputs', ignore=exclude_dir)
-    logger.info("Copied input files into %s/inputs", output_dir)
+    ## Copy script_dir into output_dir/inputs unless we're resuming (in which
+    ## case the snapshot is already there from the prior submission).
+    inputs_dir = f'{output_dir}/inputs'
+    if os.path.isdir(inputs_dir):
+        logger.info("Reusing existing inputs/ snapshot at %s", inputs_dir)
+    else:
+        shutil.copytree(script_dir, inputs_dir, ignore=exclude_dir)
+        logger.info("Copied input files into %s", inputs_dir)
+
+    ## Co-locate per-job slurm-out files with the run. Chunk and agg sbatches
+    ## write directly here via --output=<slurm_out_dir>/slurm-%x_%j.out. The
+    ## launcher's own slurm-out stays at script_dir (where the user submitted).
+    slurm_out_dir = f'{output_dir}/slurm-out'
+    os.makedirs(slurm_out_dir, exist_ok=True)
     ## Canonicalize the chosen switches file at inputs/switches_agg.json so D
     ## (and any other consumer) finds it at one well-known path. Overwrites
     ## whatever the copytree default placed there.
@@ -302,7 +336,12 @@ if __name__ == "__main__":
     n_bldngs = switch['n_bldngs'] # 'all' for all buildings, 'assign' for assigned building id list from csv
     comstock_year, comstock_release = switch['version_comstock'][0], switch['version_comstock'][1]
     resstock_year, resstock_release = switch['version_resstock'][0], switch['version_resstock'][1]
-    chunk_size = switch['chunk_size'] # number of combinations to pull at a time
+    # Top-level chunk_size acts as the default for any spec that doesn't set
+    # its own. Each run_spec may override via `chunk_size` to pick a value
+    # appropriate for that spec's compute profile (e.g., bigger for direct
+    # ref pulls to reduce Athena query count, smaller for reg specs to keep
+    # per-chunk wall time under the SLURM time limit).
+    chunk_size = switch['chunk_size'] # default number of combinations to pull at a time
     bsq_cols = switch['com_bsq_cols'] if sw_comstock else switch['res_bsq_cols'] # columns to group by
     applied_only = switch['applied_only'] # if `True`, only buildings with upgrade applied
 
@@ -373,6 +412,12 @@ if __name__ == "__main__":
     logger.info("Saved spatial_tract_lookup_table.csv to output directory.")
 
     # MAIN
+    prefix = 'com_' if sw_comstock else 'res_'
+    bldg_type = prefix.rstrip('_')
+    # Cross-spec accumulators. Hoisted out of the loop so they're defined even
+    # when every spec early-skips (resume with all aggs already produced).
+    tasks = []          # local-mode multiprocessing commands
+    local_specs = []    # local-mode aggregation roster (per spec needing agg)
     for spec_index, spec in enumerate(run_specs):
         upgrade = spec['upgrade_id']
         apply_regression = spec['apply_regression']
@@ -380,6 +425,25 @@ if __name__ == "__main__":
         target_year = spec['target_year']  # noqa: F841 (D consumes via spec_index)
         regression_tag = 'reg' if apply_regression else 'ref'
         upgrade_tag = f'{upgrade}_{regression_tag}_b{base_year}'
+
+        # ===== RESUME CHECK 1 (per-spec) =====
+        # If the agg GWh CSV is already on disk, this spec is fully done. Skip
+        # the entire S3 metadata pull + chunking + array submission. Saves
+        # hours of compute when re-running after a partial-failure recovery.
+        expected_agg = os.path.join(
+            output_dir,
+            f'agg_{bldg_type}_eulp_hvac_elec_GWh_upgrade{upgrade_tag}.csv',
+        )
+        if os.path.exists(expected_agg):
+            logger.info("[skip] %s already complete (agg present at %s)", upgrade_tag, expected_agg)
+            continue
+
+        # Resolve effective chunk_size: per-spec override > top-level default.
+        # A spec value of -1 falls back to the stock-type default like the
+        # top-level switch does.
+        spec_chunk_size = spec.get('chunk_size', chunk_size)
+        if spec_chunk_size == -1:
+            spec_chunk_size = 500 if not sw_comstock else 50
 
         # Per-spec dataset URLs (base_year now varies per spec).
         url_comstock = f'{url_base}{comstock_year}/comstock_amy{base_year}_release_{comstock_release}/'
@@ -599,7 +663,7 @@ if __name__ == "__main__":
 
         # Save single upgrade DataFrame to CSV file (one per spec; the
         # `<id>_<reg|ref>` tag keeps regressed and direct runs separate).
-        prefix = 'com_' if sw_comstock else 'res_'
+        # Idempotent: overwrites any prior copy (deterministic from buildstock data).
         meta_path = os.path.join(
             output_dir, f'{prefix}meta_master_upgrade{upgrade_tag}.csv')
         df_meta.to_csv(meta_path)
@@ -607,75 +671,120 @@ if __name__ == "__main__":
         unique_counties = df_meta[county].unique()
 
         # Build the chunks list (used by both HPC and local paths). Each
-        # entry is (start_index, end_index, counties_str).
+        # entry is (start_index, end_index, counties_str). Note: chunk
+        # indices are stable across resumes because df_meta is sorted
+        # deterministically; do not change chunk_size mid-run or files
+        # from prior submissions become orphaned.
         chunks = []
-        for i in range(0, len(unique_counties), chunk_size):
+        for i in range(0, len(unique_counties), spec_chunk_size):
             start_index = i
-            end_index = i + chunk_size
-            county_chunk = unique_counties[i:i + chunk_size]
+            end_index = i + spec_chunk_size
+            county_chunk = unique_counties[i:i + spec_chunk_size]
             counties_str = '_'.join(county_chunk)
             chunks.append((start_index, end_index, counties_str))
 
-        # Initialize cross-iteration accumulators on first spec.
-        try:
-            tasks  # Check if it exists
-        except NameError:
-            tasks = []
-        try:
-            local_specs  # Check if it exists
-        except NameError:
-            local_specs = []
+        # ===== RESUME CHECK 2 (per-chunk) =====
+        # Detect which chunks have already produced their EULP MWh CSV; we
+        # only resubmit the missing ones.
+        chunks_eulp_dir = os.path.join(
+            output_dir, f'chunks_{regression_tag}_b{base_year}'
+        )
+        existing_indices = set()
+        for idx, (s_idx, e_idx, _) in enumerate(chunks):
+            chunk_file = os.path.join(
+                chunks_eulp_dir,
+                f'{prefix}eulp_hvac_elec_MWh_upgrade{upgrade_tag}_'
+                f'{s_idx:04d}-{e_idx:04d}.csv',
+            )
+            if os.path.exists(chunk_file):
+                existing_indices.add(idx)
+        missing_indices = [i for i in range(len(chunks)) if i not in existing_indices]
+        n_done, n_total, n_missing = len(existing_indices), len(chunks), len(missing_indices)
+        if n_done > 0:
+            logger.info(
+                "[resume] %s: %d/%d chunks already done; %d missing",
+                upgrade_tag, n_done, n_total, n_missing,
+            )
+        else:
+            logger.info("[fresh] %s: %d chunks to compute", upgrade_tag, n_total)
 
         if hpc:
             if not chunks:
                 logger.warning("No counties to chunk for upgrade_tag %s; skipping array submission.", upgrade_tag)
                 continue
 
-            # Write the per-spec manifest. C reads its row by SLURM_ARRAY_TASK_ID.
+            # Always (re)write the manifest. Same content if chunking is unchanged.
             manifest_path = f'{output_dir}/inputs/manifest_upgrade{upgrade_tag}.csv'
             with open(manifest_path, 'w') as mf:
                 mf.write('chunk_idx,start_index,end_index,counties_str\n')
                 for idx, (s_idx, e_idx, c_str) in enumerate(chunks):
                     mf.write(f'{idx},{s_idx},{e_idx},{c_str}\n')
-            logger.info("Wrote manifest with %d chunks at %s", len(chunks), manifest_path)
+            logger.info("Wrote manifest with %d chunks at %s", n_total, manifest_path)
 
-            # Submit one array job per spec, capped at 100 concurrent tasks.
-            n_chunks = len(chunks)
-            result = subprocess.run([
-                'sbatch',
-                f'--job-name={prefix}chunk_{upgrade_tag}',
-                f'--array=0-{n_chunks - 1}%100',
-                './C_run_bldg_chunk_agg.sh',
-                manifest_path, meta_path, str(upgrade), prefix,
-                output_dir, script_dir, str(spec_index),
-            ], check=True, capture_output=True, text=True)
-            array_job_id = result.stdout.strip().split()[-1]
-            logger.info(
-                "Submitted array job %s with %d tasks (%%100 concurrency) for upgrade_tag %s",
-                array_job_id, n_chunks, upgrade_tag,
-            )
+            if n_missing == 0:
+                # All chunks present but agg missing — submit agg directly.
+                # No array dependency needed; chunks already exist on disk.
+                agg_result = subprocess.run([
+                    'sbatch',
+                    f'--job-name={prefix}agg_{upgrade_tag}',
+                    f'--output={slurm_out_dir}/slurm-%x_%j.out',
+                    './F_aggregate_chunks.sh',
+                    output_dir, bldg_type, upgrade_tag,
+                ], check=True, capture_output=True, text=True)
+                agg_job_id = agg_result.stdout.strip().split()[-1]
+                logger.info(
+                    "Queued aggregation job %s for upgrade_tag %s (no array; all chunks present)",
+                    agg_job_id, upgrade_tag,
+                )
+            else:
+                # Submit array for missing chunks only; agg depends on it.
+                # _compress_array_indices yields "0-2,5,7-9" style; SLURM
+                # accepts these as a sparse array spec.
+                array_spec = _compress_array_indices(missing_indices)
+                result = subprocess.run([
+                    'sbatch',
+                    f'--job-name={prefix}chunk_{upgrade_tag}',
+                    f'--array={array_spec}%50',
+                    f'--output={slurm_out_dir}/slurm-%x_%A_%a.out',
+                    './C_run_bldg_chunk_agg.sh',
+                    manifest_path, meta_path, str(upgrade), prefix,
+                    output_dir, script_dir, str(spec_index),
+                ], check=True, capture_output=True, text=True)
+                array_job_id = result.stdout.strip().split()[-1]
+                logger.info(
+                    "Submitted array job %s for upgrade_tag %s with %d tasks (array=%s, %%50 concurrency)",
+                    array_job_id, upgrade_tag, n_missing, array_spec,
+                )
 
-            # Aggregation depends on the entire array completing successfully.
-            # afterok on an array is satisfied only when every task exits 0;
-            # --kill-on-invalid-dep=yes cancels the agg job if any task fails.
-            bldg_type = prefix.rstrip('_')  # 'res' or 'com'
-            agg_result = subprocess.run([
-                'sbatch',
-                f'--job-name={prefix}agg_{upgrade_tag}',
-                f'--dependency=afterok:{array_job_id}',
-                '--kill-on-invalid-dep=yes',
-                './F_aggregate_chunks.sh',
-                output_dir, bldg_type, upgrade_tag,
-            ], check=True, capture_output=True, text=True)
-            agg_job_id = agg_result.stdout.strip().split()[-1]
-            logger.info(
-                "Queued aggregation job %s for upgrade_tag %s (depends on array %s)",
-                agg_job_id, upgrade_tag, array_job_id,
-            )
+                # Aggregation depends on the array completing successfully.
+                # afterok on an array is satisfied only when every task exits 0;
+                # --kill-on-invalid-dep=yes cancels the agg job if any task fails.
+                agg_result = subprocess.run([
+                    'sbatch',
+                    f'--job-name={prefix}agg_{upgrade_tag}',
+                    f'--dependency=afterok:{array_job_id}',
+                    '--kill-on-invalid-dep=yes',
+                    f'--output={slurm_out_dir}/slurm-%x_%j.out',
+                    './F_aggregate_chunks.sh',
+                    output_dir, bldg_type, upgrade_tag,
+                ], check=True, capture_output=True, text=True)
+                agg_job_id = agg_result.stdout.strip().split()[-1]
+                logger.info(
+                    "Queued aggregation job %s for upgrade_tag %s (depends on array %s)",
+                    agg_job_id, upgrade_tag, array_job_id,
+                )
+
+                # Stagger between array submissions so multiple specs don't
+                # all start hammering Athena in the same window. Belt-and-
+                # suspenders alongside D's `sleep_seconds` randomized startup.
+                logger.info("Sleeping 60s before submitting next spec's array...")
+                pytime.sleep(60)
 
         else:
-            # Local: queue each chunk for the multiprocessing pool below.
-            for start_index, end_index, counties_str in chunks:
+            # Local: queue each missing chunk for the multiprocessing pool below.
+            for idx, (start_index, end_index, counties_str) in enumerate(chunks):
+                if idx in existing_indices:
+                    continue  # already done from a prior run
                 cmd = [
                     sys.executable,
                     f'{output_dir}/inputs/D_process_chunk_agg.py',
@@ -687,10 +796,13 @@ if __name__ == "__main__":
             if upgrade_tag not in {s['upgrade_tag'] for s in local_specs}:
                 local_specs.append({'upgrade_tag': upgrade_tag, 'prefix': prefix})
 
-    # Local: run all chunks in parallel, then aggregate per spec in series.
-    if not hpc and tasks:
-        with multiprocessing.Pool(processes=num_cores) as pool:
-            pool.map(run_task, tasks)
+    # Local: run any remaining chunks in parallel, then aggregate any specs
+    # that need it. The two are gated separately because resume can yield
+    # local_specs without tasks (all chunks already on disk, agg still pending).
+    if not hpc:
+        if tasks:
+            with multiprocessing.Pool(processes=num_cores) as pool:
+                pool.map(run_task, tasks)
         for s in local_specs:
             tag = s['upgrade_tag']
             bldg_type = s['prefix'].rstrip('_')

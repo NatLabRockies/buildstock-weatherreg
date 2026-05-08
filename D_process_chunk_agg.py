@@ -123,6 +123,17 @@ comparison_year = (
 regression_tag = 'reg' if sw_apply_regression else 'ref'
 upgrade_tag = f'{upgrade}_{regression_tag}_b{base_year}'
 
+# Per-spec subfolders inside the run output dir. D writes its three kinds of
+# chunk artifacts directly into these (rather than the run-dir root) so the
+# top-level layout stays browsable across many concurrent specs. Master
+# metadata and aggregated GWh outputs continue to live at the run-dir root.
+# Concurrent makedirs from many array tasks is safe with exist_ok=True.
+chunks_eulp_dir = os.path.join(output_dir, f'chunks_{regression_tag}_b{base_year}')
+chunks_meta_dir = os.path.join(output_dir, f'chunks_meta_b{base_year}')
+chunks_sql_dir = os.path.join(output_dir, f'chunks_sql_{regression_tag}_{base_year}')
+for _d in (chunks_eulp_dir, chunks_meta_dir, chunks_sql_dir):
+    os.makedirs(_d, exist_ok=True)
+
 print('start_index:', start_index)
 print('end_index:', end_index)
 print('meta_path:', meta_path)
@@ -267,29 +278,80 @@ def _process_one_building(args):
 
     return bldg_id, df_out, hvac_sum, ng_sum
 
-def query_execution(query, my_run, retries=5, delay=10):
-    """
-    Helper function to retry query execution for transient failures.
+# Substrings that indicate an error is transient (worth retrying). Matched
+# case-insensitively against the exception message — covers Athena/S3
+# throttling, transient TLS/socket failures, and AWS slow-down responses.
+_TRANSIENT_ERROR_MARKERS = (
+    'HIVE_S3_THROTTLING',
+    'Status Code: 503',
+    'Status Code: 429',
+    'SlowDown',
+    'TooManyRequests',
+    'Throttling',
+    'ThrottlingException',
+    'RequestLimitExceeded',
+    'timed out',
+    'TimeoutError',
+    'Connection reset',
+    'BrokenPipe',
+    'ServiceUnavailable',
+)
+
+
+def query_execution(query, my_run, max_attempts=6, base_delay=30, max_delay=600):
+    """Run a BSQ query with exponential backoff + jitter on transient failures.
+
+    Athena/S3 returns throttling 503s ("HIVE_S3_THROTTLING") when many parallel
+    tasks query at once. Total retry budget is ~25 min worst case (well within
+    a 4hr chunk wall) — generous enough to wait out a real throttle window.
+    Per-retry jitter (±50%) desyncs concurrent retries across array tasks so we
+    don't re-stampede AWS in lockstep.
+
+    Non-transient errors (e.g., SQL syntax errors) fail fast — no point eating
+    the retry budget on a permanent failure.
 
     Parameters:
-    query (str): The query string to execute.
-    my_run (BuildStockQuery): The BuildStockQuery object.
-    retries (int): Number of retry attempts.
-    delay (int): Delay in seconds between retries.
+        query: The query string to execute.
+        my_run: The BuildStockQuery object.
+        max_attempts: Total attempts including the first (default 6).
+        base_delay: Seconds for the first backoff (default 30; doubled each retry).
+        max_delay: Cap on per-retry sleep regardless of exponent (default 600).
 
     Returns:
-    DataFrame: The query results.
+        DataFrame: the query results.
+
+    Raises:
+        Exception: re-raises the last exception when retries are exhausted, or
+        immediately on non-transient errors.
     """
-    for attempt in range(retries):
+    for attempt in range(max_attempts):
         try:
-            print(f"Executing query: {query} \n attempt {attempt + 1}...")
+            print(f"Executing query (attempt {attempt + 1}/{max_attempts}): {query}\n")
             return my_run.execute(query)
         except Exception as e:
-            print(f"Query execution failed: {e}")
-            if attempt < retries - 1:
-                time.sleep(delay)
-            else:
-                raise  # Re-raise the exception if out of retries
+            err_str = str(e).lower()
+            is_last = attempt == max_attempts - 1
+            is_transient = any(m.lower() in err_str for m in _TRANSIENT_ERROR_MARKERS)
+
+            print(f"Query attempt {attempt + 1}/{max_attempts} failed: {e}")
+
+            if is_last:
+                print(f"Out of retries after {max_attempts} attempts. Re-raising.")
+                raise
+            if not is_transient:
+                # Likely permanent error (e.g., SQL syntax) — failing fast keeps
+                # the developer feedback loop tight.
+                print("Error does not look transient; failing fast (no retry).")
+                raise
+
+            # Exponential backoff: base * 2^attempt, capped at max_delay.
+            base = min(base_delay * (2 ** attempt), max_delay)
+            # Full ±50% jitter to spread concurrent retries across array tasks.
+            jitter = base * 0.5 * (2 * random.random() - 1)
+            sleep_for = max(1.0, base + jitter)
+            print(f"Transient error; sleeping {sleep_for:.1f}s before retry "
+                  f"{attempt + 2}/{max_attempts}...")
+            time.sleep(sleep_for)
 
 def write_pretty_sql(sql, path):
     """Write `sql` to `path`, pretty-printed via sqlglot when possible.
@@ -362,7 +424,7 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
         elec_enduse = [item + '..kwh' for item in elec_enduse]
         natural_gas = [enduse + '..kwh' for enduse in natural_gas]
 
-    restrict_county = ('in.nhgis_county_gisjoin' if sw_comstock else 
+    restrict_county = ('in.nhgis_county_gisjoin' if sw_comstock else
                         'in.county')
     my_run = BuildStockQuery(**aws_run_type)
     ts_agg_query = my_run.query(
@@ -380,7 +442,7 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
 
     sql_suffix = '' if query_label == 'base' else f'_{query_label}'
     sql_path = os.path.join(
-        output_dir,
+        chunks_sql_dir,
         f'{prefix}meta_upgrade{upgrade_tag}_{start_index:04}-{end_index:04}{sql_suffix}.sql'
     )
     write_pretty_sql(ts_agg_query, sql_path)
@@ -1075,7 +1137,7 @@ df_meta.insert(len(bsq_cols) + 1, 'gas_heating_MWh',
                df_meta['natural_gas.heating.energy_consumption'])
 
 # Save metadata DataFrame to CSV file
-df_meta.to_csv(os.path.join(output_dir,
+df_meta.to_csv(os.path.join(chunks_meta_dir,
     f'{prefix}meta_upgrade{upgrade_tag}_{start_index:04}-{end_index:04}.csv'))
 
 # Round df_eulp to 6 decimal places TODO: Move to `prediction` fxn?
@@ -1087,7 +1149,7 @@ model_year = (df_eulp.index - pd.Timedelta(hours=1)).year
 df_eulp = df_eulp.groupby(model_year, group_keys=False).head(8760)
 
 # Save concatenated energy consumption DataFrame (hour x bldg) to CSV file
-df_eulp.to_csv(os.path.join(output_dir,
+df_eulp.to_csv(os.path.join(chunks_eulp_dir,
     f'{prefix}eulp_hvac_elec_MWh_upgrade{upgrade_tag}_'
     f'{start_index:04}-{end_index:04}.csv'))
 
