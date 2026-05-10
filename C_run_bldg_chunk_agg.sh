@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=geohc
-#SBATCH --time=04:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mem=246064    # RAM in MB; up to 246064 for normal or 2000000 for bigmem on kestrel
 #SBATCH --qos=high
 

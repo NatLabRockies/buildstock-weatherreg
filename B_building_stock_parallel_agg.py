@@ -275,14 +275,18 @@ if __name__ == "__main__":
             or any(fnmatch.fnmatch(name, pat) for pat in EXCLUDE_PATTERNS)
         ]
 
-    ## Copy script_dir into output_dir/inputs unless we're resuming (in which
-    ## case the snapshot is already there from the prior submission).
+    ## Always refresh the inputs/ snapshot from the current source tree.
+    ## Resume scenarios often involve hot-fixes to D/agg_buildings.py between
+    ## submissions; chunks read these files from the snapshot at runtime, so
+    ## a stale snapshot means new chunks would silently run old code. The
+    ## in-flight chunks have their D loaded in memory and aren't affected by
+    ## the rewrite. Per-chunk provenance lives in slurm-out/ (preserved).
     inputs_dir = f'{output_dir}/inputs'
     if os.path.isdir(inputs_dir):
-        logger.info("Reusing existing inputs/ snapshot at %s", inputs_dir)
-    else:
-        shutil.copytree(script_dir, inputs_dir, ignore=exclude_dir)
-        logger.info("Copied input files into %s", inputs_dir)
+        shutil.rmtree(inputs_dir)
+        logger.info("Refreshing inputs/ snapshot at %s (resume)", inputs_dir)
+    shutil.copytree(script_dir, inputs_dir, ignore=exclude_dir)
+    logger.info("Copied input files into %s", inputs_dir)
 
     ## Co-locate per-job slurm-out files with the run. Chunk and agg sbatches
     ## write directly here via --output=<slurm_out_dir>/slurm-%x_%j.out. The
@@ -670,18 +674,54 @@ if __name__ == "__main__":
 
         unique_counties = df_meta[county].unique()
 
-        # Build the chunks list (used by both HPC and local paths). Each
-        # entry is (start_index, end_index, counties_str). Note: chunk
-        # indices are stable across resumes because df_meta is sorted
-        # deterministically; do not change chunk_size mid-run or files
-        # from prior submissions become orphaned.
+        # Bldg_id count per source county. For ResStock this is always 1
+        # (each source has one bldg_id row); for ComStock 2025.2 it varies
+        # widely — average ~60 (source × as_simulated pairs), but heavy
+        # sources can have several hundred. Used below to bin-pack chunks
+        # by total compute (bldg_ids) instead of by source-county count.
+        bldg_per_source = df_meta.groupby(county).size().reindex(unique_counties)
+
+        # Bin-pack source counties into chunks targeting `spec_chunk_size`
+        # bldg_ids per chunk. Source counties stay together (so D's BSQ
+        # filter and weather logic remain unchanged), but each chunk's
+        # source count varies to keep workload roughly balanced. Without
+        # this, ComStock chunks vary 5× in compute time and the heaviest
+        # ones bust the SLURM wall (we hit this on the may8_2_2026 run).
+        #
+        # Filenames still use start_index/end_index in unique_counties
+        # order, so resume's existence check works the same way: as long
+        # as `spec_chunk_size` and the source-count distribution are stable
+        # across submits, the same chunks are produced and resume detects
+        # already-completed files correctly.
         chunks = []
-        for i in range(0, len(unique_counties), spec_chunk_size):
-            start_index = i
-            end_index = i + spec_chunk_size
-            county_chunk = unique_counties[i:i + spec_chunk_size]
-            counties_str = '_'.join(county_chunk)
-            chunks.append((start_index, end_index, counties_str))
+        chunk_bldg_counts = []
+        cur_start = 0
+        cur_end = 0
+        cur_counties = []
+        cur_count = 0
+        for src in unique_counties:
+            n = int(bldg_per_source.loc[src])
+            if cur_count + n > spec_chunk_size and cur_counties:
+                chunks.append((cur_start, cur_end, '_'.join(cur_counties)))
+                chunk_bldg_counts.append(cur_count)
+                cur_start = cur_end
+                cur_counties = []
+                cur_count = 0
+            cur_counties.append(src)
+            cur_end += 1
+            cur_count += n
+        if cur_counties:
+            chunks.append((cur_start, cur_end, '_'.join(cur_counties)))
+            chunk_bldg_counts.append(cur_count)
+
+        if chunks:
+            logger.info(
+                "Bin-packed %d source counties / %d bldg_ids into %d chunks "
+                "(target=%d bldg_ids/chunk; actual: min=%d, max=%d, mean=%.0f)",
+                len(unique_counties), int(bldg_per_source.sum()), len(chunks),
+                spec_chunk_size, min(chunk_bldg_counts), max(chunk_bldg_counts),
+                sum(chunk_bldg_counts) / len(chunk_bldg_counts),
+            )
 
         # ===== RESUME CHECK 2 (per-chunk) =====
         # Detect which chunks have already produced their EULP MWh CSV; we
@@ -744,7 +784,7 @@ if __name__ == "__main__":
                 result = subprocess.run([
                     'sbatch',
                     f'--job-name={prefix}chunk_{upgrade_tag}',
-                    f'--array={array_spec}%50',
+                    f'--array={array_spec}%200',
                     f'--output={slurm_out_dir}/slurm-%x_%A_%a.out',
                     './C_run_bldg_chunk_agg.sh',
                     manifest_path, meta_path, str(upgrade), prefix,
@@ -752,7 +792,7 @@ if __name__ == "__main__":
                 ], check=True, capture_output=True, text=True)
                 array_job_id = result.stdout.strip().split()[-1]
                 logger.info(
-                    "Submitted array job %s for upgrade_tag %s with %d tasks (array=%s, %%50 concurrency)",
+                    "Submitted array job %s for upgrade_tag %s with %d tasks (array=%s, %%200 concurrency)",
                     array_job_id, upgrade_tag, n_missing, array_spec,
                 )
 

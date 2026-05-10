@@ -493,9 +493,42 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
 
     return ts_agg
 
+# Constant: EST offset from UTC (no DST). BuildStockQuery returns EULP hourly
+# timestamps in EST, so weather data — typically stored in the location's
+# local standard time per EPW spec — must be rolled to align with EST before
+# being fed into the regression. Mainland US (excluding AK/HI, which we
+# filter earlier) spans UTC offsets -5..-8, giving shifts of 0..3 hours.
+_EST_UTC_OFFSET = -5
+
+
+def _read_epw_timezone(epw_path):
+    """Return the timezone offset (hours from UTC) from an EPW file's header.
+
+    The LOCATION line is always the first line of an EPW file, comma-separated:
+        LOCATION,<city>,<state>,<country>,<src>,<wmo>,<lat>,<lon>,<TZ>,<elev>
+    Field 8 is the UTC offset (e.g., -6 for CST). Returns float.
+    """
+    with open(epw_path) as f:
+        line1 = f.readline()
+    parts = line1.strip().split(',')
+    if len(parts) < 9 or parts[0].upper() != 'LOCATION':
+        raise ValueError(f"Unexpected EPW header line in {epw_path}: {line1!r}")
+    try:
+        return float(parts[8])
+    except ValueError as e:
+        raise ValueError(
+            f"Could not parse TZ offset from EPW header field 8 in {epw_path}: {parts[8]!r}"
+        ) from e
+
+
 def weather_data(url_base, year, county_id):
     """
     Retrieves weather data from a URL and performs data preprocessing.
+
+    The EPW file stores hourly weather in the location's local standard time.
+    BSQ-derived EULP energy timestamps are in EST. We roll the EPW columns
+    by `EST_offset - local_offset` so each weather row corresponds to the
+    same EST hour as the matching EULP row.
 
     Parameters:
     url_base (str): The base URL for the weather data.
@@ -512,6 +545,11 @@ def weather_data(url_base, year, county_id):
     if not os.path.isfile(epw_path):
         raise FileNotFoundError(f'Local EPW file not found: {epw_path}')
 
+    # Compute the EST shift from the EPW's LOCATION header. Standard time
+    # → standard time, integer-hour shift; no DST math needed.
+    tz_offset = _read_epw_timezone(epw_path)
+    shift_hours = int(round(_EST_UTC_OFFSET - tz_offset))
+
     # EPW has 8 metadata lines, then hourly data with no column header.
     df_epw = pd.read_csv(epw_path, skiprows=8, header=None)
     if df_epw.empty:
@@ -527,19 +565,31 @@ def weather_data(url_base, year, county_id):
         'Diffuse Horizontal Radiation [W/m2]': pd.to_numeric(df_epw.iloc[:, 15], errors='coerce')
     })
 
+    # Roll all weather columns forward by `shift_hours` so each row aligns
+    # with the corresponding EST hour. np.roll wraps around: the first
+    # `shift_hours` slots take values from the year's last `shift_hours`
+    # rows (e.g., for PST→EST shift=+3, Jan 1 01:00–03:00 EST receives
+    # Dec 31 22:00–24:00 PST data, which IS the physically-correct
+    # late-Dec-evening data for those EST hours).
+    if shift_hours != 0:
+        for col in df_weather.columns:
+            df_weather[col] = np.roll(df_weather[col].values, shift_hours)
+
     # Build a time index by row count so downstream features stay consistent.
+    # After the roll, this index represents EST hours.
     df_weather.index = pd.date_range(
         start=f'{year}-01-01 01:00:00',
         periods=len(df_weather),
         freq='h'
     )
 
-    # Add a column for the time of day as a float
+    # Time-of-day feature is now EST hour-of-day (the regression's target Y
+    # is in EST, so X must use the same time-of-day labels).
     df_weather['Time of Day'] = df_weather.index.hour
-    # Add a column for weekend or weekday as a binary value
     df_weather['Weekend'] = df_weather.index.weekday.isin([5, 6]).astype(int)
 
-    # Adding lagged features for the dry bulb temperature
+    # Lagged features built AFTER the EST roll so they reference the
+    # EST-aligned temperature series.
     for lag in lag_hours:
         df_weather[f'Dry Bulb Temperature Lag {lag}h'] = (
             df_weather['Dry Bulb Temperature [°C]'].shift(lag)

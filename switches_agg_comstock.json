@@ -1,5 +1,5 @@
 {
-    "output_dir": "/projects/geohc/radhikar/outputs/comstock_cross_val_may8_2026",
+    "output_dir": "/projects/geohc/radhikar/outputs/comstock_cross_val_may9_2026",
     "testmode": false,
     "run_specs": [
         {"upgrade_id": 0,
@@ -8,7 +8,7 @@
          "base_run": "comstock_amy2018_2025_2",
          "target_year": ["2018", "2012"],
          "target_run": "comstock_amy2012_2025_2",
-         "chunk_size": 75
+         "chunk_size": 1500
          },
          {"upgrade_id": 0,
          "apply_regression": false,
@@ -16,7 +16,7 @@
          "base_run": "comstock_amy2018_2025_2",
          "target_year": ["2018"],
          "target_run": "comstock_amy2012_2025_2",
-         "chunk_size": 200
+         "chunk_size": 12000
          },
          {"upgrade_id": 0,
          "base_year": 2012,
@@ -24,7 +24,7 @@
          "target_year": ["2018", "2012"],
          "target_run": "comstock_amy2012_2025_2",
          "apply_regression": true,
-         "chunk_size": 75
+         "chunk_size": 1500
          },
          {"upgrade_id": 0,
          "base_year": 2012,
@@ -32,7 +32,7 @@
          "target_year": ["2012"],
          "target_run": "comstock_amy2012_2025_2",
          "apply_regression": false,
-         "chunk_size": 200
+         "chunk_size": 12000
          }
     ],
     "version_comstock": ["2025", "2"],

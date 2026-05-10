@@ -665,7 +665,155 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str,
         peak_min_idx = county_peak_pct.idxmin()
 
     nat_nmae_pct = nat_nmae * 100 if np.isfinite(nat_nmae) else float("nan")
-    log("metrics computed; starting plots")
+    log("metrics computed; writing data exports")
+
+    data_dir = get_out_dir() / "data"
+    data_dir.mkdir(exist_ok=True)
+
+    summary_export = pd.DataFrame(
+        [
+            ("annual_ref_GWh", annual_ref),
+            ("annual_reg_GWh", annual_reg),
+            ("annual_pct_diff", annual_pct),
+            ("national_hourly_corr", hourly_corr),
+            ("national_daily_corr", daily_corr),
+            ("national_mae_GWh", nat_mae),
+            ("national_nmae", nat_nmae),
+            ("national_rmse_GWh", nat_rmse),
+            ("peak_ref_GWh", peak_ref_val),
+            ("peak_reg_GWh", peak_reg_val),
+            ("peak_ref_timestamp", peak_ref_ts),
+            ("peak_reg_timestamp", peak_reg_ts),
+            ("peak_pct_diff", peak_diff_pct),
+            ("load_factor_ref", lf_ref),
+            ("load_factor_reg", lf_reg),
+            ("county_pct_mean_abs", mean_abs),
+            ("county_pct_median_abs", median_abs),
+            ("county_mae_mean_GWh", mean_mae),
+            ("county_mae_median_GWh", median_mae),
+            ("county_nmae_mean", mean_nmae),
+            ("county_nmae_median", median_nmae),
+            ("county_rmse_mean_GWh", mean_rmse),
+            ("county_rmse_median_GWh", median_rmse),
+            ("county_peak_pct_mean", peak_mean),
+            ("county_peak_pct_median", peak_median),
+            ("ba_pct_mean_abs", ba_mean_abs),
+            ("ba_pct_median_abs", ba_median_abs),
+            ("ba_mae_mean_GWh", mean_ba_mae),
+            ("ba_mae_median_GWh", median_ba_mae),
+            ("ba_nmae_mean", mean_ba_nmae),
+            ("ba_nmae_median", median_ba_nmae),
+            ("ba_rmse_mean_GWh", mean_ba_rmse),
+            ("ba_rmse_median_GWh", median_ba_rmse),
+            ("mape_county_month_mean_pct", mean_mape_cm),
+            ("mape_county_month_median_pct", median_mape_cm),
+            ("mape_ba_month_mean_pct", mean_mape_ba),
+            ("mape_ba_month_median_pct", median_mape_ba),
+        ],
+        columns=["metric", "value"],
+    )
+    summary_export.to_csv(data_dir / "summary.csv", index=False)
+
+    pd.DataFrame(
+        {
+            "month": list(range(1, 13)),
+            "ref_GWh": monthly_nat_ref.values,
+            "reg_GWh": monthly_nat_reg.values,
+            "pct_diff": monthly_pct.values,
+        }
+    ).to_csv(data_dir / "monthly_national.csv", index=False)
+
+    pd.DataFrame(
+        {
+            "season": SEASON_ORDER,
+            "ref_GWh": [season_ref[s] for s in SEASON_ORDER],
+            "reg_GWh": [season_reg[s] for s in SEASON_ORDER],
+            "pct_diff": [seasonal_pct[s] for s in SEASON_ORDER],
+        }
+    ).to_csv(data_dir / "seasonal_national.csv", index=False)
+
+    pd.DataFrame(monthly_diurnal_corr, columns=["month", "correlation"]).to_csv(
+        data_dir / "diurnal_corr_by_month.csv", index=False
+    )
+
+    threshold_export = []
+    for p in PCTL:
+        ref_v = ref_pct.loc[p / 100]
+        reg_v = reg_pct.loc[p / 100]
+        pdiff = (reg_v - ref_v) / ref_v * 100 if ref_v else float("nan")
+        threshold_export.append((p, ref_v, reg_v, pdiff))
+    pd.DataFrame(threshold_export, columns=["percentile", "ref_GWh", "reg_GWh", "pct_diff"]).to_csv(
+        data_dir / "threshold_percentiles.csv", index=False
+    )
+
+    # County metadata is joined into per-county exports so downstream consumers
+    # don't have to re-fetch the ReEDS county2zone mapping themselves.
+    meta_cols = county_meta[["county_name", "state", "ba"]] if not county_meta.empty else None
+
+    county_annual_export = pd.DataFrame(
+        {
+            "fips": county_ann_ref.index,
+            "ref_GWh": county_ann_ref.values,
+            "reg_GWh": county_ann_reg.values,
+            "pct_diff": county_pct.reindex(county_ann_ref.index).values,
+        }
+    )
+    if meta_cols is not None:
+        county_annual_export = county_annual_export.merge(
+            meta_cols, left_on="fips", right_index=True, how="left"
+        )
+    county_annual_export.to_csv(data_dir / "county_annual.csv", index=False)
+
+    county_error_export = pd.DataFrame(
+        {
+            "fips": county_mae.index,
+            "mae_GWh": county_mae.values,
+            "nmae": county_nmae.reindex(county_mae.index).values,
+            "rmse_GWh": county_rmse.reindex(county_mae.index).values,
+            "peak_pct_diff": county_peak_pct.reindex(county_mae.index).values,
+        }
+    )
+    if meta_cols is not None:
+        county_error_export = county_error_export.merge(
+            meta_cols, left_on="fips", right_index=True, how="left"
+        )
+    county_error_export.to_csv(data_dir / "county_error_metrics.csv", index=False)
+
+    pd.DataFrame(
+        {
+            "timestamp": nat_ref.index,
+            "ref_GWh": nat_ref.values,
+            "reg_GWh": nat_reg.values,
+        }
+    ).to_csv(data_dir / "hourly_national.csv", index=False)
+
+    if not df_ref_ba.empty:
+        ba_annual_export = pd.DataFrame(
+            {
+                "ba": ba_ann_ref.index,
+                "ref_GWh": ba_ann_ref.values,
+                "reg_GWh": ba_ann_reg.values,
+                "pct_diff": ba_pct.reindex(ba_ann_ref.index).values,
+                "state": [ba_states.get(b, "") for b in ba_ann_ref.index],
+            }
+        )
+        ba_annual_export.to_csv(data_dir / "ba_annual.csv", index=False)
+
+        ba_error_export = pd.DataFrame(
+            {
+                "ba": ba_mae.index,
+                "mae_GWh": ba_mae.values,
+                "nmae": ba_nmae.reindex(ba_mae.index).values,
+                "rmse_GWh": ba_rmse.reindex(ba_mae.index).values,
+                "state": [ba_states.get(b, "") for b in ba_mae.index],
+            }
+        )
+        ba_error_export.to_csv(data_dir / "ba_error_metrics.csv", index=False)
+
+        df_ref_ba.to_csv(data_dir / "hourly_ba_ref.csv")
+        df_reg_ba.to_csv(data_dir / "hourly_ba_reg.csv")
+
+    log(f"data exports written to {data_dir}; starting plots")
 
     log("  plot: monthly_percent_diff.png")
     plot_monthly_pct(monthly_pct, get_out_dir() / "monthly_percent_diff.png")
