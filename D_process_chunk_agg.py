@@ -103,7 +103,9 @@ upgrade = sys.argv[4]
 prefix = sys.argv[5]
 output_dir = sys.argv[6]
 script_dir = sys.argv[7]
-counties_str = sys.argv[8]
+# Underscore-joined list of weather-location values (as_sim GISJOINs for
+# ComStock 2025.2; county codes for ResStock and older ComStock).
+weather_locs_str = sys.argv[8]
 spec_index = int(sys.argv[9])
 
 # Import switches first so we can resolve per-spec values from spec_index.
@@ -141,7 +143,7 @@ print('upgrade:', upgrade)
 print('prefix:', prefix)
 print('output_dir:', output_dir)
 print('script_dir:', script_dir)
-print('counties_str:', counties_str)
+print('weather_locs_str:', weather_locs_str)
 print('spec_index:', spec_index)
 print('apply_regression:', sw_apply_regression)
 print('base_year:', base_year)
@@ -199,24 +201,27 @@ def _is_hpc() -> bool:
                     os.environ.get('REEDS_USE_SLURM', 0)
                     ))
 
-# Determine county column based on comstock/resstock and version for HPC
-def _county_of(bid):
-    if sw_comstock and comstock_year == "2025" and comstock_release == "2":
-        return df_meta.loc[bid, 'in.as_simulated_nhgis_county_gisjoin']
-    else:
-        return df_meta.loc[bid, county]
-
-# Process one building worker function - for HPC multiprocessing
-def _process_one_building(args):
+# Process one weather-location worker function — for HPC multiprocessing.
+# Each weather location (an as_sim GISJOIN for ComStock 2025.2; a county code
+# for ResStock and older ComStock) trains ONE RF on the as_sim-aggregate
+# hourly load and returns predicted hourly profiles for HVAC and NG.
+# Per-bldg_id share-out happens after all locations finish.
+def _process_one_location(args):
     """
-    Worker: run predictions for one building and return:
-      - building HVAC timeseries df (timestamp_EST x 1 column)
-      - annual sums for HVAC and NG for df_meta
+    Worker: train RF on aggregated per-location hourly Y, return:
+      - location identifier
+      - HVAC hourly DataFrame (timestamp + HVAC.elec columns)
+      - NG hourly DataFrame (timestamp + ng columns)
+      - HVAC annual sum at this location for the comparison_year
+      - NG annual sum at this location for the comparison_year
     Notes:
       - Metrics and plots are disabled in workers to avoid file contention.
+      - The fifth positional arg of `prediction()` is named bldg_id but is
+        only used to (a) tag log lines, (b) index df_eulp_targ when
+        sw_test_target=True. We pass `loc` here; df_eulp_targ_local is
+        pre-aggregated per loc by the caller.
     """
-    (bldg_id,
-     county_id,
+    (loc,
      df_eulp_pred,
      df_eulp_targ_local,
      base_year,
@@ -231,12 +236,12 @@ def _process_one_building(args):
     sw_show_fit = False
     sw_save_fit = False
 
-    # Load weather just-in-time for this building.
-    weather_base_df = weather_data(weather_data_base, base_year, county_id)
+    # Load weather once for this location.
+    weather_base_df = weather_data(weather_data_base, base_year, loc)
     target_weather_frames = []
     target_year_by_row = []
     for yr in target_years:
-        year_df = weather_data(weather_data_base, yr, county_id)
+        year_df = weather_data(weather_data_base, yr, loc)
         target_weather_frames.append(year_df)
         target_year_by_row.extend([yr] * len(year_df))
     weather_target_df = pd.concat(target_weather_frames, ignore_index=True)
@@ -245,7 +250,7 @@ def _process_one_building(args):
     # HVAC
     df_eulp_hvac = prediction(
         base_year, df_eulp_pred, sw_test_base, target_years, sw_test_target,
-        'HVAC.elec', weather_base_df, weather_target_df, bldg_id, df_eulp_targ_local,
+        'HVAC.elec', weather_base_df, weather_target_df, loc, df_eulp_targ_local,
         target_year_by_row
     )
     hvac_sum = (
@@ -260,7 +265,7 @@ def _process_one_building(args):
     df_eulp_ng = prediction(
         base_year, df_eulp_pred, sw_test_base, target_years, sw_test_target,
         'natural_gas.heating.energy_consumption',
-        weather_base_df, weather_target_df, bldg_id, df_eulp_targ_local,
+        weather_base_df, weather_target_df, loc, df_eulp_targ_local,
         target_year_by_row
     )
     ng_sum = (
@@ -271,12 +276,7 @@ def _process_one_building(args):
         ].sum().round(6)
     )
 
-    # Shape HVAC df to timestamp_EST x bldg_id
-    df_out = df_eulp_hvac.copy()
-    df_out.columns = ['timestamp_EST', f'{bldg_id}']
-    df_out.set_index('timestamp_EST', inplace=True)
-
-    return bldg_id, df_out, hvac_sum, ng_sum
+    return loc, df_eulp_hvac, df_eulp_ng, hvac_sum, ng_sum
 
 # Substrings that indicate an error is transient (worth retrying). Matched
 # case-insensitively against the exception message — covers Athena/S3
@@ -371,19 +371,22 @@ def write_pretty_sql(sql, path):
         f.write(formatted)
 
 
-def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
-                      chunk_states, sw_savings_shape, df_meta, applied_only,
-                      query_label='base'):
+def process_chunk_agg(run_type, upgrade, weather_locs, weather_col, bsq_cols,
+                      sw_comstock, chunk_states, sw_savings_shape, df_meta,
+                      applied_only, query_label='base'):
     """
     This function aggregates timeseries data for a specific run type, upgrade,
-    enduse, and set of counties.
+    enduse, and set of weather locations.
     It then processes the aggregated data to calculate the 'HVAC.elec' column
     and returns the DataFrame.
 
     Parameters:
     run_type (str): The type of run to process.
     upgrade (int): The upgrade ID to process.
-    counties (list): The counties to process.
+    weather_locs (list): The weather-location values to filter on (as_sim
+        GISJOINs for ComStock 2025.2; county codes for other stocks).
+    weather_col (str): The column in the BSQ schema to filter on (e.g.
+        'in.as_simulated_nhgis_county_gisjoin' or 'in.county').
     bsq_cols (list): The columns to group by when aggregating.
     sw_comstock (bool): Whether the data is from ComStock (True) or ResStock.
     chunk_states (list): The states to process.
@@ -398,7 +401,7 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
     ts_agg (DataFrame): Aggregated timeseries HVAC electricity.
     """
     aws_cols = [c for c in bsq_cols]
-    aws_counties = counties.copy()
+    aws_weather_locs = weather_locs.copy()
     aws_run_type = run_types[run_type].copy()
     natural_gas = ['out.natural_gas.heating.energy_consumption']
 
@@ -424,15 +427,16 @@ def process_chunk_agg(run_type, upgrade, counties, bsq_cols, sw_comstock,
         elec_enduse = [item + '..kwh' for item in elec_enduse]
         natural_gas = [enduse + '..kwh' for enduse in natural_gas]
 
-    restrict_county = ('in.nhgis_county_gisjoin' if sw_comstock else
-                        'in.county')
     my_run = BuildStockQuery(**aws_run_type)
     ts_agg_query = my_run.query(
         upgrade_id=upgrade,
         applied_only=False,
         enduses=elec_enduse + natural_gas,
+        # Filter by weather_col directly. For ComStock 2025.2 this pulls
+        # every source-county served by these as_sims; for ResStock and
+        # older ComStock weather_col == county so behavior is unchanged.
         restrict=[('state', chunk_states),
-                  (restrict_county, aws_counties),
+                  (weather_col, aws_weather_locs),
                  ],
         timestamp_grouping_func="hour",
         group_by=aws_cols,
@@ -950,12 +954,23 @@ def prediction(base_year, df_eulp, sw_test_base, target_years, sw_test_target,
 # Load the metadata DataFrame
 df_meta = pd.read_csv(meta_path)
 
-# Set `county` based on `sw_comstock` value
+# Set `county` based on `sw_comstock` value (used for output collapse)
 county = 'in.nhgis_county_gisjoin' if sw_comstock else 'in.county'
 
-# Subset df_meta to the specified range of counties
-counties = counties_str.split('_')
-df_meta = df_meta[df_meta[county].isin(counties)]
+# Weather-location column: each unique value owns one EPW and gets one
+# trained RF per energy type. For ComStock 2025.2 this is the as_sim
+# county; for ResStock and older ComStock it's the county itself, in
+# which case the per-loc loop degenerates 1-to-1 with the per-county
+# loop the old code used.
+weather_col = (
+    'in.as_simulated_nhgis_county_gisjoin'
+    if (sw_comstock and comstock_year == "2025" and comstock_release == "2")
+    else county
+)
+
+# Subset df_meta to the specified weather locations (passed by B in manifest)
+weather_locs = weather_locs_str.split('_')
+df_meta = df_meta[df_meta[weather_col].isin(weather_locs)]
 
 # Get the unique states in the metadata DataFrame for process_chunk_agg fxn
 chunk_states = df_meta['in.state'].unique().tolist()
@@ -965,15 +980,15 @@ df_meta = df_meta.set_index('bldg_id')
 
 # Call function to get aggregate timeseries data
 ts_agg = process_chunk_agg(
-    base_run, upgrade, counties, bsq_cols, sw_comstock, chunk_states,
-    sw_savings_shape, df_meta, applied_only
+    base_run, upgrade, weather_locs, weather_col, bsq_cols, sw_comstock,
+    chunk_states, sw_savings_shape, df_meta, applied_only
 )
 
 # Grab the target year AWS data if sw_test_target else set as None
 df_eulp_targ = (
     process_chunk_agg(
-        target_run, upgrade, counties, bsq_cols, sw_comstock, chunk_states,
-        sw_savings_shape, df_meta, applied_only,
+        target_run, upgrade, weather_locs, weather_col, bsq_cols,
+        sw_comstock, chunk_states, sw_savings_shape, df_meta, applied_only,
         query_label='target',
     )
     if sw_test_target and sw_apply_regression
@@ -988,113 +1003,140 @@ df_meta['AWS_natural_gas.heating.energy_consumption'] = (
     ts_agg.groupby('bldg_id').apply(lambda x: (
     x['natural_gas.heating.energy_consumption'].iloc[:8760].sum())))
 
-# Create an empty list to store DataFrames for each building
-df_bldg = []
-
 if sw_apply_regression: # TODO: or `individual_building`?
-    # Parallel path (HPC only)
-    if _is_hpc():
-        # Build tasks
-        tasks = []
-        for bldg_id in df_meta.index:
-            county_id = _county_of(bldg_id)
-            df_eulp_pred = ts_agg.loc[bldg_id].copy()
-            tasks.append((
-                bldg_id,
-                county_id,
-                df_eulp_pred,
-                df_eulp_targ if sw_test_target and sw_apply_regression else None,
+    # === Per-weather-location training, then per-bldg_id share-out ===
+    #
+    # Reference math (HVAC; NG is symmetric):
+    #     M(a) = sum_{b: loc(b)=a} m(b)            # location annual
+    #     share(b) = m(b) / M(a)                    # 0 if M(a) == 0
+    #     predicted_bldg(b, h) = predicted_loc(loc(b), h) * share(b)
+    # where m(b) = AWS_HVAC.elec for bldg_id b (already populated above
+    # from the BSQ ts_agg we pulled).
+
+    # Map bldg_id -> weather_loc once. Used for grouping ts_agg and for the
+    # share-out loop. df_meta is indexed by bldg_id and unique.
+    bldg_to_loc = df_meta[weather_col].to_dict()
+
+    # Per-loc training Y: sum HVAC and NG hourly across all bldg_ids that
+    # share the location. This is the "as_sim aggregate hourly" the
+    # regression learns to predict.
+    ts_agg_pl = ts_agg.copy()
+    ts_agg_pl['__loc'] = ts_agg_pl.index.map(bldg_to_loc)
+    ts_agg_per_loc = (
+        ts_agg_pl.groupby(['__loc', 'timestamp'], as_index=False)[
+            ['HVAC.elec', 'natural_gas.heating.energy_consumption']
+        ].sum()
+        .sort_values(['__loc', 'timestamp'])
+        .reset_index(drop=True)
+    )
+
+    # Share denominators: the location's annual sums.
+    loc_annual_hvac = df_meta.groupby(weather_col)['AWS_HVAC.elec'].sum()
+    loc_annual_ng = df_meta.groupby(weather_col)[
+        'AWS_natural_gas.heating.energy_consumption'
+    ].sum()
+
+    # If sw_test_target is on we also need the actual target-year EULP
+    # aggregated to the loc level so prediction()'s test-fit branch can
+    # compare apples-to-apples.
+    if df_eulp_targ is not None:
+        df_eulp_targ_pl = df_eulp_targ.copy()
+        df_eulp_targ_pl['__loc'] = df_eulp_targ_pl.index.map(bldg_to_loc)
+        df_eulp_targ_per_loc = (
+            df_eulp_targ_pl.groupby(['__loc', 'timestamp'], as_index=False)[
+                ['HVAC.elec', 'natural_gas.heating.energy_consumption']
+            ].sum()
+            .sort_values(['__loc', 'timestamp'])
+            .set_index('__loc')
+        )
+    else:
+        df_eulp_targ_per_loc = None
+
+    unique_locs = df_meta[weather_col].unique().tolist()
+
+    def _build_loc_tasks():
+        for loc in unique_locs:
+            df_eulp_pred_loc = (
+                ts_agg_per_loc[ts_agg_per_loc['__loc'] == loc]
+                .drop(columns=['__loc'])
+                .reset_index(drop=True)
+            )
+            df_eulp_targ_for_loc = (
+                df_eulp_targ_per_loc.loc[[loc]]
+                if df_eulp_targ_per_loc is not None else None
+            )
+            yield (
+                loc,
+                df_eulp_pred_loc,
+                df_eulp_targ_for_loc,
                 base_year,
                 target_years,
                 sw_test_base,
-                sw_test_target
-            ))
+                sw_test_target,
+            )
 
-        # Pool size from CPU count with 4 CPU reserved for cap space
-        procs = 48
-        print(f'Using {procs} processes for regression out of {os.cpu_count()} possible.')
-
-        df_bldg = []
+    # Train + predict per loc.
+    pred_per_loc = {}
+    if _is_hpc():
+        tasks = list(_build_loc_tasks())
+        # Pool size: read SLURM_CPUS_PER_TASK so this scales between standard
+        # (48) and bigmem (104) profiles set by B at sbatch time. Falls back
+        # to os.cpu_count() then 48 if neither is available.
+        procs = int(
+            os.environ.get('SLURM_CPUS_PER_TASK')
+            or os.cpu_count()
+            or 48
+        )
+        print(
+            f'Using {procs} processes for {len(tasks)} per-loc regressions '
+            f'out of {os.cpu_count()} possible.'
+        )
         with ProcessPoolExecutor(max_workers=procs) as ex:
-            futures = [ex.submit(_process_one_building, t) for t in tasks]
+            futures = [ex.submit(_process_one_location, t) for t in tasks]
             for fut in as_completed(futures):
-                bldg_id, df_hvac, hvac_sum, ng_sum = fut.result()
-                df_bldg.append(df_hvac)
-                df_meta.loc[bldg_id, 'HVAC.elec'] = hvac_sum
-                df_meta.loc[bldg_id, 'natural_gas.heating.energy_consumption'] = ng_sum
-
-        df_eulp = pd.concat(df_bldg, axis=1)
-
-    # Serial path (local machine)
+                loc, df_hvac_loc, df_ng_loc, hvac_sum, ng_sum = fut.result()
+                pred_per_loc[loc] = (df_hvac_loc, df_ng_loc, hvac_sum, ng_sum)
     else:
-        # Loop through each building in the metadata DataFrame
-        for i, bldg_id in enumerate(df_meta.index):
-            # Get the county ID of the building
-            if sw_comstock and comstock_year == "2025" and comstock_release == "2":
-                county_id = df_meta.loc[
-                    bldg_id, 'in.as_simulated_nhgis_county_gisjoin'
-                ]
-            else:
-                county_id = df_meta.loc[bldg_id, county]
-
-            # Load weather just prior to regression for this county/building.
-            weather_base_df = weather_data(weather_data_base, base_year, county_id)
-            target_weather_frames = []
-            target_year_by_row = []
-            for yr in target_years:
-                year_df = weather_data(weather_data_base, yr, county_id)
-                target_weather_frames.append(year_df)
-                target_year_by_row.extend([yr] * len(year_df))
-            weather_target_df = pd.concat(target_weather_frames, ignore_index=True)
-            target_year_by_row = np.asarray(target_year_by_row)
-
-            # Get the EULP data for a specific building for use in the regressions
-            df_eulp_pred = ts_agg.loc[bldg_id].copy()
-
-            # HVAC ELECTRICITY
-            # Predict HVAC electricity energy consumption
-            df_eulp_hvac = prediction(
-                base_year, df_eulp_pred, sw_test_base, target_years, sw_test_target,
-                'HVAC.elec', weather_base_df, weather_target_df, bldg_id, df_eulp_targ,
-                target_year_by_row
+        # Serial path. `i` is referenced inside test_fit (loop counter
+        # heuristic for "is this the last building?"); per-loc training
+        # makes that heuristic less meaningful, so we set sw_save_metrics
+        # off implicitly via the worker.
+        for t in _build_loc_tasks():
+            loc, df_hvac_loc, df_ng_loc, hvac_sum, ng_sum = (
+                _process_one_location(t)
             )
+            pred_per_loc[loc] = (df_hvac_loc, df_ng_loc, hvac_sum, ng_sum)
 
-            # Error check: Add regressed annual HVAC.elec to df_meta for a bldg_id
-            df_meta.loc[bldg_id, 'HVAC.elec'] = (
-                df_eulp_hvac.loc[
-                    (df_eulp_hvac['timestamp'] - pd.Timedelta(hours=1)).dt.year
-                    == comparison_year,
-                    'HVAC.elec'
-                ].sum().round(6))
+    # Share-out: distribute predicted hourly per-loc to each bldg_id.
+    df_bldg = []
+    for bldg_id in df_meta.index:
+        loc = df_meta.loc[bldg_id, weather_col]
+        df_hvac_loc, df_ng_loc, hvac_loc_sum, ng_loc_sum = pred_per_loc[loc]
 
-            # Rename columns, including `HVAC.elec` to match the building ID
-            df_eulp_hvac.columns = ['timestamp_EST', f'{bldg_id}']
+        m_hvac = float(df_meta.loc[bldg_id, 'AWS_HVAC.elec'])
+        M_hvac = float(loc_annual_hvac.loc[loc])
+        share_hvac = (m_hvac / M_hvac) if M_hvac > 0 else 0.0
 
-            # Set the timestamp column to the index
-            df_eulp_hvac.set_index('timestamp_EST', inplace=True)
+        m_ng = float(df_meta.loc[bldg_id, 'AWS_natural_gas.heating.energy_consumption'])
+        M_ng = float(loc_annual_ng.loc[loc])
+        share_ng = (m_ng / M_ng) if M_ng > 0 else 0.0
 
-            # Append single building DataFrame to list of building DataFrames
-            df_bldg.append(df_eulp_hvac)
+        # HVAC hourly per bldg_id (only HVAC is written to the chunk EULP
+        # file; NG annuals go into df_meta below).
+        df_out = df_hvac_loc[['timestamp']].copy()
+        df_out[bldg_id] = df_hvac_loc['HVAC.elec'].values * share_hvac
+        df_out = df_out.rename(
+            columns={'timestamp': 'timestamp_EST'}
+        ).set_index('timestamp_EST')
+        df_bldg.append(df_out)
 
-            # NATURAL GAS
-            # Predict natural gas heating energy consumption
-            df_eulp_ng = prediction(
-                base_year, df_eulp_pred, sw_test_base, target_years, sw_test_target,
-                'natural_gas.heating.energy_consumption',
-                weather_base_df, weather_target_df, bldg_id, df_eulp_targ,
-                target_year_by_row
-            )
+        # df_meta annuals (used by the diagnostic ratio columns below)
+        df_meta.loc[bldg_id, 'HVAC.elec'] = round(hvac_loc_sum * share_hvac, 6)
+        df_meta.loc[bldg_id, 'natural_gas.heating.energy_consumption'] = (
+            round(ng_loc_sum * share_ng, 6)
+        )
 
-            # Add regressed annual ng to df_meta for a bldg_id
-            df_meta.loc[bldg_id, 'natural_gas.heating.energy_consumption'] = (
-                df_eulp_ng.loc[
-                    (df_eulp_ng['timestamp'] - pd.Timedelta(hours=1)).dt.year
-                    == comparison_year,
-                    'natural_gas.heating.energy_consumption'
-                ].sum().round(6))
-
-        # Concatenate all building DataFrames into a single DataFrame
-        df_eulp = pd.concat(df_bldg, axis=1)
+    df_eulp = pd.concat(df_bldg, axis=1)
 
 else:
     # If not applying regression, duplicate annual ng and HVAC columns

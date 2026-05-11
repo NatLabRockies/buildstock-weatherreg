@@ -672,54 +672,73 @@ if __name__ == "__main__":
             output_dir, f'{prefix}meta_master_upgrade{upgrade_tag}.csv')
         df_meta.to_csv(meta_path)
 
-        unique_counties = df_meta[county].unique()
-
-        # Bldg_id count per source county. For ResStock this is always 1
-        # (each source has one bldg_id row); for ComStock 2025.2 it varies
-        # widely — average ~60 (source × as_simulated pairs), but heavy
-        # sources can have several hundred. Used below to bin-pack chunks
-        # by total compute (bldg_ids) instead of by source-county count.
-        bldg_per_source = df_meta.groupby(county).size().reindex(unique_counties)
-
-        # Bin-pack source counties into chunks targeting `spec_chunk_size`
-        # bldg_ids per chunk. Source counties stay together (so D's BSQ
-        # filter and weather logic remain unchanged), but each chunk's
-        # source count varies to keep workload roughly balanced. Without
-        # this, ComStock chunks vary 5× in compute time and the heaviest
-        # ones bust the SLURM wall (we hit this on the may8_2_2026 run).
+        # Weather-location column. This is the key change vs. the previous
+        # source-county chunking: we group regression work by the column that
+        # determines the weather file (one EPW per value), so each chunk-task
+        # in D loads weather ONCE per location and trains ONE RF per location
+        # — instead of one per (source_county × as_sim) pair as before.
         #
-        # Filenames still use start_index/end_index in unique_counties
-        # order, so resume's existence check works the same way: as long
-        # as `spec_chunk_size` and the source-count distribution are stable
-        # across submits, the same chunks are produced and resume detects
-        # already-completed files correctly.
+        # For ResStock and pre-2025.2 ComStock, weather_col equals `county`
+        # (county owns its EPW), so chunking-by-weather_col reduces to
+        # chunking-by-county — i.e., the same physical chunks the old code
+        # produced. Only ComStock 2025.2 sees a real change (many source
+        # counties collapse onto one as_sim).
+        weather_col = (
+            'in.as_simulated_nhgis_county_gisjoin'
+            if (sw_comstock and comstock_year == "2025" and comstock_release == "2")
+            else county
+        )
+        unique_weather_locs = df_meta[weather_col].unique()
+
+        # Bldg_id count per weather-location (informational; not the bin-pack
+        # metric). For ResStock this is always 1; for ComStock 2025.2 it
+        # varies — an as_sim with 50 source counties contributes 50 bldg_ids
+        # that all roll up into one trained model.
+        bldg_per_loc = df_meta.groupby(weather_col).size().reindex(unique_weather_locs)
+
+        # Bin-pack by NUMBER OF LOCATIONS per chunk. Each location is one
+        # regression (one weather load + one RF training per energy type),
+        # so loc count is the right balance metric — bldg_id count would
+        # over-budget chunks where as_sims serve many source counties (the
+        # share-out work is cheap; the training is what costs minutes).
+        # Locations stay contiguous (filename indices reference the order of
+        # `unique_weather_locs` so resume's existence check is stable).
         chunks = []
+        chunk_loc_counts = []
         chunk_bldg_counts = []
         cur_start = 0
         cur_end = 0
-        cur_counties = []
-        cur_count = 0
-        for src in unique_counties:
-            n = int(bldg_per_source.loc[src])
-            if cur_count + n > spec_chunk_size and cur_counties:
-                chunks.append((cur_start, cur_end, '_'.join(cur_counties)))
-                chunk_bldg_counts.append(cur_count)
+        cur_locs = []
+        cur_loc_count = 0
+        cur_bldg_count = 0
+        for loc in unique_weather_locs:
+            if cur_loc_count + 1 > spec_chunk_size and cur_locs:
+                chunks.append((cur_start, cur_end, '_'.join(cur_locs)))
+                chunk_loc_counts.append(cur_loc_count)
+                chunk_bldg_counts.append(cur_bldg_count)
                 cur_start = cur_end
-                cur_counties = []
-                cur_count = 0
-            cur_counties.append(src)
+                cur_locs = []
+                cur_loc_count = 0
+                cur_bldg_count = 0
+            cur_locs.append(loc)
             cur_end += 1
-            cur_count += n
-        if cur_counties:
-            chunks.append((cur_start, cur_end, '_'.join(cur_counties)))
-            chunk_bldg_counts.append(cur_count)
+            cur_loc_count += 1
+            cur_bldg_count += int(bldg_per_loc.loc[loc])
+        if cur_locs:
+            chunks.append((cur_start, cur_end, '_'.join(cur_locs)))
+            chunk_loc_counts.append(cur_loc_count)
+            chunk_bldg_counts.append(cur_bldg_count)
 
         if chunks:
             logger.info(
-                "Bin-packed %d source counties / %d bldg_ids into %d chunks "
-                "(target=%d bldg_ids/chunk; actual: min=%d, max=%d, mean=%.0f)",
-                len(unique_counties), int(bldg_per_source.sum()), len(chunks),
-                spec_chunk_size, min(chunk_bldg_counts), max(chunk_bldg_counts),
+                "Bin-packed %d weather locations / %d bldg_ids into %d chunks "
+                "(target=%d locs/chunk; actual locs: min=%d, max=%d, mean=%.0f; "
+                "actual bldg_ids: min=%d, max=%d, mean=%.0f)",
+                len(unique_weather_locs), int(bldg_per_loc.sum()), len(chunks),
+                spec_chunk_size,
+                min(chunk_loc_counts), max(chunk_loc_counts),
+                sum(chunk_loc_counts) / len(chunk_loc_counts),
+                min(chunk_bldg_counts), max(chunk_bldg_counts),
                 sum(chunk_bldg_counts) / len(chunk_bldg_counts),
             )
 
@@ -754,19 +773,37 @@ if __name__ == "__main__":
                 continue
 
             # Always (re)write the manifest. Same content if chunking is unchanged.
+            # `weather_locs_str` is an underscore-joined list of values from
+            # `weather_col` (as_sim GISJOINs for ComStock 2025.2; county codes
+            # for ResStock and older ComStock). D filters df_meta and the BSQ
+            # ts_agg query by these to scope the chunk's training set.
             manifest_path = f'{output_dir}/inputs/manifest_upgrade{upgrade_tag}.csv'
             with open(manifest_path, 'w') as mf:
-                mf.write('chunk_idx,start_index,end_index,counties_str\n')
+                mf.write('chunk_idx,start_index,end_index,weather_locs_str\n')
                 for idx, (s_idx, e_idx, c_str) in enumerate(chunks):
                     mf.write(f'{idx},{s_idx},{e_idx},{c_str}\n')
             logger.info("Wrote manifest with %d chunks at %s", n_total, manifest_path)
 
+            # Chunk-worker profile is exported by slurm_defaults.sh (sourced
+            # in A_start_building_stock_parallel_agg.sh). Fallbacks match the
+            # historical standard-partition values so this still works if the
+            # launcher didn't source slurm_defaults.sh.
+            chunk_partition = os.environ.get('CHUNK_PARTITION', 'standard')
+            chunk_cpus = os.environ.get('CHUNK_CPUS', '48')
+            chunk_mem = os.environ.get('CHUNK_MEM_MB', '246064')
+            array_cap = os.environ.get('CHUNK_ARRAY_CONCURRENCY', '200')
+
             if n_missing == 0:
                 # All chunks present but agg missing — submit agg directly.
                 # No array dependency needed; chunks already exist on disk.
+                # --time passed explicitly so SBATCH_TIMELIMIT in the env
+                # (e.g. from slurm_defaults.sh) can't shrink it.
                 agg_result = subprocess.run([
                     'sbatch',
                     f'--job-name={prefix}agg_{upgrade_tag}',
+                    f'--partition={chunk_partition}',
+                    f'--mem={chunk_mem}',
+                    '--time=02:00:00',
                     f'--output={slurm_out_dir}/slurm-%x_%j.out',
                     './F_aggregate_chunks.sh',
                     output_dir, bldg_type, upgrade_tag,
@@ -781,10 +818,16 @@ if __name__ == "__main__":
                 # _compress_array_indices yields "0-2,5,7-9" style; SLURM
                 # accepts these as a sparse array spec.
                 array_spec = _compress_array_indices(missing_indices)
+                # --time passed explicitly so SBATCH_TIMELIMIT in the env
+                # (e.g. from slurm_defaults.sh) can't shrink it.
                 result = subprocess.run([
                     'sbatch',
                     f'--job-name={prefix}chunk_{upgrade_tag}',
-                    f'--array={array_spec}%200',
+                    f'--partition={chunk_partition}',
+                    f'--cpus-per-task={chunk_cpus}',
+                    f'--mem={chunk_mem}',
+                    '--time=03:00:00',
+                    f'--array={array_spec}%{array_cap}',
                     f'--output={slurm_out_dir}/slurm-%x_%A_%a.out',
                     './C_run_bldg_chunk_agg.sh',
                     manifest_path, meta_path, str(upgrade), prefix,
@@ -792,8 +835,10 @@ if __name__ == "__main__":
                 ], check=True, capture_output=True, text=True)
                 array_job_id = result.stdout.strip().split()[-1]
                 logger.info(
-                    "Submitted array job %s for upgrade_tag %s with %d tasks (array=%s, %%200 concurrency)",
+                    "Submitted array job %s for upgrade_tag %s with %d tasks "
+                    "(array=%s, %%%s concurrency, partition=%s, cpus=%s, mem=%sMB)",
                     array_job_id, upgrade_tag, n_missing, array_spec,
+                    array_cap, chunk_partition, chunk_cpus, chunk_mem,
                 )
 
                 # Aggregation depends on the array completing successfully.
@@ -802,6 +847,9 @@ if __name__ == "__main__":
                 agg_result = subprocess.run([
                     'sbatch',
                     f'--job-name={prefix}agg_{upgrade_tag}',
+                    f'--partition={chunk_partition}',
+                    f'--mem={chunk_mem}',
+                    '--time=02:00:00',
                     f'--dependency=afterok:{array_job_id}',
                     '--kill-on-invalid-dep=yes',
                     f'--output={slurm_out_dir}/slurm-%x_%j.out',
@@ -822,14 +870,14 @@ if __name__ == "__main__":
 
         else:
             # Local: queue each missing chunk for the multiprocessing pool below.
-            for idx, (start_index, end_index, counties_str) in enumerate(chunks):
+            for idx, (start_index, end_index, weather_locs_str) in enumerate(chunks):
                 if idx in existing_indices:
                     continue  # already done from a prior run
                 cmd = [
                     sys.executable,
                     f'{output_dir}/inputs/D_process_chunk_agg.py',
                     str(start_index), str(end_index), meta_path,
-                    str(upgrade), prefix, output_dir, script_dir, counties_str,
+                    str(upgrade), prefix, output_dir, script_dir, weather_locs_str,
                     str(spec_index),
                 ]
                 tasks.append(cmd)

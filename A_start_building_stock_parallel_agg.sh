@@ -1,7 +1,8 @@
 #!/bin/bash
 #SBATCH --account=geohc
-#SBATCH --time=02:00:00
-#SBATCH --mem=246064    # RAM in MB; up to 246064 for normal or 2000000 for bigmem on kestrel
+#SBATCH --partition=bigmem    # <-- single knob: flip to "standard" once Kestrel's standard pool is healthy again
+#SBATCH --time=05:00:00
+#SBATCH --mem=246064    # launcher only uses 1 CPU; mem here is just for B's Athena queries
 #SBATCH --qos=high
 
 # add >>> #SBATCH --qos=high <<< above for quicker launch at double AU cost
@@ -42,6 +43,16 @@ fi
 # Ensure uv is on PATH (adjust if installed elsewhere)
 export PATH="$HOME/.local/bin:$PATH"
 source /kfs2/shared-projects/buildstock/aws_credentials.sh
+# Derive chunk-worker profile (CHUNK_PARTITION/CPUS/MEM_MB/ARRAY_CONCURRENCY)
+# from the partition this launcher is running in. B reads these env vars when
+# building sbatch invocations for the C array and F aggregator.
+source ./slurm_defaults.sh
+# Unset srun-convenience defaults that would otherwise be inherited by B's
+# subprocess sbatch calls and OVERRIDE C/F's #SBATCH directives. Slurm
+# precedence is CLI > env > #SBATCH, so a leaked SBATCH_TIMELIMIT=00:20:00
+# silently caps chunk jobs to 20 min (this hit us once already).
+unset SBATCH_TIMELIMIT SLURM_TIMELIMIT
+echo "Chunk profile: partition=$CHUNK_PARTITION cpus=$CHUNK_CPUS mem_mb=$CHUNK_MEM_MB array_cap=$CHUNK_ARRAY_CONCURRENCY"
 # aws sso login
 
 uv run B_building_stock_parallel_agg.py "$switches_path"

@@ -1,8 +1,10 @@
 #!/bin/bash
 #SBATCH --account=geohc
 #SBATCH --time=02:00:00
-#SBATCH --mem=246064    # RAM in MB; up to 246064 for normal or 2000000 for bigmem on kestrel
 #SBATCH --qos=high
+
+# Partition / --mem are passed by B at sbatch time (matches the chunk profile
+# active on the launcher).
 
 bldg_path="$1"
 bldg_type="$2"

@@ -1,13 +1,14 @@
 #!/bin/bash
 #SBATCH --account=geohc
 #SBATCH --time=12:00:00
-#SBATCH --mem=246064    # RAM in MB; up to 246064 for normal or 2000000 for bigmem on kestrel
 #SBATCH --qos=high
 
+# Partition / --mem / --cpus-per-task are passed by B at sbatch time so they
+# can flex between standard (48c / 246GB) and bigmem (104c / 2TB) profiles.
 # add >>> #SBATCH --qos=high <<< above for quicker launch at double AU cost
 
 # This script runs as a SLURM array task. The chunk-specific args (start_index,
-# end_index, counties_str) are read from a manifest CSV using
+# end_index, weather_locs_str) are read from a manifest CSV using
 # $SLURM_ARRAY_TASK_ID; the rest are passed positionally by B.
 manifest_path=$1
 meta_path=$2
@@ -26,8 +27,8 @@ if [ ! -f "$manifest_path" ]; then
   exit 1
 fi
 
-# Manifest format: chunk_idx,start_index,end_index,counties_str (header on row 1).
-# counties_str contains underscores but no commas, so f4- safely captures it.
+# Manifest format: chunk_idx,start_index,end_index,weather_locs_str (header on row 1).
+# weather_locs_str contains underscores but no commas, so f4- safely captures it.
 row=$(awk -F, -v id="$SLURM_ARRAY_TASK_ID" 'NR > 1 && $1 == id { print; exit }' "$manifest_path")
 if [ -z "$row" ]; then
   echo "ERROR: no row for SLURM_ARRAY_TASK_ID=$SLURM_ARRAY_TASK_ID in $manifest_path" >&2
@@ -35,7 +36,7 @@ if [ -z "$row" ]; then
 fi
 start_index=$(echo "$row" | cut -d, -f2)
 end_index=$(echo "$row" | cut -d, -f3)
-counties_str=$(echo "$row" | cut -d, -f4-)
+weather_locs_str=$(echo "$row" | cut -d, -f4-)
 
 echo "Array task $SLURM_ARRAY_TASK_ID -> chunk $start_index-$end_index"
 
@@ -50,4 +51,4 @@ export NUMEXPR_NUM_THREADS=1
 export TF_NUM_INTRAOP_THREADS=1
 export TF_NUM_INTEROP_THREADS=1
 source /kfs2/shared-projects/buildstock/aws_credentials.sh
-uv run python $output_dir/inputs/D_process_chunk_agg.py $start_index $end_index $meta_path $upgrade $prefix $output_dir $script_dir $counties_str $spec_index
+uv run python $output_dir/inputs/D_process_chunk_agg.py $start_index $end_index $meta_path $upgrade $prefix $output_dir $script_dir $weather_locs_str $spec_index
