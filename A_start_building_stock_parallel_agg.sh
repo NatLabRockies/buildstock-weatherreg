@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=geohc
-#SBATCH --partition=bigmem    # <-- single knob: flip to "standard" once Kestrel's standard pool is healthy again
+#SBATCH --partition=standard    # <-- single knob: flip to "bigmem" if standard pool goes down again
 #SBATCH --time=05:00:00
 #SBATCH --mem=246064    # launcher only uses 1 CPU; mem here is just for B's Athena queries
 #SBATCH --qos=high
