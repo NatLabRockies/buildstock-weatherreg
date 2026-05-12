@@ -218,16 +218,21 @@ def load_hvac_profiles(hvac_output_path, building_type='res'):
         return {}
     
     logger.debug(f"  Loading HVAC profiles for {building_type}...")
-    
-    # Find all HVAC files for this building type
-    hvac_files = sorted(hvac_path.glob(f"{building_type}_eulp_hvac_elec_MWh_*.csv"))
-    
+
+    # D writes one chunk file per enduse (cooling_elec, heating_elec). For E's
+    # purpose we want the combined HVAC total per (county, hour), so we sum
+    # both enduses into one profile dict keyed by (upgrade, state).
+    hvac_files = sorted(
+        list(hvac_path.glob(f"{building_type}_eulp_cooling_elec_MWh_*.csv"))
+        + list(hvac_path.glob(f"{building_type}_eulp_heating_elec_MWh_*.csv"))
+    )
+
     if not hvac_files:
         logger.debug(f"  No HVAC files found in {hvac_path}")
         return {}
-    
+
     profiles_by_state = {}
-    
+
     for filepath in hvac_files:
         logger.debug(f"    Loading {filepath.name}...")
         df = pd.read_csv(filepath, index_col=0, parse_dates=True)
@@ -338,10 +343,11 @@ def process_hvac_directory(hvac_dir_path, non_hvac_data_res, non_hvac_data_com):
     
     combined_data = {}
     
-    # Get HVAC year from the data
+    # Get HVAC year from the data. Probe a single enduse — year is the same
+    # in cooling and heating files.
     hvac_year = None
     for building_type in ['res', 'com']:
-        hvac_files = list(hvac_dir.glob(f"{building_type}_eulp_hvac_elec_MWh_*.csv"))
+        hvac_files = list(hvac_dir.glob(f"{building_type}_eulp_cooling_elec_MWh_*.csv"))
         if hvac_files:
             try:
                 df_sample = pd.read_csv(hvac_files[0], nrows=1, index_col=0, parse_dates=True)

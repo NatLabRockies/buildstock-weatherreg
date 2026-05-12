@@ -431,15 +431,20 @@ if __name__ == "__main__":
         upgrade_tag = f'{upgrade}_{regression_tag}_b{base_year}'
 
         # ===== RESUME CHECK 1 (per-spec) =====
-        # If the agg GWh CSV is already on disk, this spec is fully done. Skip
-        # the entire S3 metadata pull + chunking + array submission. Saves
-        # hours of compute when re-running after a partial-failure recovery.
-        expected_agg = os.path.join(
-            output_dir,
-            f'agg_{bldg_type}_eulp_hvac_elec_GWh_upgrade{upgrade_tag}.csv',
-        )
-        if os.path.exists(expected_agg):
-            logger.info("[skip] %s already complete (agg present at %s)", upgrade_tag, expected_agg)
+        # If BOTH agg GWh CSVs are already on disk, this spec is fully done.
+        # Skip the entire S3 metadata pull + chunking + array submission.
+        # Saves hours of compute when re-running after a partial-failure
+        # recovery. (D writes one chunk file per enduse; agg_buildings.py
+        # writes one agg file per enduse.)
+        expected_aggs = [
+            os.path.join(
+                output_dir,
+                f'agg_{bldg_type}_eulp_{enduse}_GWh_upgrade{upgrade_tag}.csv',
+            )
+            for enduse in ('cooling_elec', 'heating_elec')
+        ]
+        if all(os.path.exists(p) for p in expected_aggs):
+            logger.info("[skip] %s already complete (all agg files present)", upgrade_tag)
             continue
 
         # Resolve effective chunk_size: per-spec override > top-level default.
@@ -743,19 +748,23 @@ if __name__ == "__main__":
             )
 
         # ===== RESUME CHECK 2 (per-chunk) =====
-        # Detect which chunks have already produced their EULP MWh CSV; we
-        # only resubmit the missing ones.
+        # Detect which chunks have already produced BOTH per-enduse EULP MWh
+        # CSVs; we only resubmit the missing ones. A chunk is "done" only
+        # when both cooling_elec and heating_elec files exist on disk.
         chunks_eulp_dir = os.path.join(
             output_dir, f'chunks_{regression_tag}_b{base_year}'
         )
         existing_indices = set()
         for idx, (s_idx, e_idx, _) in enumerate(chunks):
-            chunk_file = os.path.join(
-                chunks_eulp_dir,
-                f'{prefix}eulp_hvac_elec_MWh_upgrade{upgrade_tag}_'
-                f'{s_idx:04d}-{e_idx:04d}.csv',
-            )
-            if os.path.exists(chunk_file):
+            chunk_files = [
+                os.path.join(
+                    chunks_eulp_dir,
+                    f'{prefix}eulp_{enduse}_MWh_upgrade{upgrade_tag}_'
+                    f'{s_idx:04d}-{e_idx:04d}.csv',
+                )
+                for enduse in ('cooling_elec', 'heating_elec')
+            ]
+            if all(os.path.exists(p) for p in chunk_files):
                 existing_indices.add(idx)
         missing_indices = [i for i in range(len(chunks)) if i not in existing_indices]
         n_done, n_total, n_missing = len(existing_indices), len(chunks), len(missing_indices)

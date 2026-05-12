@@ -203,23 +203,25 @@ def _is_hpc() -> bool:
 
 # Process one weather-location worker function — for HPC multiprocessing.
 # Each weather location (an as_sim GISJOIN for ComStock 2025.2; a county code
-# for ResStock and older ComStock) trains ONE RF on the as_sim-aggregate
-# hourly load and returns predicted hourly profiles for HVAC and NG.
-# Per-bldg_id share-out happens after all locations finish.
+# for ResStock and older ComStock) trains THREE RFs on the per-loc hourly
+# aggregates — one each for cooling.elec, heating.elec, and natural-gas
+# heating — and returns predicted hourly profiles plus annual sums for the
+# comparison_year. Per-bldg_id share-out happens after all locations finish.
 def _process_one_location(args):
     """
-    Worker: train RF on aggregated per-location hourly Y, return:
+    Worker: train RF for each energy type, return:
       - location identifier
-      - HVAC hourly DataFrame (timestamp + HVAC.elec columns)
-      - NG hourly DataFrame (timestamp + ng columns)
-      - HVAC annual sum at this location for the comparison_year
-      - NG annual sum at this location for the comparison_year
+      - cooling.elec hourly DataFrame
+      - heating.elec hourly DataFrame
+      - NG hourly DataFrame
+      - cooling/heating/NG annual sums at this location for comparison_year
     Notes:
       - Metrics and plots are disabled in workers to avoid file contention.
-      - The fifth positional arg of `prediction()` is named bldg_id but is
+      - The 9th positional arg of `prediction()` is named bldg_id but is
         only used to (a) tag log lines, (b) index df_eulp_targ when
         sw_test_target=True. We pass `loc` here; df_eulp_targ_local is
-        pre-aggregated per loc by the caller.
+        pre-aggregated per loc by the caller and has both cooling.elec and
+        heating.elec columns.
     """
     (loc,
      df_eulp_pred,
@@ -247,36 +249,26 @@ def _process_one_location(args):
     weather_target_df = pd.concat(target_weather_frames, ignore_index=True)
     target_year_by_row = np.asarray(target_year_by_row)
 
-    # HVAC
-    df_eulp_hvac = prediction(
-        base_year, df_eulp_pred, sw_test_base, target_years, sw_test_target,
-        'HVAC.elec', weather_base_df, weather_target_df, loc, df_eulp_targ_local,
-        target_year_by_row
-    )
-    hvac_sum = (
-        df_eulp_hvac.loc[
-            (df_eulp_hvac['timestamp'] - pd.Timedelta(hours=1)).dt.year
-            == comparison_year,
-            'HVAC.elec'
-        ].sum().round(6)
-    )
+    def _predict(energy_type):
+        df_out = prediction(
+            base_year, df_eulp_pred, sw_test_base, target_years, sw_test_target,
+            energy_type, weather_base_df, weather_target_df, loc,
+            df_eulp_targ_local, target_year_by_row,
+        )
+        annual_sum = (
+            df_out.loc[
+                (df_out['timestamp'] - pd.Timedelta(hours=1)).dt.year
+                == comparison_year,
+                energy_type,
+            ].sum().round(6)
+        )
+        return df_out, annual_sum
 
-    # NG
-    df_eulp_ng = prediction(
-        base_year, df_eulp_pred, sw_test_base, target_years, sw_test_target,
-        'natural_gas.heating.energy_consumption',
-        weather_base_df, weather_target_df, loc, df_eulp_targ_local,
-        target_year_by_row
-    )
-    ng_sum = (
-        df_eulp_ng.loc[
-            (df_eulp_ng['timestamp'] - pd.Timedelta(hours=1)).dt.year
-            == comparison_year,
-            'natural_gas.heating.energy_consumption'
-        ].sum().round(6)
-    )
+    df_cool, cool_sum = _predict('cooling.elec')
+    df_heat, heat_sum = _predict('heating.elec')
+    df_ng, ng_sum = _predict('natural_gas.heating.energy_consumption')
 
-    return loc, df_eulp_hvac, df_eulp_ng, hvac_sum, ng_sum
+    return loc, df_cool, df_heat, df_ng, cool_sum, heat_sum, ng_sum
 
 # Substrings that indicate an error is transient (worth retrying). Matched
 # case-insensitively against the exception message — covers Athena/S3
@@ -405,26 +397,54 @@ def process_chunk_agg(run_type, upgrade, weather_locs, weather_col, bsq_cols,
     aws_run_type = run_types[run_type].copy()
     natural_gas = ['out.natural_gas.heating.energy_consumption']
 
+    # Split HVAC enduses into pure-heating, pure-cooling, and ambiguous
+    # (heating-or-cooling depending on which mode the air handler / hydronic
+    # loop is in that day). ResStock breaks fans/pumps out by mode already,
+    # so its ambiguous list is empty. ComStock's fans/pumps/heat_recovery
+    # serve whichever mode is running and we allocate them by daily share
+    # of heating.energy vs cooling.energy (50/50 fallback if both zero).
     if sw_comstock:
+        # `elec_enduse` order must match the historical pipeline so BSQ
+        # caches the SAME SQL string hash and serves prior chunk queries
+        # from cache.
         elec_enduse = [
             'out.electricity.heating.energy_consumption',
             'out.electricity.cooling.energy_consumption',
             'out.electricity.fans.energy_consumption',
             'out.electricity.heat_recovery.energy_consumption',
             'out.electricity.heat_rejection.energy_consumption',
-            'out.electricity.pumps.energy_consumption'
+            'out.electricity.pumps.energy_consumption',
+        ]
+        heating_pure = ['out.electricity.heating.energy_consumption']
+        cooling_pure = [
+            'out.electricity.cooling.energy_consumption',
+            'out.electricity.heat_rejection.energy_consumption',
+        ]
+        heating_and_cooling = [
+            'out.electricity.fans.energy_consumption',
+            'out.electricity.heat_recovery.energy_consumption',
+            'out.electricity.pumps.energy_consumption',
         ]
     else:
-        elec_enduse = [
+        # ResStock's natural ordering already happens to equal
+        # `heating_pure + cooling_pure` so cache stays warm without
+        # special handling.
+        heating_pure = [
             'out.electricity.heating.energy_consumption',
             'out.electricity.heating_fans_pumps.energy_consumption',
             'out.electricity.heating_hp_bkup.energy_consumption',
             'out.electricity.heating_hp_bkup_fa.energy_consumption',
-            'out.electricity.cooling.energy_consumption',
-            'out.electricity.cooling_fans_pumps.energy_consumption'
         ]
+        cooling_pure = [
+            'out.electricity.cooling.energy_consumption',
+            'out.electricity.cooling_fans_pumps.energy_consumption',
+        ]
+        heating_and_cooling = []
+        elec_enduse = heating_pure + cooling_pure + heating_and_cooling
         # ResStock has suffix '..kwh' for electricity & ng enduse columns
-        elec_enduse = [item + '..kwh' for item in elec_enduse]
+        elec_enduse = [c + '..kwh' for c in elec_enduse]
+        heating_pure = [c + '..kwh' for c in heating_pure]
+        cooling_pure = [c + '..kwh' for c in cooling_pure]
         natural_gas = [enduse + '..kwh' for enduse in natural_gas]
 
     my_run = BuildStockQuery(**aws_run_type)
@@ -454,13 +474,14 @@ def process_chunk_agg(run_type, upgrade, weather_locs, weather_col, bsq_cols,
     ts_agg = query_execution(ts_agg_query, my_run)
     ts_agg = ts_agg.sort_values(aws_cols + ['timestamp']).reset_index(drop=True)
     ts_agg['timestamp'] = pd.to_datetime(ts_agg['timestamp']) + pd.Timedelta(hours=1)
-    elec_enduse = [item.replace('out.', '') for item in elec_enduse]
-
-    # Remove '..kwh' suffix from elec_enduse columns for grouping
-    ts_agg.columns = [col.replace('..kwh', '') for col in ts_agg.columns]
-
-    # Remove '..kwh' from elec_enduse list for grouping
-    elec_enduse = [item.replace('..kwh', '') for item in elec_enduse]
+    # Normalize column names: drop 'out.' prefix and ResStock's '..kwh' suffix
+    # so downstream lookups use canonical names.
+    def _norm(c):
+        return c.replace('out.', '').replace('..kwh', '')
+    ts_agg.columns = [_norm(c) for c in ts_agg.columns]
+    heating_pure = [_norm(c) for c in heating_pure]
+    cooling_pure = [_norm(c) for c in cooling_pure]
+    heating_and_cooling = [_norm(c) for c in heating_and_cooling]
 
     if sw_comstock:
         state_county_map = pd.read_csv(
@@ -484,16 +505,45 @@ def process_chunk_agg(run_type, upgrade, weather_locs, weather_col, bsq_cols,
     ts_agg['bldg_id'] = ts_agg[aws_cols].apply(tuple, axis=1).astype(str)
     ts_agg.set_index('bldg_id', inplace=True)
 
-    # Sum energy consumption of cooling and heating as HVAC.elec
-    ts_agg['HVAC.elec'] = ts_agg[elec_enduse].sum(axis=1)
+    # Pure-mode contributions sum cleanly per row. For ResStock this is the
+    # whole calculation (ambiguous is empty). For ComStock the ambiguous
+    # enduses (fans/pumps/heat_recovery) get allocated by daily heating-share
+    # vs cooling-share computed from the pure signals.
+    ts_agg['heating.elec'] = ts_agg[heating_pure].sum(axis=1)
+    ts_agg['cooling.elec'] = ts_agg[cooling_pure].sum(axis=1)
 
-    ts_agg = ts_agg[['timestamp', 'HVAC.elec',
+    if heating_and_cooling:
+        # Compute heating/cooling shares per (bldg_id, day). Day boundaries
+        # use the model-year convention (timestamp is hour-ending, so the
+        # local day is `(ts - 1h).date()`). Both sums zero → 50/50 (covers
+        # off-days where fans/pumps run for ventilation only).
+        ts_tmp = ts_agg.reset_index()
+        ts_tmp['_day'] = (ts_tmp['timestamp'] - pd.Timedelta(hours=1)).dt.date
+        grp = ts_tmp.groupby(['bldg_id', '_day'])
+        daily_heat = grp['heating.elec'].transform('sum').to_numpy()
+        daily_cool = grp['cooling.elec'].transform('sum').to_numpy()
+        daily_total = daily_heat + daily_cool
+        # `np.divide(..., where=..., out=...)` skips the divide at zero-total
+        # rows entirely (no RuntimeWarning) and leaves them at the 0.5
+        # initializer — the user-spec'd off-day fallback.
+        heating_share = np.divide(
+            daily_heat, daily_total,
+            out=np.full_like(daily_total, 0.5, dtype=float),
+            where=daily_total > 0,
+        )
+        cooling_share = 1.0 - heating_share
+        amb_sum = ts_tmp[heating_and_cooling].sum(axis=1).to_numpy()
+        ts_tmp['heating.elec'] = ts_tmp['heating.elec'].to_numpy() + amb_sum * heating_share
+        ts_tmp['cooling.elec'] = ts_tmp['cooling.elec'].to_numpy() + amb_sum * cooling_share
+        ts_tmp = ts_tmp.drop(columns=['_day'])
+        ts_agg = ts_tmp.set_index('bldg_id')
+
+    ts_agg = ts_agg[['timestamp', 'cooling.elec', 'heating.elec',
                      'natural_gas.heating.energy_consumption']]
-    
-    # Convert HVAC.elec and natural_gas columns from kWh to MWh & round
-    ts_agg['HVAC.elec'] = (ts_agg['HVAC.elec'] / 1000).round(6)
-    ts_agg['natural_gas.heating.energy_consumption'] = (
-        ts_agg['natural_gas.heating.energy_consumption'] / 1000).round(6)
+
+    # Convert elec & natural_gas columns from kWh to MWh & round
+    for c in ['cooling.elec', 'heating.elec', 'natural_gas.heating.energy_consumption']:
+        ts_agg[c] = (ts_agg[c] / 1000).round(6)
 
     return ts_agg
 
@@ -995,43 +1045,57 @@ df_eulp_targ = (
     else None
 )
 
-# Error check: Sum AWS HVAC and ng timeseries data for each bldg_id in df_meta
-df_meta['AWS_HVAC.elec'] = ts_agg.groupby('bldg_id').apply(lambda x: (
-    x['HVAC.elec'].iloc[:8760].sum()))
-
+# Error check: Sum AWS cooling/heating/ng timeseries data for each bldg_id.
+# AWS_HVAC.elec is kept as the derived sum (cool + heat) for backward-compat
+# with the existing meta_HVAC.elec ratio diagnostics below.
+df_meta['AWS_cooling.elec'] = ts_agg.groupby('bldg_id').apply(
+    lambda x: x['cooling.elec'].iloc[:8760].sum()
+)
+df_meta['AWS_heating.elec'] = ts_agg.groupby('bldg_id').apply(
+    lambda x: x['heating.elec'].iloc[:8760].sum()
+)
+df_meta['AWS_HVAC.elec'] = (
+    df_meta['AWS_cooling.elec'] + df_meta['AWS_heating.elec']
+)
 df_meta['AWS_natural_gas.heating.energy_consumption'] = (
-    ts_agg.groupby('bldg_id').apply(lambda x: (
-    x['natural_gas.heating.energy_consumption'].iloc[:8760].sum())))
+    ts_agg.groupby('bldg_id').apply(
+        lambda x: x['natural_gas.heating.energy_consumption'].iloc[:8760].sum()
+    )
+)
 
 if sw_apply_regression: # TODO: or `individual_building`?
     # === Per-weather-location training, then per-bldg_id share-out ===
     #
-    # Reference math (HVAC; NG is symmetric):
+    # Reference math (per energy type — same shape for cool/heat/NG):
     #     M(a) = sum_{b: loc(b)=a} m(b)            # location annual
     #     share(b) = m(b) / M(a)                    # 0 if M(a) == 0
     #     predicted_bldg(b, h) = predicted_loc(loc(b), h) * share(b)
-    # where m(b) = AWS_HVAC.elec for bldg_id b (already populated above
-    # from the BSQ ts_agg we pulled).
+    # where m(b) is the AWS_* annual for bldg_id b (populated above from
+    # the BSQ ts_agg we pulled). Each energy type uses its OWN share
+    # (a cooling-heavy bldg gets most of the cool prediction even if it
+    # uses no heat, and vice versa).
 
     # Map bldg_id -> weather_loc once. Used for grouping ts_agg and for the
     # share-out loop. df_meta is indexed by bldg_id and unique.
     bldg_to_loc = df_meta[weather_col].to_dict()
 
-    # Per-loc training Y: sum HVAC and NG hourly across all bldg_ids that
-    # share the location. This is the "as_sim aggregate hourly" the
-    # regression learns to predict.
+    # Per-loc training Y: sum cool/heat/NG hourly across all bldg_ids that
+    # share the location. These are the per-loc aggregate hourly profiles
+    # the regression learns to predict (one RF per energy type per loc).
+    _y_cols = ['cooling.elec', 'heating.elec',
+               'natural_gas.heating.energy_consumption']
     ts_agg_pl = ts_agg.copy()
     ts_agg_pl['__loc'] = ts_agg_pl.index.map(bldg_to_loc)
     ts_agg_per_loc = (
-        ts_agg_pl.groupby(['__loc', 'timestamp'], as_index=False)[
-            ['HVAC.elec', 'natural_gas.heating.energy_consumption']
-        ].sum()
+        ts_agg_pl.groupby(['__loc', 'timestamp'], as_index=False)[_y_cols]
+        .sum()
         .sort_values(['__loc', 'timestamp'])
         .reset_index(drop=True)
     )
 
-    # Share denominators: the location's annual sums.
-    loc_annual_hvac = df_meta.groupby(weather_col)['AWS_HVAC.elec'].sum()
+    # Share denominators: the location's annual sums per energy type.
+    loc_annual_cool = df_meta.groupby(weather_col)['AWS_cooling.elec'].sum()
+    loc_annual_heat = df_meta.groupby(weather_col)['AWS_heating.elec'].sum()
     loc_annual_ng = df_meta.groupby(weather_col)[
         'AWS_natural_gas.heating.energy_consumption'
     ].sum()
@@ -1043,9 +1107,8 @@ if sw_apply_regression: # TODO: or `individual_building`?
         df_eulp_targ_pl = df_eulp_targ.copy()
         df_eulp_targ_pl['__loc'] = df_eulp_targ_pl.index.map(bldg_to_loc)
         df_eulp_targ_per_loc = (
-            df_eulp_targ_pl.groupby(['__loc', 'timestamp'], as_index=False)[
-                ['HVAC.elec', 'natural_gas.heating.energy_consumption']
-            ].sum()
+            df_eulp_targ_pl.groupby(['__loc', 'timestamp'], as_index=False)[_y_cols]
+            .sum()
             .sort_values(['__loc', 'timestamp'])
             .set_index('__loc')
         )
@@ -1075,7 +1138,7 @@ if sw_apply_regression: # TODO: or `individual_building`?
                 sw_test_target,
             )
 
-    # Train + predict per loc.
+    # Train + predict per loc (cool/heat/NG all in one worker call).
     pred_per_loc = {}
     if _is_hpc():
         tasks = list(_build_loc_tasks())
@@ -1094,70 +1157,95 @@ if sw_apply_regression: # TODO: or `individual_building`?
         with ProcessPoolExecutor(max_workers=procs) as ex:
             futures = [ex.submit(_process_one_location, t) for t in tasks]
             for fut in as_completed(futures):
-                loc, df_hvac_loc, df_ng_loc, hvac_sum, ng_sum = fut.result()
-                pred_per_loc[loc] = (df_hvac_loc, df_ng_loc, hvac_sum, ng_sum)
+                loc, df_cool, df_heat, df_ng, cool_sum, heat_sum, ng_sum = fut.result()
+                pred_per_loc[loc] = (df_cool, df_heat, df_ng,
+                                     cool_sum, heat_sum, ng_sum)
     else:
         # Serial path. `i` is referenced inside test_fit (loop counter
         # heuristic for "is this the last building?"); per-loc training
         # makes that heuristic less meaningful, so we set sw_save_metrics
         # off implicitly via the worker.
         for t in _build_loc_tasks():
-            loc, df_hvac_loc, df_ng_loc, hvac_sum, ng_sum = (
+            loc, df_cool, df_heat, df_ng, cool_sum, heat_sum, ng_sum = (
                 _process_one_location(t)
             )
-            pred_per_loc[loc] = (df_hvac_loc, df_ng_loc, hvac_sum, ng_sum)
+            pred_per_loc[loc] = (df_cool, df_heat, df_ng,
+                                 cool_sum, heat_sum, ng_sum)
 
-    # Share-out: distribute predicted hourly per-loc to each bldg_id.
-    df_bldg = []
+    # Share-out: distribute predicted hourly per-loc to each bldg_id, with
+    # independent shares for cooling, heating, and NG.
+    df_bldg_cool = []
+    df_bldg_heat = []
     for bldg_id in df_meta.index:
         loc = df_meta.loc[bldg_id, weather_col]
-        df_hvac_loc, df_ng_loc, hvac_loc_sum, ng_loc_sum = pred_per_loc[loc]
+        df_cool_loc, df_heat_loc, df_ng_loc, cool_loc_sum, heat_loc_sum, ng_loc_sum = pred_per_loc[loc]
 
-        m_hvac = float(df_meta.loc[bldg_id, 'AWS_HVAC.elec'])
-        M_hvac = float(loc_annual_hvac.loc[loc])
-        share_hvac = (m_hvac / M_hvac) if M_hvac > 0 else 0.0
+        m_cool = float(df_meta.loc[bldg_id, 'AWS_cooling.elec'])
+        M_cool = float(loc_annual_cool.loc[loc])
+        share_cool = (m_cool / M_cool) if M_cool > 0 else 0.0
+
+        m_heat = float(df_meta.loc[bldg_id, 'AWS_heating.elec'])
+        M_heat = float(loc_annual_heat.loc[loc])
+        share_heat = (m_heat / M_heat) if M_heat > 0 else 0.0
 
         m_ng = float(df_meta.loc[bldg_id, 'AWS_natural_gas.heating.energy_consumption'])
         M_ng = float(loc_annual_ng.loc[loc])
         share_ng = (m_ng / M_ng) if M_ng > 0 else 0.0
 
-        # HVAC hourly per bldg_id (only HVAC is written to the chunk EULP
-        # file; NG annuals go into df_meta below).
-        df_out = df_hvac_loc[['timestamp']].copy()
-        df_out[bldg_id] = df_hvac_loc['HVAC.elec'].values * share_hvac
-        df_out = df_out.rename(
-            columns={'timestamp': 'timestamp_EST'}
-        ).set_index('timestamp_EST')
-        df_bldg.append(df_out)
+        # Cooling hourly per bldg_id
+        df_c = df_cool_loc[['timestamp']].copy()
+        df_c[bldg_id] = df_cool_loc['cooling.elec'].values * share_cool
+        df_c = df_c.rename(columns={'timestamp': 'timestamp_EST'}).set_index('timestamp_EST')
+        df_bldg_cool.append(df_c)
 
-        # df_meta annuals (used by the diagnostic ratio columns below)
-        df_meta.loc[bldg_id, 'HVAC.elec'] = round(hvac_loc_sum * share_hvac, 6)
+        # Heating hourly per bldg_id
+        df_h = df_heat_loc[['timestamp']].copy()
+        df_h[bldg_id] = df_heat_loc['heating.elec'].values * share_heat
+        df_h = df_h.rename(columns={'timestamp': 'timestamp_EST'}).set_index('timestamp_EST')
+        df_bldg_heat.append(df_h)
+
+        # df_meta annuals (used by the diagnostic ratio columns below).
+        # HVAC.elec is the derived sum, kept for the existing meta_HVAC.elec
+        # ratio diagnostics (metadata has no separate cool/heat reference).
+        df_meta.loc[bldg_id, 'cooling.elec'] = round(cool_loc_sum * share_cool, 6)
+        df_meta.loc[bldg_id, 'heating.elec'] = round(heat_loc_sum * share_heat, 6)
+        df_meta.loc[bldg_id, 'HVAC.elec'] = (
+            df_meta.loc[bldg_id, 'cooling.elec']
+            + df_meta.loc[bldg_id, 'heating.elec']
+        )
         df_meta.loc[bldg_id, 'natural_gas.heating.energy_consumption'] = (
             round(ng_loc_sum * share_ng, 6)
         )
 
-    df_eulp = pd.concat(df_bldg, axis=1)
+    df_eulp_cool = pd.concat(df_bldg_cool, axis=1)
+    df_eulp_heat = pd.concat(df_bldg_heat, axis=1)
 
 else:
-    # If not applying regression, duplicate annual ng and HVAC columns
+    # If not applying regression, duplicate annual cool/heat/NG columns
+    df_meta['cooling.elec'] = df_meta['AWS_cooling.elec']
+    df_meta['heating.elec'] = df_meta['AWS_heating.elec']
     df_meta['HVAC.elec'] = df_meta['AWS_HVAC.elec']
     df_meta['natural_gas.heating.energy_consumption'] = (
-        df_meta['AWS_natural_gas.heating.energy_consumption'])
+        df_meta['AWS_natural_gas.heating.energy_consumption']
+    )
 
     # Filter ts_agg to include only rows with bldg_id's in df_meta.index
     ts_agg = ts_agg[ts_agg.index.isin(df_meta.index)]
 
-    # Create a timeseries x bldg_id DataFrame
+    # Create timeseries x bldg_id DataFrames (one each for cool and heat)
     ts_agg = ts_agg.reset_index()
     ts_agg.rename(columns={'timestamp': 'timestamp_EST'}, inplace=True)
-    df_eulp = ts_agg.pivot(index='timestamp_EST', columns='bldg_id',
-                           values='HVAC.elec')
+    df_eulp_cool = ts_agg.pivot(index='timestamp_EST', columns='bldg_id',
+                                values='cooling.elec')
+    df_eulp_heat = ts_agg.pivot(index='timestamp_EST', columns='bldg_id',
+                                values='heating.elec')
 
-# Collapse bldg_id (county/sim-county) columns to county columns.
-# First, create lookup to get county from df_meta
-county_labels = df_meta.loc[df_eulp.columns, county].astype(str)
-# Then group by county and sum energy use across all buildings in each county.
-df_eulp = df_eulp.T.groupby(county_labels).sum().T
+# Collapse bldg_id (county/sim-county) columns to county columns, separately
+# for the cooling and heating frames. Both use the same set of bldg_id
+# columns so the county_labels lookup is shared.
+county_labels = df_meta.loc[df_eulp_cool.columns, county].astype(str)
+df_eulp_cool = df_eulp_cool.T.groupby(county_labels).sum().T
+df_eulp_heat = df_eulp_heat.T.groupby(county_labels).sum().T
 
 # Aggregate df_meta to county-level before diagnostics.
 # Drop sim-county column to avoid string concatenation during groupby sum.
@@ -1232,17 +1320,22 @@ df_meta.insert(len(bsq_cols) + 1, 'gas_heating_MWh',
 df_meta.to_csv(os.path.join(chunks_meta_dir,
     f'{prefix}meta_upgrade{upgrade_tag}_{start_index:04}-{end_index:04}.csv'))
 
-# Round df_eulp to 6 decimal places TODO: Move to `prediction` fxn?
-df_eulp = df_eulp.round(6)
+# Round and trim each frame to 8760 hourly rows per model year, then write
+# separate chunk CSVs for cooling.elec and heating.elec. Downstream
+# (agg_buildings.py) stitches each enduse independently.
+def _trim_to_8760_per_year(df):
+    df = df.round(6)
+    model_year = (df.index - pd.Timedelta(hours=1)).year
+    return df.groupby(model_year, group_keys=False).head(8760)
 
-# Keep the first 8760 hourly rows in each model year
-# (assign Jan 1 00:00 to the previous year via -1 hour shift).
-model_year = (df_eulp.index - pd.Timedelta(hours=1)).year
-df_eulp = df_eulp.groupby(model_year, group_keys=False).head(8760)
+df_eulp_cool = _trim_to_8760_per_year(df_eulp_cool)
+df_eulp_heat = _trim_to_8760_per_year(df_eulp_heat)
 
-# Save concatenated energy consumption DataFrame (hour x bldg) to CSV file
-df_eulp.to_csv(os.path.join(chunks_eulp_dir,
-    f'{prefix}eulp_hvac_elec_MWh_upgrade{upgrade_tag}_'
+df_eulp_cool.to_csv(os.path.join(chunks_eulp_dir,
+    f'{prefix}eulp_cooling_elec_MWh_upgrade{upgrade_tag}_'
+    f'{start_index:04}-{end_index:04}.csv'))
+df_eulp_heat.to_csv(os.path.join(chunks_eulp_dir,
+    f'{prefix}eulp_heating_elec_MWh_upgrade{upgrade_tag}_'
     f'{start_index:04}-{end_index:04}.csv'))
 
 print('\nChunk done at:', dt.datetime.now())

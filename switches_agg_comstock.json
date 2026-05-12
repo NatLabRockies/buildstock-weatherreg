@@ -1,12 +1,12 @@
 {
-    "output_dir": "/projects/geohc/radhikar/outputs/comstock_cross_val_may10_2_2026",
+    "output_dir": "/projects/geohc/radhikar/outputs/comstock_cross_val_may11_2026",
     "testmode": false,
     "run_specs": [
         {"upgrade_id": 0,
          "apply_regression": true,
          "base_year": 2018,
          "base_run": "comstock_amy2018_2025_2",
-         "target_year": ["2018", "2012"],
+         "target_year": ["2008", "2012" ],
          "target_run": "comstock_amy2012_2025_2",
          "chunk_size": 75
          },

@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 '''
-This script develops county-level building hvac load profiles for ReEDS (in GWh) based on resstock/comstock EULP outputs (MWh). The resulting GWh file is dropped into the run output directory alongside the chunk MWh files.
+This script develops county-level building cooling.elec and heating.elec load
+profiles for ReEDS (in GWh) based on resstock/comstock EULP outputs (MWh).
+Two GWh files are produced per run — one per enduse — and dropped into the
+run output directory alongside the chunk MWh files.
 
 The `upgrade_tag` is the per-spec identifier from `switches_agg.json`'s
 `upgrade_specs` of the form `<upgrade_id>_<reg|ref>` — e.g., `0_reg` for
@@ -11,7 +14,7 @@ Usage:
 
 Or import the function:
     from agg_buildings import aggregate
-    aggregate(run_dir, "res", "0_reg")
+    aggregate(run_dir, "res", "0_reg")  # returns list of output paths
 '''
 
 import argparse
@@ -31,11 +34,16 @@ def _chunks_eulp_dir(bldg_path: str, upgrade_tag: str) -> str:
     return os.path.join(bldg_path, f'chunks_{suffix}')
 
 
-def aggregate(bldg_path: str, bldg_type: str, upgrade_tag: str) -> str:
-    '''Stitch chunk MWh CSVs for one (bldg_type, upgrade_tag) into a single GWh CSV.
+# Enduse tokens written by D into chunk filenames. Each token produces one
+# stitched GWh CSV. Order is irrelevant.
+ENDUSES = ('cooling_elec', 'heating_elec')
 
-    Returns the output file path. Raises FileNotFoundError if the chunks
-    subfolder is missing or contains no matching files.
+
+def _aggregate_one(bldg_path: str, bldg_type: str, upgrade_tag: str,
+                   enduse: str) -> str:
+    '''Stitch chunk MWh CSVs for one (bldg_type, upgrade_tag, enduse) into a
+    single GWh CSV. Returns the output file path. Raises FileNotFoundError
+    if the chunks subfolder is missing or contains no matching files.
     '''
     bldg_tech = f'upgrade{upgrade_tag}'
     chunks_dir = _chunks_eulp_dir(bldg_path, upgrade_tag)
@@ -47,7 +55,7 @@ def aggregate(bldg_path: str, bldg_type: str, upgrade_tag: str) -> str:
 
     # Trailing underscore on the prefix is required: without it,
     # `upgrade0_reg_*.csv` would also match a `upgrade0_*` query.
-    chunk_prefix = f'{bldg_type}_eulp_hvac_elec_MWh_{bldg_tech}_'
+    chunk_prefix = f'{bldg_type}_eulp_{enduse}_MWh_{bldg_tech}_'
     eulp_files = [
         os.path.join(chunks_dir, f)
         for f in os.listdir(chunks_dir)
@@ -72,10 +80,18 @@ def aggregate(bldg_path: str, bldg_type: str, upgrade_tag: str) -> str:
     df_sum = df_sum.groupby(df_sum.columns, axis=1).sum()
     df_sum = df_sum / 1000  # Convert to GWh
 
-    out_file_path = f'{bldg_path}/agg_{bldg_type}_eulp_hvac_elec_GWh_{bldg_tech}.csv'
+    out_file_path = f'{bldg_path}/agg_{bldg_type}_eulp_{enduse}_GWh_{bldg_tech}.csv'
     print(f'Outputting csv: {out_file_path}')
     df_sum.to_csv(out_file_path)
     return out_file_path
+
+
+def aggregate(bldg_path: str, bldg_type: str, upgrade_tag: str) -> list:
+    '''Stitch chunk MWh CSVs for all enduses of one (bldg_type, upgrade_tag).
+    Returns list of output file paths (one per enduse).
+    '''
+    return [_aggregate_one(bldg_path, bldg_type, upgrade_tag, enduse)
+            for enduse in ENDUSES]
 
 
 def main(argv=None):
