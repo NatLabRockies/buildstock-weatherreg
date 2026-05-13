@@ -16,7 +16,7 @@
          "base_run": "comstock_amy2018_2025_2",
          "target_year": ["2018"],
          "target_run": "comstock_amy2012_2025_2",
-         "chunk_size": 200
+         "chunk_size": 75
          },
          {"upgrade_id": 0,
          "base_year": 2012,
@@ -32,7 +32,7 @@
          "target_year": ["2012"],
          "target_run": "comstock_amy2012_2025_2",
          "apply_regression": false,
-         "chunk_size": 200
+         "chunk_size": 75
          }
     ],
     "version_comstock": ["2025", "2"],
