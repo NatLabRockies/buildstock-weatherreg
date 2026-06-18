@@ -256,15 +256,16 @@ def _scenario_color() -> dict[str, str]:
 # === Top-level worker functions (must be module-level for ProcessPool) =====
 def _peak_week_task(args: tuple) -> tuple[str, int, dict]:
     """One (scenario, year) → seasonal peak windows per weather year, with
-    per-cohort hourly slices for the cohort decomposition panel.
+    per-cohort hourly slices both at CONUS level (for main.js) and per-state
+    (for state_<postal>.js sidecars).
 
-    Loads each of the 7 cohort 'total' intermediate files individually (so
-    per-cohort series are retained), sums them to res / com / total CONUS,
-    finds summer + winter peak hours per weather year, and extracts the
-    ±3-day window for both res+com (back-compat) and per-cohort traces.
+    Loads each of the 7 cohort 'total' intermediate files as a state-x-time
+    DataFrame, sums them to res/com/total state-x-time, finds the CONUS peak
+    hour per (wy, season), and extracts the ±3-day window from each cohort's
+    state-x-time matrix.
     """
     res_inter, com_inter, scenario, year = args
-    cohort_series_gw: dict[str, pd.Series] = {}
+    cohort_dfs: dict[str, pd.DataFrame] = {}    # state-x-time per cohort
 
     for paths, file_sector, cohorts in [
         (res_inter, 'residential', RES_COHORTS),
@@ -276,48 +277,79 @@ def _peak_week_task(args: tuple) -> tuple[str, int, dict]:
             p = paths.get(key)
             if p is None:
                 continue
-            df = _read_with_index(p)
-            cohort_series_gw[prefix + cohort] = df.sum(axis=1)  # CONUS hourly GWh
+            cohort_dfs[prefix + cohort] = _read_with_index(p)
 
-    if not cohort_series_gw:
+    if not cohort_dfs:
         return scenario, year, {}
 
-    # Sector totals from the cohort series we have in memory. Use the
-    # accumulator-pattern (`None → first, then .add`) — `sum(... , start=empty)`
-    # gives NaN because pandas aligns indexes against the empty Series.
-    res_gw: pd.Series | None = None
-    com_gw: pd.Series | None = None
-    for k, s in cohort_series_gw.items():
+    # Build sector-and-total state-x-time DataFrames.
+    res_df: pd.DataFrame | None = None
+    com_df: pd.DataFrame | None = None
+    for k, df in cohort_dfs.items():
         if k.startswith('res_'):
-            res_gw = s if res_gw is None else res_gw.add(s, fill_value=0.0)
+            res_df = df if res_df is None else res_df.add(df, fill_value=0.0)
         else:
-            com_gw = s if com_gw is None else com_gw.add(s, fill_value=0.0)
-    if res_gw is None or com_gw is None:
+            com_df = df if com_df is None else com_df.add(df, fill_value=0.0)
+    if res_df is None or com_df is None:
         return scenario, year, {}
-    total_gw = res_gw.add(com_gw, fill_value=0.0)
+    total_df = res_df.add(com_df, fill_value=0.0)
+    total_conus = total_df.sum(axis=1)            # CONUS hourly used to find peak
 
-    # Find peaks per (wy, season) by filtering the full series with masks,
-    # but extract the ±3-day windows from the FULL series so windows that
-    # straddle the Jan 1 boundary still get all 168 hours.
-    full_year_idx = total_gw.index.year
     result: dict[int, dict[str, dict]] = {}
-    for wy in sorted(set(int(y) for y in full_year_idx.unique())):
-        wy_mask = (full_year_idx == wy)
-        wy_total = total_gw[wy_mask]
-        summer_mask = wy_total.index.month.isin([6, 7, 8, 9])
-        winter_mask = wy_total.index.month.isin([12, 1, 2])
-        summer_peak = wy_total[summer_mask].idxmax() if summer_mask.any() else None
-        winter_peak = wy_total[winter_mask].idxmax() if winter_mask.any() else None
+    for wy in sorted(set(int(y) for y in total_df.index.year.unique())):
+        wy_mask = total_df.index.year == wy
+        wy_total_conus = total_conus[wy_mask]
+        summer_mask = wy_total_conus.index.month.isin([6, 7, 8, 9])
+        winter_mask = wy_total_conus.index.month.isin([12, 1, 2])
+        summer_peak = wy_total_conus[summer_mask].idxmax() if summer_mask.any() else None
+        winter_peak = wy_total_conus[winter_mask].idxmax() if winter_mask.any() else None
 
         seasons: dict[str, dict] = {}
-        if summer_peak is not None:
-            w = _extract_window(res_gw, com_gw, total_gw, summer_peak, cohort_series_gw)
-            if w is not None:
-                seasons['summer'] = w
-        if winter_peak is not None:
-            w = _extract_window(res_gw, com_gw, total_gw, winter_peak, cohort_series_gw)
-            if w is not None:
-                seasons['winter'] = w
+        for season_name, peak_ts in [('summer', summer_peak), ('winter', winter_peak)]:
+            if peak_ts is None:
+                continue
+            win_start = peak_ts - pd.Timedelta(days=3)
+            win_end   = peak_ts + pd.Timedelta(days=4) - pd.Timedelta(hours=1)
+            window_idx = total_df.loc[win_start:win_end].index
+            if len(window_idx) < 24:
+                continue
+
+            timestamps = [t.isoformat() for t in window_idx]
+
+            # CONUS aggregates (sum across states inside the window).
+            conus_cohorts = {
+                k: [float(v) for v in df.loc[win_start:win_end].sum(axis=1).values]
+                for k, df in cohort_dfs.items()
+            }
+            conus_res = [float(v) for v in res_df.loc[win_start:win_end].sum(axis=1).values]
+            conus_com = [float(v) for v in com_df.loc[win_start:win_end].sum(axis=1).values]
+
+            # Per-state slices: each state gets its own cohort series in the
+            # SAME window (centered on the CONUS peak). State's "peak_gw" is
+            # that state's max within the window. Hourly values are rounded
+            # to 2 decimal places — 10 MW resolution is well below anything
+            # readable on the chart, saves ~40% on JSON file size.
+            per_state: dict[str, dict] = {}
+            for st in total_df.columns:
+                state_cohorts = {
+                    k: [round(float(v), 2) for v in df.loc[win_start:win_end, st].values]
+                    for k, df in cohort_dfs.items()
+                }
+                per_state[st] = {
+                    'cohorts': state_cohorts,
+                    'peak_gw': round(float(total_df.loc[win_start:win_end, st].max()), 2),
+                }
+
+            seasons[season_name] = {
+                'timestamps':  timestamps,
+                'peak_iso':    peak_ts.isoformat(),
+                'peak_gw':     float(wy_total_conus.max()),
+                'residential': conus_res,
+                'commercial':  conus_com,
+                'cohorts':     conus_cohorts,
+                'per_state':   per_state,
+            }
+
         if seasons:
             result[wy] = seasons
     return scenario, year, result
@@ -444,26 +476,34 @@ def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict, dict | N
     return scenario, year, sector, ann_dict, peak_dict, coincident
 
 
-def _cohort_daily_allwys_task(args: tuple) -> tuple[str, int, str, str, dict[int, list[float]], dict[int, list[str]]]:
+def _cohort_daily_allwys_task(args: tuple) -> tuple[str, int, str, str, dict]:
     """One (scenario, year, sector_in_file, cohort) intermediate `total` file →
-    daily-aggregated CONUS GWh for EVERY weather year. Returns:
-      (scenario, year, file_sector, cohort, {wy: [daily_gwh]}, {wy: [iso_dates]})
+    daily-aggregated GWh per (state, weather year) and the CONUS sum.
+
+    Returns: (scenario, year, file_sector, cohort, by_wy) where
+      by_wy[wy] = {'dates': [iso], 'CONUS': [daily], 'AL': [daily], ...}
     """
     paths, scenario, year, file_sector, cohort = args
     key = (scenario, file_sector, cohort, 'total', year)
     p = paths.get(key)
     if p is None:
-        return scenario, year, file_sector, cohort, {}, {}
-    df = _read_with_index(p)
-    conus = df.sum(axis=1)  # GWh hourly CONUS
-    daily_by_wy: dict[int, list[float]] = {}
-    dates_by_wy: dict[int, list[str]] = {}
-    for wy, group_idx in conus.groupby(conus.index.year).groups.items():
-        s = conus.loc[group_idx]
-        daily = s.resample('D').sum()
-        daily_by_wy[int(wy)] = [float(v) for v in daily.values]
-        dates_by_wy[int(wy)] = [d.isoformat() for d in daily.index]
-    return scenario, year, file_sector, cohort, daily_by_wy, dates_by_wy
+        return scenario, year, file_sector, cohort, {}
+    df = _read_with_index(p)              # rows=hours, cols=states
+    by_wy: dict[int, dict] = {}
+    for wy, group_idx in df.groupby(df.index.year).groups.items():
+        wy_df = df.loc[group_idx]
+        daily = wy_df.resample('D').sum()  # rows=days, cols=states
+        # Daily GWh per state, rounded to 1 decimal (0.1 GWh resolution
+        # ≈ 100 MWh; well below visualization granularity). CONUS keeps
+        # full precision because it lives in main.js (small footprint).
+        states_data: dict = {st: [round(float(v), 1) for v in daily[st].values]
+                             for st in daily.columns}
+        states_data['CONUS'] = [float(v) for v in daily.sum(axis=1).values]
+        by_wy[int(wy)] = {
+            'dates': [d.isoformat() for d in daily.index],
+            'states': states_data,
+        }
+    return scenario, year, file_sector, cohort, by_wy
 
 
 def _lbl_worker_init() -> None:
@@ -496,10 +536,18 @@ def _lbl_one_file_task(path_str: str) -> tuple[str, str, str, int, int, float] |
 def panel3_peak_week(
     res_inter: dict[tuple[str, str, str, str, int], Path],
     com_inter: dict[tuple[str, str, str, str, int], Path],
-) -> dict:
-    """Parallel over (scenario, year): summer + winter peak weeks per wy."""
+) -> tuple[dict, dict]:
+    """Parallel over (scenario, year). Returns a tuple:
+      (conus_only, per_state)
+    where:
+      conus_only[scenario][year][wy][season] = {timestamps, residential,
+        commercial, cohorts, peak_iso, peak_gw}        ← main payload
+      per_state[state][scenario][year][wy][season] =
+        {timestamps, cohorts, peak_iso, peak_gw}        ← lazy sidecars
+    """
     tasks = [(res_inter, com_inter, s, y) for s in SCENARIOS for y in STOCK_YEARS]
-    weeks: dict[str, dict[int, dict[int, dict[str, dict]]]] = {s: {} for s in SCENARIOS}
+    conus_only: dict = {s: {} for s in SCENARIOS}
+    per_state: dict = {}
     _log(f'  peak-week — {len(tasks)} (scenario, year) tasks across {WORKERS} processes')
     done = 0
     with ProcessPoolExecutor(max_workers=WORKERS) as pool:
@@ -507,9 +555,29 @@ def panel3_peak_week(
             done += 1
             tag = 'skipped (no data)' if not result else f'{len(result)} wy'
             _log(f'    ({done:>2}/{len(tasks)}) {scenario} y{year}  {tag}')
-            if result:
-                weeks[scenario][year] = result
-    return weeks
+            if not result:
+                continue
+            # Split each (wy, season) dict into a CONUS-only entry + a
+            # per-state slice. `per_state` field is pop'd out of `result`.
+            conus_only[scenario][year] = {}
+            for wy, seasons in result.items():
+                for season, w in seasons.items():
+                    state_block = w.pop('per_state', {})
+                    # Per-state files DROP `timestamps` and `peak_iso` — they
+                    # are identical to the CONUS-equivalent entry in main.js
+                    # for the same (scenario, year, wy, season). JS looks
+                    # them up from PAYLOAD.panel3 at render time, saving
+                    # ~10 MB per state file.
+                    for st, st_data in state_block.items():
+                        (per_state.setdefault(st, {})
+                                  .setdefault(scenario, {})
+                                  .setdefault(year, {})
+                                  .setdefault(wy, {}))[season] = {
+                            'cohorts': st_data['cohorts'],
+                            'peak_gw': st_data['peak_gw'],
+                        }
+                conus_only[scenario][year][wy] = seasons
+    return conus_only, per_state
 
 
 def panel_state_by_sector(
@@ -556,11 +624,16 @@ def panel_state_by_sector(
 def panel_cohort_daily_all_wys(
     res_inter: dict[tuple[str, str, str, str, int], Path],
     com_inter: dict[tuple[str, str, str, str, int], Path],
-) -> dict:
+) -> tuple[dict, dict]:
     """Cohort daily decomposition for EVERY (scenario, year, weather_year).
+    Returns a tuple:
+      (conus_only, per_state)
+    where:
+      conus_only[scenario][year][wy] = {dates, cohorts: {key: [daily]}}     ← main
+      per_state[state][scenario][year][wy] = {dates, cohorts: {key: [daily]}} ← lazy
 
     Tasks: 4 scenarios × 6 stock_years × 7 (sector,cohort) combos = 168.
-    Each task returns daily GWh per wy and the matching ISO dates per wy.
+    Each task now returns per-state daily series in addition to CONUS.
     """
     sector_cohorts = ([('residential', c) for c in RES_COHORTS]
                       + [('commercial',  c) for c in COM_COHORTS])
@@ -571,20 +644,35 @@ def panel_cohort_daily_all_wys(
                 paths = res_inter if sec == 'residential' else com_inter
                 tasks.append((paths, s, y, sec, coh))
 
-    # Accumulator: {scenario: {year: {wy: {dates, cohorts: {cohort_key: [daily]}}}}}
-    out: dict[str, dict[int, dict[int, dict]]] = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
+    conus_only: dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
+    per_state: dict = {}
     _log(f'  cohort_daily_all_wys — {len(tasks)} (scenario, year, sector, cohort) tasks across {WORKERS} processes')
     done = 0
     with ProcessPoolExecutor(max_workers=WORKERS) as pool:
-        for scenario, year, file_sector, cohort, daily_by_wy, dates_by_wy in pool.map(_cohort_daily_allwys_task, tasks):
+        for scenario, year, file_sector, cohort, by_wy in pool.map(_cohort_daily_allwys_task, tasks):
             done += 1
             cohort_key = ('res_' if file_sector == 'residential' else 'com_') + cohort
-            for wy, daily in daily_by_wy.items():
-                entry = out[scenario][year].setdefault(wy, {'dates': dates_by_wy[wy], 'cohorts': {}})
-                entry['cohorts'][cohort_key] = daily
+            for wy, payload in by_wy.items():
+                dates = payload['dates']
+                states_data = payload['states']
+                # CONUS goes into the main bucket.
+                conus_entry = conus_only[scenario][year].setdefault(wy, {'dates': dates, 'cohorts': {}})
+                conus_entry['cohorts'][cohort_key] = states_data['CONUS']
+                # Per-state files DROP `dates` — same dates apply across
+                # all states for the same (scenario, year, wy). JS reads
+                # PAYLOAD.cohort_daily for the dates string array, saving
+                # ~3 MB per state file.
+                for st, daily_vals in states_data.items():
+                    if st == 'CONUS':
+                        continue
+                    st_entry = (per_state.setdefault(st, {})
+                                          .setdefault(scenario, {})
+                                          .setdefault(year, {})
+                                          .setdefault(wy, {'cohorts': {}}))
+                    st_entry['cohorts'][cohort_key] = daily_vals
             if done == 1 or done == len(tasks) or done % 24 == 0:
                 _log(f'    ({done:>3}/{len(tasks)}) {scenario} y{year} {cohort_key}')
-    return out
+    return conus_only, per_state
 
 
 def panel_intermediate_annual(
@@ -688,13 +776,13 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
     _log(f'Intermediate index: res={len(res_inter)} com={len(com_inter)} files')
 
     _log('B. panel3_peak_week...')
-    panel3 = panel3_peak_week(res_inter, com_inter)
+    panel3_conus, panel3_per_state = panel3_peak_week(res_inter, com_inter)
 
     _log('C. panel_state_by_sector — per-state annual+peak per sector...')
     state_by_sector = panel_state_by_sector(res_inter, com_inter)
 
     _log('D. panel_cohort_daily_all_wys — daily cohort decomp, every wy...')
-    cohort_daily = panel_cohort_daily_all_wys(res_inter, com_inter)
+    cohort_daily_conus, cohort_daily_per_state = panel_cohort_daily_all_wys(res_inter, com_inter)
 
     _log('E. panel_intermediate_annual (kept for reconciliation)...')
     intermediate_annual = panel_intermediate_annual(res_inter, com_inter)
@@ -740,7 +828,9 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
                 if v > d.get(metric_name, 0.0):
                     d[metric_name] = float(v)
 
-    return {
+    # Main payload (CONUS-only for cohort daily + peak week; everything else
+    # fully included). Per-state cohort + peak week data live in sidecar files.
+    main_payload = {
         'scenarios':         SCENARIOS,
         'stock_years':       STOCK_YEARS,
         'res_cohorts':       RES_COHORTS,
@@ -753,13 +843,13 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
         'axis': {
             'annual_gwh_max': _ceil_to_step(max_annual * 1.10, 500_000.0),
             'peak_gw_max':    _ceil_to_step(max_peak * 1.10, 100.0),
-            'trajectory_max': traj_max,    # [state][sector][metric] = max
-            'choropleth_max': chor_max,    # [sector][metric] = max
+            'trajectory_max': traj_max,
+            'choropleth_max': chor_max,
         },
         'panel1':              panel1,
-        'panel3':              panel3,
-        'state_by_sector':     state_by_sector,    # {annual_gwh, peak_gw} → scen/year/wy/sector/state
-        'cohort_daily':        cohort_daily,       # scen/year/wy → {dates, cohorts}
+        'panel3':              panel3_conus,
+        'state_by_sector':     state_by_sector,
+        'cohort_daily':        cohort_daily_conus,
         'intermediate_annual': intermediate_annual,
         'lbl_annual':          lbl_annual,
         'meta': {
@@ -768,6 +858,16 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
             'generated_iso': time.strftime('%Y-%m-%dT%H:%M:%S'),
         },
     }
+    # Per-state sidecars: one entry per state. The dashboard lazy-loads these.
+    state_keys = sorted(set(panel3_per_state.keys()) | set(cohort_daily_per_state.keys()))
+    per_state_sidecars: dict[str, dict] = {
+        st: {
+            'cohort_daily': cohort_daily_per_state.get(st, {}),
+            'peak_week':    panel3_per_state.get(st, {}),
+        }
+        for st in state_keys
+    }
+    return {'main': main_payload, 'per_state': per_state_sidecars}
 
 
 def main() -> None:
@@ -776,19 +876,52 @@ def main() -> None:
                     help='ResStock run dir containing ReEDs/, intermediate/state/, LBL/.')
     ap.add_argument('--com-run-dir', type=Path, required=True,
                     help='ComStock run dir containing ReEDs/, intermediate/state/, LBL/.')
-    ap.add_argument('--out', type=Path, default=Path(__file__).parent / 'payload.json',
-                    help='Output payload.json path (default: plots/payload.json).')
+    ap.add_argument('--out-dir', type=Path, default=Path(__file__).parent / 'data',
+                    help='Output dir for main.js + state_<postal>.js sidecars '
+                         '(default: plots/data/).')
     args = ap.parse_args()
 
     _log(f'aggregate.py — WORKERS={WORKERS} (env BAKE_WORKERS={os.environ.get("BAKE_WORKERS","unset")}, cpu_count={os.cpu_count()})')
     _log(f'  res_run_dir: {args.res_run_dir}')
     _log(f'  com_run_dir: {args.com_run_dir}')
 
-    payload = build_payload(args.res_run_dir, args.com_run_dir)
-    _log('Serializing payload...')
-    args.out.write_text(json.dumps(payload, separators=(',', ':')))
-    sz = args.out.stat().st_size
-    _log(f'Wrote {args.out}  ({sz/1e6:.2f} MB)')
+    bundle = build_payload(args.res_run_dir, args.com_run_dir)
+
+    _log('Writing data/ sidecars...')
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    # data/main.js — sets window.PAYLOAD via an IIFE; fires onPayloadLoaded if
+    # the dashboard wants to schedule something after main load.
+    main_json = json.dumps(bundle['main'], separators=(',', ':'))
+    main_js = (
+        '(function(){\n'
+        f'  window.PAYLOAD = {main_json};\n'
+        '  if (window.onPayloadLoaded) window.onPayloadLoaded();\n'
+        '})();\n'
+    )
+    main_path = args.out_dir / 'main.js'
+    main_path.write_text(main_js)
+    _log(f'  main.js  → {main_path.stat().st_size/1e6:.2f} MB')
+
+    # data/state_<postal>.js — one per state. Registers into window.STATE_DATA
+    # and fires onStateLoaded(postal) if a callback is set.
+    per_state = bundle['per_state']
+    _log(f'  per-state — {len(per_state)} sidecars')
+    total_state_bytes = 0
+    for st, st_data in per_state.items():
+        st_json = json.dumps(st_data, separators=(',', ':'))
+        st_js = (
+            '(function(){\n'
+            '  window.STATE_DATA = window.STATE_DATA || {};\n'
+            f'  window.STATE_DATA[{json.dumps(st)}] = {st_json};\n'
+            f'  if (window.onStateLoaded) window.onStateLoaded({json.dumps(st)});\n'
+            '})();\n'
+        )
+        st_path = args.out_dir / f'state_{st}.js'
+        st_path.write_text(st_js)
+        total_state_bytes += st_path.stat().st_size
+    _log(f'  state_*.js total → {total_state_bytes/1e6:.2f} MB across {len(per_state)} files'
+         f' ({total_state_bytes/max(len(per_state),1)/1e6:.2f} MB avg)')
     _log('Done.')
 
 

@@ -10,9 +10,12 @@
 # Bake the BuildStock projection dashboard from one res run_dir + one com
 # run_dir, in two stages:
 #   1. aggregate.py        — reads ReEDs/, intermediate/state/, LBL/ and
-#                            writes plots/payload.json (heavy I/O, ~3-5 min).
-#   2. build_dashboard.py  — reads payload.json + template and writes
-#                            plots/dashboard.html (sub-second).
+#                            writes plots/data/main.js + plots/data/state_*.js
+#                            (heavy I/O, ~5-7 min).
+#   2. build_dashboard.py  — copies the template into plots/dashboard.html
+#                            (sub-second). The HTML references
+#                            data/main.js via <script src> and lazy-loads
+#                            data/state_<postal>.js on state click.
 #
 # Iterate on plot design by re-running just step 2 from the login node —
 # no need to repeat step 1 unless the source run_dirs change.

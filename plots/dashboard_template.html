@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <title>BuildStock Projection Dashboard</title>
 <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+<!-- Main payload (CONUS view). Per-state cohort + peak-week data is loaded
+     lazily from data/state_<postal>.js when the user picks a state. -->
+<script src="data/main.js"></script>
 <style>
   :root {
     --bg: #fafafa; --panel: #ffffff; --ink: #1c1c1e; --muted: #6b6b6f;
@@ -268,7 +271,11 @@
 <footer id="footer-meta"></footer>
 
 <script>
-const PAYLOAD = __PAYLOAD__;
+// `PAYLOAD` is loaded by data/main.js (via the script tag in <head>) before
+// this inline script runs. The per-state STATE_DATA registry is filled
+// on demand by lazy-loaded data/state_<postal>.js files.
+const PAYLOAD = window.PAYLOAD;
+window.STATE_DATA = window.STATE_DATA || {};
 
 // Cohort colors and order.
 const COHORT_DEF = [
@@ -360,6 +367,79 @@ function fmtEnergy(v) {
 function fmtPower(v) {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
   return Number(v).toLocaleString(undefined, {maximumFractionDigits: 1}) + ' GW';
+}
+
+// === Lazy state-data loader ==============================================
+// CONUS data is in PAYLOAD; per-state cohort + peak-week data lives in
+// data/state_<postal>.js sidecars loaded on demand via <script> injection
+// (works under file:// because <script src> is exempt from CORS).
+const STATE_LOADING = {};       // postal → [callbacks]
+
+function ensureStateLoaded(postal, cb) {
+  if (postal === 'CONUS' || window.STATE_DATA[postal]) { cb(); return; }
+  if (STATE_LOADING[postal]) { STATE_LOADING[postal].push(cb); return; }
+  STATE_LOADING[postal] = [cb];
+  const s = document.createElement('script');
+  s.src = `data/state_${postal}.js`;
+  s.async = false;
+  s.onload  = () => { const cbs = STATE_LOADING[postal] || []; delete STATE_LOADING[postal]; cbs.forEach(f => f()); };
+  s.onerror = () => { const cbs = STATE_LOADING[postal] || []; delete STATE_LOADING[postal];
+                       console.error(`Failed to load state ${postal}`); cbs.forEach(f => f()); };
+  document.head.appendChild(s);
+}
+
+function isStateLoading(postal) {
+  return postal !== 'CONUS' && !window.STATE_DATA[postal];
+}
+
+// Lookup helpers that prefer per-state sidecar data when state ≠ CONUS,
+// falling back to PAYLOAD for CONUS or to null if not yet loaded.
+function setSelectedState(postal) {
+  state.trajState = postal;
+  const dd = document.getElementById('traj-state');
+  if (dd) dd.value = postal;
+  renderTrajectory();                  // uses state_by_sector (fully embedded)
+  renderCohort();                      // may show "Loading…" until sidecar lands
+  renderCohortPeakWeek();
+  ensureStateLoaded(postal, () => {
+    // Re-render only if the user is still on this state.
+    if (state.trajState === postal) {
+      renderCohort();
+      renderCohortPeakWeek();
+    }
+  });
+}
+
+// Per-state sidecars drop `dates`/`timestamps`/`peak_iso` to save ~10 MB/file —
+// the dashboard pulls them from the CONUS-equivalent entry in PAYLOAD.
+function getCohortDailyEntry(postal, scenario, year, wy) {
+  if (postal === 'CONUS') {
+    return ((PAYLOAD.cohort_daily[scenario] || {})[year] || {})[wy];
+  }
+  const st = window.STATE_DATA[postal];
+  if (!st || !st.cohort_daily) return null;
+  const stEntry = ((st.cohort_daily[scenario] || {})[year] || {})[wy];
+  if (!stEntry) return null;
+  const conusEntry = ((PAYLOAD.cohort_daily[scenario] || {})[year] || {})[wy];
+  return {dates: conusEntry?.dates || [], cohorts: stEntry.cohorts};
+}
+
+function getPeakWeekEntry(postal, scenario, year, wy, season) {
+  if (postal === 'CONUS') {
+    const all = ((PAYLOAD.panel3[scenario] || {})[year] || {})[wy];
+    return all ? all[season] : null;
+  }
+  const st = window.STATE_DATA[postal];
+  if (!st || !st.peak_week) return null;
+  const stEntry = (((st.peak_week[scenario] || {})[year] || {})[wy] || {})[season];
+  if (!stEntry) return null;
+  const conusSeason = (((PAYLOAD.panel3[scenario] || {})[year] || {})[wy] || {})[season];
+  return {
+    timestamps: conusSeason?.timestamps || [],
+    cohorts:    stEntry.cohorts,
+    peak_iso:   conusSeason?.peak_iso || '',
+    peak_gw:    stEntry.peak_gw,
+  };
 }
 
 function annualReEDs(sc, y, wy) {
@@ -456,7 +536,7 @@ function buildControls() {
     if (s === state.trajState) o.selected = true;
     stEl.appendChild(o);
   });
-  stEl.onchange = () => { state.trajState = stEl.value; renderTrajectory(); };
+  stEl.onchange = () => setSelectedState(stEl.value);
 
   // Map metric + sector chips
   document.querySelectorAll('[data-map-metric]').forEach(btn => {
@@ -739,11 +819,15 @@ function renderMap() {
 
 function renderCohort() {
   const wy = weatherYear();
-  const entry = ((PAYLOAD.cohort_daily[state.scenario] || {})[stockYear()] || {})[wy];
+  const st = state.trajState;
+  const entry = getCohortDailyEntry(st, state.scenario, stockYear(), wy);
   if (!entry || !entry.cohorts) {
+    const placeholder = isStateLoading(st)
+      ? `Loading ${st} data…`
+      : 'No data';
     Plotly.react('plot-cohort', [], {
       margin: {t: 24, r: 8, b: 36, l: 70},
-      annotations: [{text: 'No data', xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {color: '#999'}}],
+      annotations: [{text: placeholder, xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {color: '#999'}}],
     }, {displayModeBar: false, responsive: true});
     return;
   }
@@ -790,7 +874,7 @@ function renderCohort() {
             tickformat: '.2s'},
     legend: {orientation: 'h', y: -0.15, font: {size: 10}, traceorder: 'normal'},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    title: {text: `${state.scenario} · stock ${stockYear()} · amy${wy}`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+    title: {text: `${state.scenario} · ${state.trajState} · stock ${stockYear()} · amy${wy}`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
     annotations: peakAnn ? [peakAnn] : [],
   };
   Plotly.react('plot-cohort', traces, layout, {displayModeBar: false, responsive: true});
@@ -798,14 +882,16 @@ function renderCohort() {
 
 function renderCohortPeakWeek() {
   const wy = weatherYear();
-  const wkAll = ((PAYLOAD.panel3[state.scenario] || {})[stockYear()] || {})[wy];
-  const wk = wkAll ? wkAll[state.cohortSeason] : null;
+  const st = state.trajState;
+  const wk = getPeakWeekEntry(st, state.scenario, stockYear(), wy, state.cohortSeason);
   if (!wk || !wk.cohorts) {
+    const placeholder = isStateLoading(st)
+      ? `Loading ${st} data…`
+      : `No ${state.cohortSeason} peak data`;
     Plotly.react('plot-cohort-pk', [], {
       margin: {t: 24, r: 8, b: 36, l: 70},
       yaxis: {title: 'GW'},
-      annotations: [{text: 'No ' + state.cohortSeason + ' peak data',
-                     xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
+      annotations: [{text: placeholder, xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
                      showarrow: false, font: {color: '#999'}}],
     }, {displayModeBar: false, responsive: true});
     return;
@@ -824,7 +910,7 @@ function renderCohortPeakWeek() {
     yaxis: {title: 'Power (GW)', gridcolor: '#eee', zeroline: false},
     legend: {orientation: 'h', y: -0.18, font: {size: 10}, traceorder: 'normal'},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    title: {text: `${state.scenario} · stock ${stockYear()} · amy${wy} · ${state.cohortSeason} peak`,
+    title: {text: `${state.scenario} · ${state.trajState} · stock ${stockYear()} · amy${wy} · ${state.cohortSeason} peak`,
             x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
     annotations: [{
       x: wk.peak_iso, y: wk.peak_gw,
@@ -930,9 +1016,7 @@ if (mapDiv && mapDiv.on) {
     const pt = evt?.points?.[0];
     if (!pt?.location) return;       // ignore clicks on the text overlay
     const next = (state.trajState === pt.location) ? 'CONUS' : pt.location;
-    state.trajState = next;
-    document.getElementById('traj-state').value = next;
-    renderTrajectory();
+    setSelectedState(next);
   });
 }
 

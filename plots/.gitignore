@@ -1,5 +1,6 @@
 # Generated artifacts — rebuild via `sbatch plots/I_run_bake.sh <res> <com>`,
 # or iterate on plot styling with `python plots/build_dashboard.py` once
-# payload.json exists.
+# data/main.js exists.
 payload.json
 dashboard.html
+data/
