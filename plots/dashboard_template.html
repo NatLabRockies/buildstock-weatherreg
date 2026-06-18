@@ -730,7 +730,7 @@ function renderMap() {
   // for savings/pct_savings.
   let colorscale, zmin, zmax, cbTitle;
   let isSeasonalPeak = false;
-  if (mode === 'absolute' && metric === 'peak_gw') {
+  if (mode === 'absolute' && metric === 'peak_gw' && PAYLOAD.seasonal_peak_by_state) {
     // Diverging: + winter-peaking, − summer-peaking; magnitude = peak GW.
     isSeasonalPeak = true;
     const sp = ((PAYLOAD.seasonal_peak_by_state[state.scenario] || {})[y] || {})[wy] || {};
