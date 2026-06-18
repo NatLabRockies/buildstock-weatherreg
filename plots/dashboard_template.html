@@ -145,8 +145,6 @@
     </div>
   </section>
 
-  <section class="headline" id="headline"></section>
-
   <nav class="tabs" id="tabs"></nav>
 </div>
 
@@ -184,6 +182,14 @@
         <button class="pill"        data-map-sector="residential">Res</button>
         <button class="pill"        data-map-sector="commercial">Com</button>
         <button class="pill"        data-map-sector="gap">Gap</button>
+      </div>
+      <div class="local-controls">
+        <span class="label">Mode</span>
+        <button class="pill active" data-map-mode="absolute">Absolute</button>
+        <button class="pill"        data-map-mode="savings">Saved</button>
+        <button class="pill"        data-map-mode="pct_savings">% saved</button>
+        <span class="label" style="margin-left: 8px;">vs</span>
+        <select class="pill" id="map-reference"></select>
       </div>
       <div id="plot-map" class="plot"></div>
     </div>
@@ -258,6 +264,8 @@ const state = {
   trajState:     'CONUS',
   mapMetric:     'annual_gwh',
   mapSector:     'total',
+  mapMode:       'absolute',
+  mapReference:  PAYLOAD.scenarios[0],          // Baseline by default
   cohortSeason:  'winter',
 };
 
@@ -378,6 +386,22 @@ function buildControls() {
       renderCohortPeakWeek();
     };
   });
+  document.querySelectorAll('[data-map-mode]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-map-mode]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.mapMode = btn.dataset.mapMode;
+      renderMap();
+    };
+  });
+  const refEl = document.getElementById('map-reference');
+  PAYLOAD.scenarios.forEach(sc => {
+    const o = document.createElement('option');
+    o.value = sc; o.textContent = sc;
+    if (sc === state.mapReference) o.selected = true;
+    refEl.appendChild(o);
+  });
+  refEl.onchange = () => { state.mapReference = refEl.value; renderMap(); };
 
   document.getElementById('footer-meta').textContent =
       PAYLOAD.scenarios.length + ' scenarios × ' +
@@ -526,26 +550,84 @@ function renderTrajectoryBreakdown() {
 
 function renderMap() {
   const metric = state.mapMetric, sector = state.mapSector;
+  const mode = state.mapMode, refSc = state.mapReference;
   const y = stockYear(), wy = weatherYear();
-  const tree = (PAYLOAD.state_by_sector[metric][state.scenario] || {})[y] || {};
-  const sec_d = (tree[wy] || {})[sector] || {};
+
+  // Pull the (sector, state) tree for both the current scenario and the
+  // reference. CONUS values come from the same tree under key 'CONUS'.
+  const cur = (((PAYLOAD.state_by_sector[metric][state.scenario] || {})[y] || {})[wy] || {})[sector] || {};
+  const ref = (((PAYLOAD.state_by_sector[metric][refSc]         || {})[y] || {})[wy] || {})[sector] || {};
   const states = PAYLOAD.states;
-  const values = states.map(s => sec_d[s] ?? null);
-  const zmax = (PAYLOAD.axis.choropleth_max[sector] || {})[metric] || 1;
+
+  // Per-state value under the chosen mode.
+  const computeValue = (curV, refV) => {
+    if (curV === undefined || curV === null) return null;
+    if (mode === 'absolute') return curV;
+    if (refV === undefined || refV === null) return null;
+    if (mode === 'savings') return refV - curV;             // positive = current saves
+    if (mode === 'pct_savings') return refV ? (refV - curV) / refV * 100 : null;
+    return curV;
+  };
+  const values = states.map(s => computeValue(cur[s], ref[s]));
+  const conusVal = computeValue(cur['CONUS'], ref['CONUS']);
+
+  // Colorscale + zmin/zmax: monotonic for absolute, diverging for savings.
+  let colorscale, zmin, zmax, cbTitle;
+  if (mode === 'absolute') {
+    colorscale = 'YlGnBu';
+    zmin = 0;
+    zmax = (PAYLOAD.axis.choropleth_max[sector] || {})[metric] || 1;
+    cbTitle = metric === 'annual_gwh' ? 'GWh / yr' : 'GW peak';
+  } else {
+    colorscale = 'RdYlGn';     // red = uses more, yellow = no diff, green = saves
+    const numeric = values.filter(v => v !== null && !Number.isNaN(v));
+    const maxAbs = numeric.length
+      ? Math.max(...numeric.map(v => Math.abs(v)))
+      : 1;
+    zmin = -maxAbs;
+    zmax =  maxAbs;
+    cbTitle = mode === 'savings'
+      ? (metric === 'annual_gwh' ? 'GWh / yr saved' : 'GW peak saved')
+      : '% saved';
+  }
+
+  const unit = mode === 'pct_savings' ? ' %'
+             : (metric === 'annual_gwh' ? ' GWh' : ' GW');
+  const fmtVal = v => v === null ? '—'
+                    : (mode === 'pct_savings' ? v.toFixed(1)
+                       : Number(v).toLocaleString(undefined, {maximumFractionDigits: 1}));
 
   const data = [{
     type: 'choropleth', locationmode: 'USA-states',
     locations: states, z: values,
-    zmin: 0, zmax: zmax,
-    colorscale: 'YlGnBu',
-    colorbar: {title: metric === 'annual_gwh' ? 'GWh / yr' : 'GW peak', thickness: 12, len: 0.8},
+    zmin: zmin, zmax: zmax, colorscale: colorscale,
+    colorbar: {title: cbTitle, thickness: 12, len: 0.8},
     marker: {line: {color: '#fff', width: 0.5}},
-    hovertemplate: '<b>%{location}</b><br>%{z:,.1f}<extra></extra>',
+    hovertemplate: `<b>%{location}</b><br>%{z:,.1f}${unit}<extra></extra>`,
   }];
+
+  // CONUS annotation in the top-right corner. For savings/pct_savings the
+  // CONUS value applies the same operation to the CONUS pseudo-state values
+  // (which were computed coincidentally for peak in the aggregator).
+  const sameAsRef = (mode !== 'absolute' && refSc === state.scenario);
+  const annText = sameAsRef
+    ? `<b>CONUS</b><br>(${state.scenario} vs ${refSc} = self)`
+    : `<b>CONUS:</b> ${fmtVal(conusVal)}${unit}`;
+
   const layout = {
-    margin: {t: 24, r: 0, b: 0, l: 0},
+    margin: {t: 6, r: 0, b: 0, l: 0},
     geo: {scope: 'usa', projection: {type: 'albers usa'},
           showlakes: true, lakecolor: '#fafafa', bgcolor: '#fff'},
+    annotations: [{
+      text: annText,
+      xref: 'paper', yref: 'paper',
+      x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top',
+      showarrow: false,
+      bgcolor: 'rgba(255,255,255,0.94)',
+      bordercolor: '#1c4f93', borderwidth: 1, borderpad: 6,
+      font: {size: 12, color: '#1c4f93'},
+      align: 'right',
+    }],
   };
   Plotly.react('plot-map', data, layout, {displayModeBar: false, responsive: true});
 }
@@ -658,7 +740,6 @@ function showTab(id) {
 
 function refresh() {
   syncActivePills();
-  renderHeadline();
   showTab(state.tab);
   if (state.tab === 'reeds') {
     renderTrajectory();
