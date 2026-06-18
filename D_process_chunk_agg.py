@@ -99,7 +99,11 @@ print('Script start time:', script_start_time)
 start_index = int(sys.argv[1])
 end_index = int(sys.argv[2])
 meta_path = sys.argv[3]
-upgrade = sys.argv[4]
+# argv[4] is retained for backward compatibility with C_run_bldg_chunk_agg.sh,
+# but the authoritative source of `upgrade_id` is now `spec['upgrade_id']`
+# (read below). With list-valued upgrade specs, argv[4] is a stringified token
+# (e.g. "[1, 14, 58]") used only in log messages.
+_argv4_upgrade_token = sys.argv[4]
 prefix = sys.argv[5]
 output_dir = sys.argv[6]
 script_dir = sys.argv[7]
@@ -112,10 +116,35 @@ spec_index = int(sys.argv[9])
 with open(os.path.join(output_dir, 'inputs', 'switches_agg.json'), 'r') as f:
     switch = json.load(f)
 
+
+# Names propagate into upgrade_tag, which is the leading segment of every
+# chunk/manifest/meta/agg filename and of SLURM job names. The agg-side
+# parser splits the tag on the FIRST underscore to recover the
+# `<reg|ref>_b<year>` suffix (see agg_buildings._chunks_eulp_dir), so an
+# underscore inside `name` would steal that split. Enforce ASCII letters,
+# digits, dots, and hyphens — fail loudly otherwise.
+_VALID_NAME_RE = re.compile(r'^[A-Za-z0-9.\-]+$')
+
+
+def _validate_spec_name(name):
+    if not isinstance(name, str) or not name:
+        raise ValueError(
+            f"run_specs entry is missing required 'name' field (got {name!r})"
+        )
+    if not _VALID_NAME_RE.match(name):
+        raise ValueError(
+            f"run_spec name {name!r} contains disallowed characters. "
+            "Allowed: letters, digits, '.', '-' (no '_', no spaces, no '/')."
+        )
+    return name
+
+
 # Per-spec values: each run_specs entry carries its own
-# apply_regression / base_year / target_year, so two specs with the same
-# upgrade_id can produce different outputs in one run.
+# apply_regression / base_year / target_year / name / restrict / avoid,
+# so two specs with the same upgrade_id can produce different outputs in
+# one run. The supplied `name` field disambiguates them.
 spec = switch['run_specs'][spec_index]
+spec_name = _validate_spec_name(spec['name'])
 sw_apply_regression = bool(spec['apply_regression'])
 base_year = spec['base_year']
 target_years = parse_target_years(spec['target_year'])
@@ -123,7 +152,26 @@ comparison_year = (
     base_year if base_year in target_years else target_years[0]
 ) # Year used for df_meta annual regression comparison columns
 regression_tag = 'reg' if sw_apply_regression else 'ref'
-upgrade_tag = f'{upgrade}_{regression_tag}_b{base_year}'
+upgrade_tag = f'{spec_name}_{regression_tag}_b{base_year}'
+
+# `upgrade_id` may be a scalar OR a list. For a list, we call process_chunk_agg
+# once per upgrade and sum the resulting timeseries — the spec's restrict/avoid
+# applies identically to each upgrade pull. `upgrade_ids` is always a list
+# internally; `upgrade_display` is just for log lines.
+_raw_upgrade = spec['upgrade_id']
+upgrade_ids = list(_raw_upgrade) if isinstance(_raw_upgrade, (list, tuple)) else [_raw_upgrade]
+upgrade_display = (
+    str(upgrade_ids[0]) if len(upgrade_ids) == 1 else f'{upgrade_ids!r}'
+)
+
+# Spec-level applied filters. Each is an optional dict of the shape
+#   { "all_of": [<upgrade_id>, ...], "any_of": [<upgrade_id>, ...] }
+# Both keys are optional; missing/None means "no extra predicate." When
+# present, the dict gets translated into a BSQ `get_applied_buildings_filter`
+# RestrictTuple inside process_chunk_agg and appended to the BSQ
+# restrict= or avoid= list.
+spec_restrict_filter = spec.get('restrict') or None
+spec_avoid_filter = spec.get('avoid') or None
 
 # Per-spec subfolders inside the run output dir. D writes its three kinds of
 # chunk artifacts directly into these (rather than the run-dir root) so the
@@ -139,7 +187,10 @@ for _d in (chunks_eulp_dir, chunks_meta_dir, chunks_sql_dir):
 print('start_index:', start_index)
 print('end_index:', end_index)
 print('meta_path:', meta_path)
-print('upgrade:', upgrade)
+print('upgrade_ids:', upgrade_ids)
+print('spec_name:', spec_name)
+print('spec_restrict_filter:', spec_restrict_filter)
+print('spec_avoid_filter:', spec_avoid_filter)
 print('prefix:', prefix)
 print('output_dir:', output_dir)
 print('script_dir:', script_dir)
@@ -155,7 +206,7 @@ _task_id = os.environ.get('SLURM_ARRAY_TASK_ID', '<task_idx_from_manifest>')
 _manifest_path = f'{output_dir}/inputs/manifest_upgrade{upgrade_tag}.csv'
 print(f'sbatch --job-name={prefix}chunk_{upgrade_tag} '
       f'--array={_task_id} ./C_run_bldg_chunk_agg.sh '
-      f'{_manifest_path} {meta_path} {upgrade} {prefix} '
+      f'{_manifest_path} {meta_path} {_argv4_upgrade_token} {prefix} '
       f'{output_dir} {script_dir} {spec_index}')
 
 ## Switch that designates comstock or resstock data
@@ -363,9 +414,51 @@ def write_pretty_sql(sql, path):
         f.write(formatted)
 
 
+def _apply_state_adjustment(ts_agg, df_meta, adjustment_factor_path):
+    """Multiply every electricity column in `ts_agg` by per-(timestamp,
+    bldg-state) calibration factors from a (hours × state-postal) parquet.
+
+    Scaling every electric component uniformly preserves the net-calibration
+    target because:
+        new_total − new_pv = factor × total − factor × pv
+                           = factor × (total − pv)
+                           = factor × old_net
+    The non_hvac.elec residual computed by the caller (total − cooling −
+    heating − ev) automatically scales by the same factor since all four
+    inputs do. Natural gas is intentionally NOT scaled — the parquet
+    calibrates net electric load, not gas.
+
+    `adjustment_factor_path` is resolved against `script_dir` if relative.
+    Rows whose (timestamp, state) isn't in the parquet fall through with
+    factor 1.0 (no adjustment).
+    """
+    path = (adjustment_factor_path if os.path.isabs(adjustment_factor_path)
+            else os.path.join(script_dir, adjustment_factor_path))
+    adj = pd.read_parquet(path)
+    adj.index.name = 'timestamp'
+    adj_long = adj.stack()          # MultiIndex (timestamp, state) -> factor
+    adj_long.index.names = ['timestamp', 'state']
+
+    # df_meta uses BSQ-prefixed column names ('in.state', not 'state')
+    row_states = ts_agg.index.map(df_meta['in.state'])
+    keys = pd.MultiIndex.from_arrays(
+        [pd.DatetimeIndex(ts_agg['timestamp']), row_states],
+        names=['timestamp', 'state'],
+    )
+    factors = adj_long.reindex(keys).fillna(1.0).to_numpy()
+    matched = int((factors != 1.0).sum())
+    print(f'  ResStock calibration: {matched:,} / {len(factors):,} rows '
+          f'scaled via {os.path.basename(path)}')
+
+    for col in ('cooling.elec', 'heating.elec', 'ev', 'pv', 'total'):
+        if col in ts_agg.columns:
+            ts_agg[col] = ts_agg[col].to_numpy() * factors
+
+
 def process_chunk_agg(run_type, upgrade, weather_locs, weather_col, bsq_cols,
                       sw_comstock, chunk_states, sw_savings_shape, df_meta,
-                      applied_only, query_label='base'):
+                      applied_only, query_label='base',
+                      spec_restrict=None, spec_avoid=None):
     """
     This function aggregates timeseries data for a specific run type, upgrade,
     enduse, and set of weather locations.
@@ -388,6 +481,15 @@ def process_chunk_agg(run_type, upgrade, weather_locs, weather_col, bsq_cols,
     query_label (str): Role of this call ('base' or 'target'). Controls the
         filename of the saved Athena SQL — 'base' uses no suffix so it sits
         next to the chunk's meta CSV; other labels are appended.
+    spec_restrict (dict | None): Optional applied-upgrade predicate to AND
+        into BSQ's restrict list. Shape:
+        ``{"all_of": [<upgrade_id>...], "any_of": [<upgrade_id>...]}``;
+        either key may be omitted. The pair is translated to a
+        `get_applied_buildings_filter` RestrictTuple and appended to
+        restrict so only bldg_ids satisfying the predicate are pulled.
+    spec_avoid (dict | None): Same shape as `spec_restrict`, but the
+        resulting RestrictTuple is appended to BSQ's avoid list — i.e.
+        bldg_ids satisfying the predicate are EXCLUDED.
 
     Returns:
     ts_agg (DataFrame): Aggregated timeseries HVAC electricity.
@@ -395,8 +497,13 @@ def process_chunk_agg(run_type, upgrade, weather_locs, weather_col, bsq_cols,
     aws_cols = [c for c in bsq_cols]
     aws_weather_locs = weather_locs.copy()
     aws_run_type = run_types[run_type].copy()
+    # Optional ResStock calibration. The (8760 × 49-state) parquet, if set on
+    # the run_type, multiplies the BSQ-pulled electric load columns *before*
+    # the non_hvac residual is computed (so the residual stays consistent)
+    # and *before* any regression. Pop it out so BSQ doesn't see the unknown
+    # kwarg. None means "no calibration" — leaves ts_agg unchanged.
+    adjustment_factor_path = aws_run_type.pop('adjustment_factor', None)
     natural_gas = ['out.natural_gas.heating.energy_consumption']
-
     # Split HVAC enduses into pure-heating, pure-cooling, and ambiguous
     # (heating-or-cooling depending on which mode the air handler / hydronic
     # loop is in that day). ResStock breaks fans/pumps out by mode already,
@@ -425,49 +532,81 @@ def process_chunk_agg(run_type, upgrade, weather_locs, weather_col, bsq_cols,
             'out.electricity.heat_recovery.energy_consumption',
             'out.electricity.pumps.energy_consumption',
         ]
+        total = ['out.electricity.total.energy_consumption']
+        pv = ['out.electricity.pv.energy_consumption']
+        ev = []
+        avoid = [('in.hvac_system_type', ('PTAC with gas boiler',))]
     else:
         # ResStock's natural ordering already happens to equal
         # `heating_pure + cooling_pure` so cache stays warm without
         # special handling.
         heating_pure = [
-            'out.electricity.heating.energy_consumption',
-            'out.electricity.heating_fans_pumps.energy_consumption',
-            'out.electricity.heating_hp_bkup.energy_consumption',
-            'out.electricity.heating_hp_bkup_fa.energy_consumption',
+            'out.electricity.heating.energy_consumption..kwh',
+            'out.electricity.heating_fans_pumps.energy_consumption..kwh',
+            'out.electricity.heating_hp_bkup.energy_consumption..kwh',
+            'out.electricity.heating_hp_bkup_fa.energy_consumption..kwh',
         ]
         cooling_pure = [
-            'out.electricity.cooling.energy_consumption',
-            'out.electricity.cooling_fans_pumps.energy_consumption',
+            'out.electricity.cooling.energy_consumption..kwh',
+            'out.electricity.cooling_fans_pumps.energy_consumption..kwh',
         ]
         heating_and_cooling = []
-        elec_enduse = heating_pure + cooling_pure + heating_and_cooling
-        # ResStock has suffix '..kwh' for electricity & ng enduse columns
-        elec_enduse = [c + '..kwh' for c in elec_enduse]
-        heating_pure = [c + '..kwh' for c in heating_pure]
-        cooling_pure = [c + '..kwh' for c in cooling_pure]
-        natural_gas = [enduse + '..kwh' for enduse in natural_gas]
+        ev = ['out.electricity.ev_charging.energy_consumption..kwh']
+        total = ['out.electricity.total.energy_consumption..kwh']
+        pv = ['out.electricity.pv.energy_consumption..kwh']
+        avoid = []
 
+        elec_enduse = heating_pure + cooling_pure + heating_and_cooling
+        natural_gas = ['out.natural_gas.heating.energy_consumption..kwh']
+    restrict = [('state', chunk_states),
+                  (weather_col, aws_weather_locs),
+                 ]
     my_run = BuildStockQuery(**aws_run_type)
+
+    # Spec-level applied filters. `get_applied_buildings_filter` returns a
+    # `(cols, subquery)` RestrictTuple ready to drop into restrict= or avoid=.
+    # It returns None when both predicate lists are empty/None — we guard
+    # against that explicitly. A spec can carry both `restrict` and `avoid`
+    # (e.g., "upgrade 32 applied AND upgrade 4 NOT applied"), so the two
+    # predicates are built and slotted independently.
+    if spec_restrict:
+        applied_restrict_filter = my_run.get_applied_buildings_filter(
+            any_of=spec_restrict.get('any_of'),
+            all_of=spec_restrict.get('all_of'),
+        )
+        if applied_restrict_filter is not None:
+            restrict = restrict + [applied_restrict_filter]
+    if spec_avoid:
+        applied_avoid_filter = my_run.get_applied_buildings_filter(
+            any_of=spec_avoid.get('any_of'),
+            all_of=spec_avoid.get('all_of'),
+        )
+        if applied_avoid_filter is not None:
+            avoid = avoid + [applied_avoid_filter]
+
     ts_agg_query = my_run.query(
         upgrade_id=upgrade,
         applied_only=False,
-        enduses=elec_enduse + natural_gas,
+        enduses=elec_enduse + natural_gas + ev + total + pv,
         # Filter by weather_col directly. For ComStock 2025.2 this pulls
         # every source-county served by these as_sims; for ResStock and
         # older ComStock weather_col == county so behavior is unchanged.
-        restrict=[('state', chunk_states),
-                  (weather_col, aws_weather_locs),
-                 ],
+        restrict=restrict,
+        avoid=avoid,
         timestamp_grouping_func="hour",
         group_by=aws_cols,
         get_query_only=True,
         annual_only=False
     )
 
+    # Include the upgrade id in the SQL filename so multi-upgrade specs
+    # (upgrade_id given as a list) write one SQL file per call rather than
+    # overwriting a single shared path.
     sql_suffix = '' if query_label == 'base' else f'_{query_label}'
     sql_path = os.path.join(
         chunks_sql_dir,
-        f'{prefix}meta_upgrade{upgrade_tag}_{start_index:04}-{end_index:04}{sql_suffix}.sql'
+        f'{prefix}meta_upgrade{upgrade_tag}_u{upgrade}_'
+        f'{start_index:04}-{end_index:04}{sql_suffix}.sql'
     )
     write_pretty_sql(ts_agg_query, sql_path)
 
@@ -482,6 +621,9 @@ def process_chunk_agg(run_type, upgrade, weather_locs, weather_col, bsq_cols,
     heating_pure = [_norm(c) for c in heating_pure]
     cooling_pure = [_norm(c) for c in cooling_pure]
     heating_and_cooling = [_norm(c) for c in heating_and_cooling]
+    ev_cols = [_norm(c) for c in ev]
+    total_cols = [_norm(c) for c in total]
+    pv_cols = [_norm(c) for c in pv]
 
     if sw_comstock:
         state_county_map = pd.read_csv(
@@ -538,11 +680,40 @@ def process_chunk_agg(run_type, upgrade, weather_locs, weather_col, bsq_cols,
         ts_tmp = ts_tmp.drop(columns=['_day'])
         ts_agg = ts_tmp.set_index('bldg_id')
 
-    ts_agg = ts_agg[['timestamp', 'cooling.elec', 'heating.elec',
-                     'natural_gas.heating.energy_consumption']]
+    # EV / PV / total carry through from the Athena pull. `non_hvac.elec`
+    # is the residual after removing HVAC (cooling+heating, already
+    # ambiguous-allocated above) and EV charging from the site meter
+    # total. PV is NOT subtracted: `electricity.total.energy_consumption`
+    # in EULP is gross site consumption and does not net out onsite
+    # generation. For ComStock, ev_cols is empty so the EV term is zero.
+    ts_agg['ev'] = ts_agg[ev_cols].sum(axis=1) if ev_cols else 0.0
+    ts_agg['pv'] = ts_agg[pv_cols[0]] if pv_cols else 0.0
+    ts_agg['total'] = ts_agg[total_cols[0]]
 
-    # Convert elec & natural_gas columns from kWh to MWh & round
-    for c in ['cooling.elec', 'heating.elec', 'natural_gas.heating.energy_consumption']:
+    # ResStock electric-load calibration: per-(state, hour) factor applied
+    # uniformly to every electricity column (cooling, heating, ev, pv, total).
+    # Scaling pv along with total means net = total − pv also scales by the
+    # factor — same calibration target. The non_hvac.elec residual below
+    # inherits the same scaling since all of its inputs do. Natural gas is
+    # left untouched (factor calibrates ELECTRICITY).
+    if adjustment_factor_path:
+        _apply_state_adjustment(ts_agg, df_meta, adjustment_factor_path)
+
+    ts_agg['non_hvac.elec'] = (
+        ts_agg['total']
+        - ts_agg['cooling.elec']
+        - ts_agg['heating.elec']
+        - ts_agg['ev']
+    )
+
+    ts_agg = ts_agg[['timestamp', 'cooling.elec', 'heating.elec',
+                     'natural_gas.heating.energy_consumption',
+                     'ev', 'pv', 'total', 'non_hvac.elec']]
+
+    # Convert all energy columns from kWh to MWh & round.
+    for c in ['cooling.elec', 'heating.elec',
+              'natural_gas.heating.energy_consumption',
+              'ev', 'pv', 'total', 'non_hvac.elec']:
         ts_agg[c] = (ts_agg[c] / 1000).round(6)
 
     return ts_agg
@@ -1028,22 +1199,77 @@ chunk_states = df_meta['in.state'].unique().tolist()
 # Set index of df_meta to 'bldg_id'
 df_meta = df_meta.set_index('bldg_id')
 
-# Call function to get aggregate timeseries data
-ts_agg = process_chunk_agg(
-    base_run, upgrade, weather_locs, weather_col, bsq_cols, sw_comstock,
-    chunk_states, sw_savings_shape, df_meta, applied_only
-)
+def _sum_across_upgrades(frames):
+    """Collapse a list of per-upgrade ts_agg frames into one by summing on
+    (bldg_id, timestamp).
 
-# Grab the target year AWS data if sw_test_target else set as None
-df_eulp_targ = (
-    process_chunk_agg(
-        target_run, upgrade, weather_locs, weather_col, bsq_cols,
-        sw_comstock, chunk_states, sw_savings_shape, df_meta, applied_only,
-        query_label='target',
+    Each frame is bldg_id-indexed with a `timestamp` column plus the
+    eight numeric energy columns. Buildings absent from any given
+    upgrade's pull simply don't contribute to its sum, which is the
+    correct identity. Returns a frame with the same shape and bldg_id
+    index as the input frames.
+    """
+    if len(frames) == 1:
+        return frames[0]
+    numeric_cols = [c for c in frames[0].columns if c != 'timestamp']
+    combined = pd.concat(frames).reset_index()  # bldg_id becomes a column
+    summed = (
+        combined.groupby(['bldg_id', 'timestamp'], as_index=False)[numeric_cols]
+        .sum()
     )
-    if sw_test_target and sw_apply_regression
-    else None
+    return summed.set_index('bldg_id')
+
+
+# Call process_chunk_agg once per upgrade_id in the spec (typically just one;
+# a list signals "sum the resulting timeseries across these upgrades"). The
+# restrict/avoid predicates from the spec apply identically to every pull.
+_base_frames = []
+for upg in upgrade_ids:
+    _base_frames.append(
+        process_chunk_agg(
+            base_run, upg, weather_locs, weather_col, bsq_cols, sw_comstock,
+            chunk_states, sw_savings_shape, df_meta, applied_only,
+            spec_restrict=spec_restrict_filter,
+            spec_avoid=spec_avoid_filter,
+        )
+    )
+ts_agg = _sum_across_upgrades(_base_frames)
+
+# Grab the target year AWS data if sw_test_target else set as None. Same
+# multi-upgrade summation rule as the base pull.
+if sw_test_target and sw_apply_regression:
+    _targ_frames = []
+    for upg in upgrade_ids:
+        _targ_frames.append(
+            process_chunk_agg(
+                target_run, upg, weather_locs, weather_col, bsq_cols,
+                sw_comstock, chunk_states, sw_savings_shape, df_meta,
+                applied_only, query_label='target',
+                spec_restrict=spec_restrict_filter,
+                spec_avoid=spec_avoid_filter,
+            )
+        )
+    df_eulp_targ = _sum_across_upgrades(_targ_frames)
+else:
+    df_eulp_targ = None
+
+# Restrict/avoid on the spec can shrink BSQ's result set. df_meta still
+# carries the full upgrade roster from B's parquet load, so we prune it
+# down to bldg_ids that actually came back in ts_agg. Without this, the
+# per-loc share denominators (loc_annual_*) would include orphan
+# AWS_*=NaN entries and propagate NaN through the share-out math.
+_bldg_ids_in_ts = ts_agg.index.unique()
+_n_before = len(df_meta)
+df_meta = df_meta.loc[df_meta.index.isin(_bldg_ids_in_ts)]
+print(
+    f'df_meta filtered to bldg_ids present in ts_agg: '
+    f'{_n_before} -> {len(df_meta)} (dropped {_n_before - len(df_meta)})'
 )
+if df_meta.empty:
+    raise RuntimeError(
+        'No bldg_ids matched BSQ ts_agg AND df_meta. '
+        'Check spec restrict/avoid filters and the chunk weather_locs.'
+    )
 
 # Error check: Sum AWS cooling/heating/ng timeseries data for each bldg_id.
 # AWS_HVAC.elec is kept as the derived sum (cool + heat) for backward-compat
@@ -1061,6 +1287,9 @@ df_meta['AWS_natural_gas.heating.energy_consumption'] = (
     ts_agg.groupby('bldg_id').apply(
         lambda x: x['natural_gas.heating.energy_consumption'].iloc[:8760].sum()
     )
+)
+df_meta['AWS_non_hvac.elec'] = ts_agg.groupby('bldg_id').apply(
+    lambda x: x['non_hvac.elec'].iloc[:8760].sum()
 )
 
 if sw_apply_regression: # TODO: or `individual_building`?
@@ -1220,6 +1449,55 @@ if sw_apply_regression: # TODO: or `individual_building`?
     df_eulp_cool = pd.concat(df_bldg_cool, axis=1)
     df_eulp_heat = pd.concat(df_bldg_heat, axis=1)
 
+    # Non-HVAC electricity passes through unregressed (per spec). Vectorized
+    # assignment outside the share-out loop — value is just AWS_non_hvac.elec.
+    df_meta['non_hvac.elec'] = df_meta['AWS_non_hvac.elec']
+
+    # Build the per-bldg non_hvac.elec hourly frame from raw ts_agg (base-year
+    # EULP), then REPLICATE the 8760-row base frame across every target year
+    # so the row layout matches df_eulp_cool / df_eulp_heat (which are
+    # target-year RF predictions). Without replication the three chunk CSVs
+    # would span different model years and downstream stitching would have
+    # to special-case non_hvac.
+    ts_agg_nh = ts_agg[ts_agg.index.isin(df_meta.index)].reset_index()
+    ts_agg_nh.rename(columns={'timestamp': 'timestamp_EST'}, inplace=True)
+    _df_nh_base = ts_agg_nh.pivot(
+        index='timestamp_EST', columns='bldg_id', values='non_hvac.elec'
+    )
+    # Cap at EULP's 8760 hours/year convention (drops leap-day rows when
+    # base_year is a leap year; cool/heat targets are likewise capped to
+    # 8760 per year by _trim_to_8760_per_year below).
+    _df_nh_base = _df_nh_base.iloc[:8760]
+
+    # Roll the base-year hourly profile so its day-of-week pattern aligns
+    # with each target year's calendar. Without this, copying e.g. 2018's
+    # Mon-Tue-Wed-... block into 2020 (a Wednesday-start year) puts
+    # weekday-sensitive loads (lighting / plug / appliance) on the wrong
+    # day. Same algorithm as E_combine_nonHVAC.match_day_patterns:
+    # shift = (base_jan1_dow - target_jan1_dow) * 24, then np.roll. The
+    # 8760-cap above means no leap-day padding is needed (cool/heat are
+    # likewise 8760/yr, so they don't have a leap-day to align to).
+    # Drift footprint: the wrap caused by np.roll is at most 144 hours
+    # (6 days) and lands at year-boundaries, where it interacts with the
+    # other end of the rolled profile — small and contained.
+    _base_values = _df_nh_base.values
+    _base_jan1_dow = _df_nh_base.index[0].dayofweek
+    _nh_year_frames = []
+    for _yr in target_years:
+        _yr_idx = pd.date_range(
+            start=dt.datetime(_yr, 1, 1, 1, 0, 0),
+            periods=len(_df_nh_base),
+            freq='h',
+        )
+        _shift_hours = (_base_jan1_dow - _yr_idx[0].dayofweek) * 24
+        _rolled = np.roll(_base_values, _shift_hours, axis=0)
+        _yr_frame = pd.DataFrame(
+            _rolled, index=_yr_idx, columns=_df_nh_base.columns
+        )
+        _nh_year_frames.append(_yr_frame)
+    df_eulp_non_hvac = pd.concat(_nh_year_frames)
+    df_eulp_non_hvac.index.name = 'timestamp_EST'
+
 else:
     # If not applying regression, duplicate annual cool/heat/NG columns
     df_meta['cooling.elec'] = df_meta['AWS_cooling.elec']
@@ -1228,24 +1506,28 @@ else:
     df_meta['natural_gas.heating.energy_consumption'] = (
         df_meta['AWS_natural_gas.heating.energy_consumption']
     )
+    df_meta['non_hvac.elec'] = df_meta['AWS_non_hvac.elec']
 
     # Filter ts_agg to include only rows with bldg_id's in df_meta.index
     ts_agg = ts_agg[ts_agg.index.isin(df_meta.index)]
 
-    # Create timeseries x bldg_id DataFrames (one each for cool and heat)
+    # Create timeseries x bldg_id DataFrames (cool / heat / non-HVAC).
     ts_agg = ts_agg.reset_index()
     ts_agg.rename(columns={'timestamp': 'timestamp_EST'}, inplace=True)
     df_eulp_cool = ts_agg.pivot(index='timestamp_EST', columns='bldg_id',
                                 values='cooling.elec')
     df_eulp_heat = ts_agg.pivot(index='timestamp_EST', columns='bldg_id',
                                 values='heating.elec')
+    df_eulp_non_hvac = ts_agg.pivot(index='timestamp_EST', columns='bldg_id',
+                                    values='non_hvac.elec')
 
 # Collapse bldg_id (county/sim-county) columns to county columns, separately
-# for the cooling and heating frames. Both use the same set of bldg_id
-# columns so the county_labels lookup is shared.
+# for the cooling, heating, and non-HVAC frames. All three share the same
+# bldg_id column set so the county_labels lookup is shared.
 county_labels = df_meta.loc[df_eulp_cool.columns, county].astype(str)
 df_eulp_cool = df_eulp_cool.T.groupby(county_labels).sum().T
 df_eulp_heat = df_eulp_heat.T.groupby(county_labels).sum().T
+df_eulp_non_hvac = df_eulp_non_hvac.T.groupby(county_labels).sum().T
 
 # Aggregate df_meta to county-level before diagnostics.
 # Drop sim-county column to avoid string concatenation during groupby sum.
@@ -1321,8 +1603,8 @@ df_meta.to_csv(os.path.join(chunks_meta_dir,
     f'{prefix}meta_upgrade{upgrade_tag}_{start_index:04}-{end_index:04}.csv'))
 
 # Round and trim each frame to 8760 hourly rows per model year, then write
-# separate chunk CSVs for cooling.elec and heating.elec. Downstream
-# (agg_buildings.py) stitches each enduse independently.
+# separate chunk CSVs for cooling.elec, heating.elec, and non_hvac.elec.
+# Downstream (agg_buildings.py) stitches each enduse independently.
 def _trim_to_8760_per_year(df):
     df = df.round(6)
     model_year = (df.index - pd.Timedelta(hours=1)).year
@@ -1330,12 +1612,16 @@ def _trim_to_8760_per_year(df):
 
 df_eulp_cool = _trim_to_8760_per_year(df_eulp_cool)
 df_eulp_heat = _trim_to_8760_per_year(df_eulp_heat)
+df_eulp_non_hvac = _trim_to_8760_per_year(df_eulp_non_hvac)
 
 df_eulp_cool.to_csv(os.path.join(chunks_eulp_dir,
     f'{prefix}eulp_cooling_elec_MWh_upgrade{upgrade_tag}_'
     f'{start_index:04}-{end_index:04}.csv'))
 df_eulp_heat.to_csv(os.path.join(chunks_eulp_dir,
     f'{prefix}eulp_heating_elec_MWh_upgrade{upgrade_tag}_'
+    f'{start_index:04}-{end_index:04}.csv'))
+df_eulp_non_hvac.to_csv(os.path.join(chunks_eulp_dir,
+    f'{prefix}eulp_non_hvac_elec_MWh_upgrade{upgrade_tag}_'
     f'{start_index:04}-{end_index:04}.csv'))
 
 print('\nChunk done at:', dt.datetime.now())

@@ -1,0 +1,186 @@
+"""Shared vocabulary for the projection package: type aliases, configuration,
+the state geography, and the agg/aux input loaders.
+
+Every other module sits on top of this one; nothing here imports them.
+
+RESOLUTION is mutated by projection.main() before the worker pool forks. Read it
+as `common.RESOLUTION` (attribute access on this module) rather than
+`from .common import RESOLUTION`, so workers see the value set at fork time
+instead of a stale import-time copy.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Literal, cast
+
+import pandas as pd
+
+
+type Stock      = Literal['res', 'com']
+type Enduse     = Literal['cooling_elec', 'heating_elec', 'non_hvac_elec', 'total']
+type Resolution = Literal['state', 'county', 'county_group']
+type Scenario   = Literal['baseline', 'upgrade']
+type GroupName  = Literal[
+    'new_construction', 'surviving',
+    'new_adoption', 'surviving_adoption', 'surviving_non_adoption',
+    'gap_consumption',
+]
+
+# Spec names and on-disk tags, enumerated from switches_agg_{res,com}stock.json.
+# Every spec is regression-on at base 2018, so a tag is its name + '_reg_b2018'.
+# Keep in sync with the switches files.
+type SpecName = Literal[
+    'All-Baseline', 'Upgraded-Baseline', 'Non-Upgraded-Baseline',
+    'Upgraded-Upgrade4', 'Upgraded-Upgrade8', 'Upgraded-Upgrade32',
+    'Upgraded-Upgrade1-14', 'Upgraded-Upgrade55', 'Upgraded-Upgrade59',
+]
+type SpecTag = Literal[
+    'All-Baseline_reg_b2018', 'Upgraded-Baseline_reg_b2018',
+    'Non-Upgraded-Baseline_reg_b2018',
+    'Upgraded-Upgrade4_reg_b2018', 'Upgraded-Upgrade8_reg_b2018',
+    'Upgraded-Upgrade32_reg_b2018',
+    'Upgraded-Upgrade1-14_reg_b2018', 'Upgraded-Upgrade55_reg_b2018',
+    'Upgraded-Upgrade59_reg_b2018',
+]
+
+type StatePostal = str   # 'CO'                — agg/gap columns at state resolution
+type StateName   = str   # 'Colorado'          — shell-factor table key
+type CountyFips  = str   # '8013'              — agg/gap columns at county resolution
+type Gisjoin     = str   # 'G0800130'          — S3 county-partition key
+type CountyGroup = str   # 'county_group_29'   — BuildStock county-group key (1,038 CONUS)
+
+type GwhFrame  = pd.DataFrame   # DatetimeIndex('timestamp_EST') × geo-keyed GWh cols
+type GwhSeries = pd.Series
+
+type ShellFactorKey   = tuple[Stock, Enduse, int, StateName]
+type ShellFactorTable = dict[ShellFactorKey, float]
+type FactorTable      = dict[str, float]
+type EnduseFrames     = dict[Enduse, GwhFrame]
+
+type GroupTask = tuple[
+    str,        # run_dir
+    Stock,
+    str,        # display name used in the output filename (from scenario_names)
+    SpecTag,
+    Scenario,
+    GroupName,
+    int,        # projection year
+    list[int],  # target weather years
+]
+
+
+PROJECTION_YEARS: tuple[int, ...] = (2027, 2030, 2035, 2040, 2045, 2050)
+
+# state  → county-FIPS agg cols summed to 49 state cols; gap from gap_by_state.csv.
+# county → county-FIPS cols kept; gap fetched per-county from S3 (cached).
+RESOLUTION: Resolution = 'state'
+
+BASELINE_SPEC_NAME:   SpecName = 'All-Baseline'
+ELIGIBLE_SPEC_NAME:   SpecName = 'Upgraded-Baseline'
+INELIGIBLE_SPEC_NAME: SpecName = 'Non-Upgraded-Baseline'
+
+ALL_BASELINE_TAG: SpecTag = cast(SpecTag, f'{BASELINE_SPEC_NAME}_reg_b2018')
+ELIGIBLE_TAG:     SpecTag = cast(SpecTag, f'{ELIGIBLE_SPEC_NAME}_reg_b2018')
+INELIGIBLE_TAG:   SpecTag = cast(SpecTag, f'{INELIGIBLE_SPEC_NAME}_reg_b2018')
+
+ENDUSES: tuple[Enduse, ...] = ('cooling_elec', 'heating_elec', 'non_hvac_elec', 'total')
+
+# Repo root — one level up from this package, where the data CSVs live.
+REPO_DIR: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+# CONUS+DC only (AK/HI are filtered out upstream).
+STATE_FIPS_TO_POSTAL: dict[int, StatePostal] = {
+    1: 'AL',   4: 'AZ',   5: 'AR',   6: 'CA',   8: 'CO',   9: 'CT',
+    10: 'DE',  11: 'DC',  12: 'FL',  13: 'GA',  16: 'ID',  17: 'IL',
+    18: 'IN',  19: 'IA',  20: 'KS',  21: 'KY',  22: 'LA',  23: 'ME',
+    24: 'MD',  25: 'MA',  26: 'MI',  27: 'MN',  28: 'MS',  29: 'MO',
+    30: 'MT',  31: 'NE',  32: 'NV',  33: 'NH',  34: 'NJ',  35: 'NM',
+    36: 'NY',  37: 'NC',  38: 'ND',  39: 'OH',  40: 'OK',  41: 'OR',
+    42: 'PA',  44: 'RI',  45: 'SC',  46: 'SD',  47: 'TN',  48: 'TX',
+    49: 'UT',  50: 'VT',  51: 'VA',  53: 'WA',  54: 'WV',  55: 'WI',
+    56: 'WY',
+}
+STATE_POSTAL_TO_NAME: dict[StatePostal, StateName] = {
+    'AL': 'Alabama',           'AZ': 'Arizona',         'AR': 'Arkansas',
+    'CA': 'California',        'CO': 'Colorado',        'CT': 'Connecticut',
+    'DE': 'Delaware',          'DC': 'District of Columbia',
+    'FL': 'Florida',           'GA': 'Georgia',         'ID': 'Idaho',
+    'IL': 'Illinois',          'IN': 'Indiana',         'IA': 'Iowa',
+    'KS': 'Kansas',            'KY': 'Kentucky',        'LA': 'Louisiana',
+    'ME': 'Maine',             'MD': 'Maryland',        'MA': 'Massachusetts',
+    'MI': 'Michigan',          'MN': 'Minnesota',       'MS': 'Mississippi',
+    'MO': 'Missouri',          'MT': 'Montana',         'NE': 'Nebraska',
+    'NV': 'Nevada',            'NH': 'New Hampshire',   'NJ': 'New Jersey',
+    'NM': 'New Mexico',        'NY': 'New York',        'NC': 'North Carolina',
+    'ND': 'North Dakota',      'OH': 'Ohio',            'OK': 'Oklahoma',
+    'OR': 'Oregon',            'PA': 'Pennsylvania',    'RI': 'Rhode Island',
+    'SC': 'South Carolina',    'SD': 'South Dakota',    'TN': 'Tennessee',
+    'TX': 'Texas',             'UT': 'Utah',            'VT': 'Vermont',
+    'VA': 'Virginia',          'WA': 'Washington',      'WV': 'West Virginia',
+    'WI': 'Wisconsin',         'WY': 'Wyoming',
+}
+
+
+def state_fips_from_county(county_fips: CountyFips | int) -> int:
+    return int(county_fips) // 1000
+
+
+def collapse_counties_to_states(df: GwhFrame) -> GwhFrame:
+    """Sum county-FIPS columns into state-postal columns."""
+    postal_labels = pd.Index(
+        [STATE_FIPS_TO_POSTAL[state_fips_from_county(c)] for c in df.columns],
+        name='state',
+    )
+    return df.T.groupby(postal_labels).sum().T
+
+
+def _load_county_group_mapping() -> tuple[dict[CountyFips, CountyGroup],
+                                          dict[CountyGroup, StatePostal]]:
+    """Read county_group_mapping.csv (CONUS only; county groups are state-bounded).
+    Returns (county_fips → county_group, county_group → state_postal).
+    """
+    df = pd.read_csv(os.path.join(REPO_DIR, 'county_group_mapping.csv'),
+                     usecols=['state', 'county_fips5', 'county_groups'])
+    df = df[~df['state'].isin(('AK', 'HI'))]
+    fips_to_group = {str(int(r.county_fips5)): r.county_groups
+                     for r in df.itertuples(index=False)}
+    group_to_state = {r.county_groups: r.state for r in df.itertuples(index=False)}
+    return fips_to_group, group_to_state
+
+
+COUNTY_TO_COUNTY_GROUP, COUNTY_GROUP_TO_STATE_POSTAL = _load_county_group_mapping()
+
+
+def collapse_counties_to_county_groups(df: GwhFrame) -> GwhFrame:
+    """Sum county-FIPS columns into county-group columns."""
+    group_labels = pd.Index(
+        [COUNTY_TO_COUNTY_GROUP[c] for c in df.columns],
+        name='county_group',
+    )
+    return df.T.groupby(group_labels).sum().T
+
+
+def agg_path(run_dir: str, stock: Stock, spec_tag: SpecTag, enduse: Enduse) -> str:
+    return os.path.join(run_dir, f'agg_{stock}_eulp_{enduse}_GWh_upgrade{spec_tag}.csv')
+
+
+def aux_path(run_dir: str, spec_tag: SpecTag) -> str:
+    return os.path.join(run_dir, f'aux_coverage_upgrade{spec_tag}.csv')
+
+
+def load_agg_gwh(run_dir: str, stock: Stock, spec_tag: SpecTag, enduse: Enduse) -> GwhFrame:
+    """Hourly GWh, timestamp index, county-FIPS columns."""
+    df = pd.read_csv(agg_path(run_dir, stock, spec_tag, enduse), index_col=0)
+    df.index = pd.to_datetime(df.index)
+    df.index.name = 'timestamp_EST'
+    return df
+
+
+def load_aux_cohort_size(run_dir: str, stock: Stock, spec_tag: SpecTag) -> float:
+    """Cohort size in AEO units: billion sqft (com) or million households (res)."""
+    aux = pd.read_csv(aux_path(run_dir, spec_tag))
+    if stock == 'com':
+        return float(aux['sqft'].sum()) / 1e9
+    return float(aux['units_count'].sum()) / 1e6

@@ -36,8 +36,18 @@ dependencies = [
     "joblib>=1.2",
     "s3fs>=2026.3.0",
     "buildstock-query",
+    "ty>=0.0.35",
+    "openpyxl>=3.1.5",
 ]
 
 [tool.uv.sources]
-buildstock-query = { git = "https://github.com/NatLabRockies/buildstock-query.git", rev = "v0.4.0" }
+buildstock-query = { git = "https://github.com/NatLabRockies/buildstock-query.git", rev = "v0.4.1" }
 
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+    "ipython>=9.13.0",
+]
+
+[tool.ty.environment]
+python = ".venv/"

@@ -20,6 +20,7 @@ import pandas as pd
 import numpy as np
 import json
 import hashlib
+import re
 from pathlib import Path
 
 COUNTY_PARQUET_CACHE_DIR = Path("/projects/geohc/radhikar/outputs/county_parquet_cache")
@@ -320,20 +321,50 @@ if __name__ == "__main__":
     ## by an `<id>_<reg|ref>_b<base_year>` tag.
     run_specs = switch['run_specs']
 
-    ## Validate that all specs produce unique upgrade_tags. Two specs that
-    ## differ only in target_year would collide and overwrite each other.
+    ## Names propagate into upgrade_tag, which is the leading segment of every
+    ## chunk/manifest/meta/agg filename and of SLURM job names. The agg-side
+    ## parser splits the tag on the FIRST underscore to recover the
+    ## `<reg|ref>_b<year>` suffix (see agg_buildings._chunks_eulp_dir), so an
+    ## underscore inside `name` would steal that split. Enforce ASCII letters,
+    ## digits, dots, and hyphens — fail loudly otherwise. Keep this regex and
+    ## the matching one in D_process_chunk_agg.py in sync.
+    _VALID_NAME_RE = re.compile(r'^[A-Za-z0-9.\-]+$')
+
+    def _validate_spec_name(name):
+        if not isinstance(name, str) or not name:
+            raise ValueError(
+                f"run_specs entry is missing required 'name' field (got {name!r})"
+            )
+        if not _VALID_NAME_RE.match(name):
+            raise ValueError(
+                f"run_spec name {name!r} contains disallowed characters. "
+                "Allowed: letters, digits, '.', '-' (no '_', no spaces, no '/')."
+            )
+        return name
+
+    ## Validate that all specs have unique `name` values. With name-based
+    ## upgrade_tag, two specs sharing a name (even if they differ in
+    ## upgrade_id, base_year, etc.) would collide on filenames. We also
+    ## validate that each spec's derived upgrade_tag is unique (defense in
+    ## depth — name uniqueness already implies this, but it documents intent).
+    seen_names = set()
     seen_tags = set()
     for s in run_specs:
+        name = _validate_spec_name(s['name'])
+        if name in seen_names:
+            raise ValueError(
+                f"Duplicate spec name {name!r} in run_specs. "
+                f"Each run_specs entry must have a unique 'name'."
+            )
+        seen_names.add(name)
         tag = (
-            f"{s['upgrade_id']}_"
+            f"{name}_"
             f"{'reg' if s['apply_regression'] else 'ref'}_"
             f"b{s['base_year']}"
         )
         if tag in seen_tags:
             raise ValueError(
-                f"Duplicate upgrade_tag {tag!r} across run_specs. "
-                f"Each (upgrade_id, apply_regression, base_year) triple "
-                f"must be unique within a single switches file."
+                f"Duplicate upgrade_tag {tag!r} across run_specs."
             )
         seen_tags.add(tag)
 
@@ -422,13 +453,44 @@ if __name__ == "__main__":
     # when every spec early-skips (resume with all aggs already produced).
     tasks = []          # local-mode multiprocessing commands
     local_specs = []    # local-mode aggregation roster (per spec needing agg)
+    agg_job_ids = []    # HPC-mode F job IDs, collected for the Z post-pipeline dependency
     for spec_index, spec in enumerate(run_specs):
-        upgrade = spec['upgrade_id']
+        spec_name = _validate_spec_name(spec['name'])
+        # upgrade_id may be a scalar or a list. List form means "iterate
+        # over these upgrades and sum the resulting timeseries" (handled
+        # in D); on the B side we load each upgrade's parquet metadata
+        # and concat them so per-county energy totals sum across the set.
+        _raw_upgrade = spec['upgrade_id']
+        upgrade_ids = (
+            list(_raw_upgrade)
+            if isinstance(_raw_upgrade, (list, tuple))
+            else [_raw_upgrade]
+        )
+        n_upgrades = len(upgrade_ids)
+        # Single representative upgrade for paths that still take a scalar
+        # (ComStock 2025.2 county-parquet loader). The multi-upgrade list
+        # path is currently only supported by the else-branch parquet loader.
+        upgrade = upgrade_ids[0]
+        # argv-safe token (no spaces) carrying the full upgrade list to D.
+        # D reads the authoritative value from spec_index, so this is purely
+        # informational for rerun-command logs.
+        upgrade_argv_token = ','.join(str(u) for u in upgrade_ids)
         apply_regression = spec['apply_regression']
         base_year = spec['base_year']
         target_year = spec['target_year']  # noqa: F841 (D consumes via spec_index)
         regression_tag = 'reg' if apply_regression else 'ref'
-        upgrade_tag = f'{upgrade}_{regression_tag}_b{base_year}'
+        upgrade_tag = f'{spec_name}_{regression_tag}_b{base_year}'
+
+        # Multi-upgrade specs combined with applied_only=True would over- or
+        # under-count static features (sqft) in unpredictable ways depending
+        # on each building's applicability pattern across the upgrade set.
+        # Disallow the combination until we add a proper per-bldg_id dedup.
+        if n_upgrades > 1 and applied_only:
+            raise NotImplementedError(
+                f"Spec {spec_name!r}: applied_only=True is not supported "
+                f"with a list-valued upgrade_id ({upgrade_ids}). Set "
+                f"applied_only=false in switches or pass a scalar upgrade_id."
+            )
 
         # ===== RESUME CHECK 1 (per-spec) =====
         # If BOTH agg GWh CSVs are already on disk, this spec is fully done.
@@ -436,12 +498,15 @@ if __name__ == "__main__":
         # Saves hours of compute when re-running after a partial-failure
         # recovery. (D writes one chunk file per enduse; agg_buildings.py
         # writes one agg file per enduse.)
+        # KEEP IN SYNC with agg_buildings.ENDUSES and the per-chunk resume
+        # tuple lower in this function. All three lists must enumerate the
+        # same enduses or resume will mis-skip work.
         expected_aggs = [
             os.path.join(
                 output_dir,
                 f'agg_{bldg_type}_eulp_{enduse}_GWh_upgrade{upgrade_tag}.csv',
             )
-            for enduse in ('cooling_elec', 'heating_elec')
+            for enduse in ('cooling_elec', 'heating_elec', 'non_hvac_elec')
         ]
         if all(os.path.exists(p) for p in expected_aggs):
             logger.info("[skip] %s already complete (all agg files present)", upgrade_tag)
@@ -460,25 +525,36 @@ if __name__ == "__main__":
         url_bldg = url_comstock if sw_comstock else url_resstock
 
         if sw_comstock and comstock_year == "2025" and comstock_release == "2":
-            logger.info("Using custom metadata load logic for ComStock 2025 Release 2")
+            logger.info(
+                "Using custom metadata load logic for ComStock 2025 Release 2 "
+                "(upgrades=%s)", upgrade_ids,
+            )
 
             if sw_testmode:
                 state_meta = ['VT']
             else:
                 state_meta = state_county_map["state_abbreviation"].unique().tolist()
 
-            # Collect all (state, county) pairs to load in parallel
+            # Build (state, county, upgrade) triples covering EVERY upgrade
+            # in upgrade_ids. The county-parquet loader is per-upgrade and
+            # caches per (state, county, upgrade), so multi-upgrade specs
+            # just become a longer task list with no special handling in
+            # the loader itself. After concat, the same parquet-path
+            # post-processing kicks in: applied_only filter, weight, energy
+            # aggregation, and the post-groupby sqft /= n_upgrades correction
+            # (further down) that undoes the per-upgrade row duplication.
             county_pairs = []
             for state in state_meta:
                 state_county_map_iter = state_county_map[state_county_map["state_abbreviation"].isin([state])]
                 county_meta = state_county_map_iter["nhgis_county_gisjoin"].unique().tolist()
                 logger.info(
-                    "Processing state %s with %s counties for upgrade %s",
+                    "Processing state %s with %s counties for upgrades %s",
                     state,
                     len(county_meta),
-                    upgrade,
+                    upgrade_ids,
                 )
-                county_pairs.extend([(state, county, upgrade) for county in county_meta])
+                for upg in upgrade_ids:
+                    county_pairs.extend([(state, county, upg) for county in county_meta])
 
             # Load all counties in parallel.
             # ThreadPoolExecutor is used (not ProcessPoolExecutor) because S3 reads are
@@ -487,22 +563,31 @@ if __name__ == "__main__":
             all_meta = []
             num_workers = max(2, min(num_cores, 16)) if not hpc else 8  # Threads are lighter; use more
             logger.info(
-                "Loading %s counties in parallel with %s threads for upgrade %s",
+                "Loading %s county-upgrade tasks in parallel with %s threads (upgrades=%s)",
                 len(county_pairs),
                 num_workers,
-                upgrade,
+                upgrade_ids,
             )
 
             loaded_count = 0
             missing_or_failed_count = 0
             crashed_future_count = 0
-            
+
+            # Map future -> (state, county, upg) so the exception logger can
+            # attribute crashes to the specific task that failed. With
+            # multi-upgrade list specs this matters even more — the outer
+            # `upgrade` variable doesn't identify which upgrade's task
+            # crashed.
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
                 futures = {
-                    executor.submit(_load_county_parquet, state, county, upgrade, url_bldg, county_parquet_cols)
-                    for state, county, upgrade in county_pairs
+                    executor.submit(
+                        _load_county_parquet, state, county, upg,
+                        url_bldg, county_parquet_cols,
+                    ): (state, county, upg)
+                    for state, county, upg in county_pairs
                 }
                 for future in as_completed(futures):
+                    f_state, f_county, f_upg = futures[future]
                     try:
                         df = future.result()
                         if df is not None:
@@ -513,15 +598,17 @@ if __name__ == "__main__":
                     except Exception as e:
                         crashed_future_count += 1
                         logger.exception(
-                            "County worker crashed for upgrade %s with error_type=%s error=%s",
-                            upgrade,
+                            "County worker crashed | state=%s county=%s upgrade=%s "
+                            "error_type=%s error=%s",
+                            f_state, f_county, f_upg,
                             type(e).__name__,
                             e,
                         )
 
             logger.info(
-                "County read summary | upgrade=%s requested=%s loaded=%s missing_or_failed=%s worker_crashes=%s",
-                upgrade,
+                "County read summary | upgrades=%s requested=%s loaded=%s "
+                "missing_or_failed=%s worker_crashes=%s",
+                upgrade_ids,
                 len(county_pairs),
                 loaded_count,
                 missing_or_failed_count,
@@ -529,11 +616,13 @@ if __name__ == "__main__":
             )
 
             if not all_meta:
-                raise RuntimeError(f"No metadata loaded for upgrade {upgrade}.")
+                raise RuntimeError(f"No metadata loaded for upgrades {upgrade_ids}.")
 
             df_meta = pd.concat(all_meta, ignore_index=True)
-            # TODO: It doesn't make sense to filter by upgrade here - should be above `for spec in run_specs`
-            df_meta = df_meta[df_meta["upgrade"] == upgrade]
+            # Defensive filter: keep only the rows for the upgrades we asked
+            # for. Loader returns single-upgrade frames so this is normally
+            # a no-op, but it guards against any cross-upgrade leakage.
+            df_meta = df_meta[df_meta["upgrade"].isin(upgrade_ids)]
 
             # Merge state_county_map w/ df_meta to bring in resstock_county_id
             df_meta = df_meta.merge(
@@ -549,18 +638,24 @@ if __name__ == "__main__":
             df_meta["in.county_name"] = df_meta["resstock_county_id"]
 
         else:
-            # Reformat metadata filepath based on upgrade number
-            url_meta = f'metadata_and_annual_results/national/full/parquet/upgrade{upgrade}.parquet'
-
-            # Read Parquet file into a DataFrame
-            df_meta = pd.read_parquet(
-                url_bldg + url_meta,
-                columns=parquet_cols,
-                storage_options=S3_STORAGE_OPTIONS,
-            )
-
-            if sw_testmode:
-                df_meta = df_meta[df_meta['in.state'] == 'VT']
+            # Multi-upgrade specs: load each upgrade's parquet and concat,
+            # so the later county groupby sums energy across (buildings ×
+            # upgrades) — which gives "total energy across the upgrade
+            # set" per county, matching the way D sums ts_agg across the
+            # same upgrades. We correct sqft over-counting after the
+            # groupby; see comment near the agg call below.
+            df_meta_list = []
+            for upg in upgrade_ids:
+                url_meta = f'metadata_and_annual_results/national/full/parquet/upgrade{upg}.parquet'
+                df_one = pd.read_parquet(
+                    url_bldg + url_meta,
+                    columns=parquet_cols,
+                    storage_options=S3_STORAGE_OPTIONS,
+                )
+                if sw_testmode:
+                    df_one = df_one[df_one['in.state'] == 'VT']
+                df_meta_list.append(df_one)
+            df_meta = pd.concat(df_meta_list, ignore_index=True)
 
         # Remove Alaska and Hawaii
         df_meta = df_meta[~df_meta['in.state'].isin(['AK', 'HI'])]
@@ -658,6 +753,15 @@ if __name__ == "__main__":
             'meta_natural_gas.heating.energy_consumption': 'sum'
         }).reset_index()
 
+        # Multi-upgrade list specs concat the same bldg_id roster `n_upgrades`
+        # times before this groupby, so sqft (a static feature) gets counted
+        # `n_upgrades` times per building. Energy is supposed to sum across
+        # the upgrade set, so we leave it alone. This correction is only valid
+        # for applied_only=False (every bldg_id appears in every upgrade's
+        # parquet); applied_only=True is rejected above for this reason.
+        if n_upgrades > 1:
+            df_meta['in.sqft'] = df_meta['in.sqft'] / n_upgrades
+
         # Error check: Convert energy consumption columns from kWh to MWh & round
         df_meta['meta_HVAC.elec'] = (df_meta['meta_HVAC.elec'] / 1000).round(6)
         df_meta['meta_natural_gas.heating.energy_consumption'] = (
@@ -748,9 +852,11 @@ if __name__ == "__main__":
             )
 
         # ===== RESUME CHECK 2 (per-chunk) =====
-        # Detect which chunks have already produced BOTH per-enduse EULP MWh
+        # Detect which chunks have already produced ALL per-enduse EULP MWh
         # CSVs; we only resubmit the missing ones. A chunk is "done" only
-        # when both cooling_elec and heating_elec files exist on disk.
+        # when every enduse file exists on disk.
+        # KEEP IN SYNC with agg_buildings.ENDUSES and the per-spec resume
+        # tuple higher in this function.
         chunks_eulp_dir = os.path.join(
             output_dir, f'chunks_{regression_tag}_b{base_year}'
         )
@@ -762,7 +868,7 @@ if __name__ == "__main__":
                     f'{prefix}eulp_{enduse}_MWh_upgrade{upgrade_tag}_'
                     f'{s_idx:04d}-{e_idx:04d}.csv',
                 )
-                for enduse in ('cooling_elec', 'heating_elec')
+                for enduse in ('cooling_elec', 'heating_elec', 'non_hvac_elec')
             ]
             if all(os.path.exists(p) for p in chunk_files):
                 existing_indices.add(idx)
@@ -818,6 +924,7 @@ if __name__ == "__main__":
                     output_dir, bldg_type, upgrade_tag,
                 ], check=True, capture_output=True, text=True)
                 agg_job_id = agg_result.stdout.strip().split()[-1]
+                agg_job_ids.append(agg_job_id)
                 logger.info(
                     "Queued aggregation job %s for upgrade_tag %s (no array; all chunks present)",
                     agg_job_id, upgrade_tag,
@@ -839,7 +946,7 @@ if __name__ == "__main__":
                     f'--array={array_spec}%{array_cap}',
                     f'--output={slurm_out_dir}/slurm-%x_%A_%a.out',
                     './C_run_bldg_chunk_agg.sh',
-                    manifest_path, meta_path, str(upgrade), prefix,
+                    manifest_path, meta_path, upgrade_argv_token, prefix,
                     output_dir, script_dir, str(spec_index),
                 ], check=True, capture_output=True, text=True)
                 array_job_id = result.stdout.strip().split()[-1]
@@ -866,6 +973,7 @@ if __name__ == "__main__":
                     output_dir, bldg_type, upgrade_tag,
                 ], check=True, capture_output=True, text=True)
                 agg_job_id = agg_result.stdout.strip().split()[-1]
+                agg_job_ids.append(agg_job_id)
                 logger.info(
                     "Queued aggregation job %s for upgrade_tag %s (depends on array %s)",
                     agg_job_id, upgrade_tag, array_job_id,
@@ -886,7 +994,7 @@ if __name__ == "__main__":
                     sys.executable,
                     f'{output_dir}/inputs/D_process_chunk_agg.py',
                     str(start_index), str(end_index), meta_path,
-                    str(upgrade), prefix, output_dir, script_dir, weather_locs_str,
+                    upgrade_argv_token, prefix, output_dir, script_dir, weather_locs_str,
                     str(spec_index),
                 ]
                 tasks.append(cmd)
@@ -911,5 +1019,45 @@ if __name__ == "__main__":
                 '--bldg-type', bldg_type,
                 '--upgrade-tag', tag,
             ], check=True)
+
+    # HPC end-to-end: submit the aux-query step and chain the projection +
+    # handoff stages on top. Z dispatches state and county_group projections
+    # and queues ReEDs/intermediate/LBL handoffs with `--dependency=afterok`.
+    # Skipped in local mode (no SLURM to chain) and skipped when no F was
+    # submitted (resume run where every agg CSV was already on disk).
+    if hpc and agg_job_ids:
+        stock = 'com' if sw_comstock else 'res'
+
+        # E (aux query) only needs the switches snapshot, not the chunks/aggs,
+        # so it runs in parallel with C/F. Z waits on F's AND E so projection
+        # has both the calibrated agg CSVs and the aux_coverage_*.csv it reads.
+        e_result = subprocess.run([
+            'sbatch',
+            f'--output={slurm_out_dir}/slurm-%x_%j.out',
+            './E_run_aux.sh', output_dir,
+        ], check=True, capture_output=True, text=True)
+        e_job_id = e_result.stdout.strip().split()[-1]
+        logger.info("Queued aux-query job %s", e_job_id)
+
+        dep = ':'.join(agg_job_ids + [e_job_id])
+        z_result = subprocess.run([
+            'sbatch',
+            f'--dependency=afterok:{dep}',
+            '--kill-on-invalid-dep=yes',
+            f'--output={slurm_out_dir}/slurm-%x_%j.out',
+            './Z_post_pipeline.sh', output_dir, stock,
+        ], check=True, capture_output=True, text=True)
+        z_job_id = z_result.stdout.strip().split()[-1]
+        logger.info(
+            "Queued Z post-pipeline job %s (depends on %d agg jobs + aux %s)",
+            z_job_id, len(agg_job_ids), e_job_id,
+        )
+    elif hpc:
+        logger.info(
+            "Skipping Z post-pipeline: no aggregation jobs were submitted "
+            "(everything already on disk). Run Z manually if handoffs need "
+            "refreshing: sbatch Z_post_pipeline.sh %s %s",
+            output_dir, 'com' if sw_comstock else 'res',
+        )
 
     print("All chunks processed successfully!")
