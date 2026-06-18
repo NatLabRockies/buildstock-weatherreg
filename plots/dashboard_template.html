@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BuildStock Projection Dashboard</title>
+<script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+<style>
+  :root {
+    --bg: #fafafa;
+    --panel: #ffffff;
+    --ink: #1c1c1e;
+    --muted: #6b6b6f;
+    --border: #e5e5ea;
+    --accent: #1c4f93;
+    --pill-bg: #f1f1f3;
+    --pill-bg-active: #1c4f93;
+    --pill-ink-active: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.4;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 18px 32px 14px;
+  }
+  header h1 {
+    margin: 0 0 2px;
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  header .sub {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .summary {
+    display: flex;
+    gap: 24px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .summary .card {
+    background: var(--pill-bg);
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+  .summary .card .label { color: var(--muted); }
+  .summary .card .value { font-weight: 600; font-size: 14px; color: var(--ink); }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 22px;
+    padding: 14px 32px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+  }
+  .control-group { display: flex; gap: 8px; align-items: center; }
+  .control-group .label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 4px;
+  }
+  .pill {
+    border: 1px solid var(--border);
+    background: var(--pill-bg);
+    color: var(--ink);
+    border-radius: 999px;
+    padding: 4px 11px;
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.12s ease;
+  }
+  .pill:hover { border-color: var(--accent); }
+  .pill.active {
+    background: var(--pill-bg-active);
+    color: var(--pill-ink-active);
+    border-color: var(--pill-bg-active);
+  }
+  select.pill {
+    appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'><path d='M0 0 L4 6 L8 0 Z' fill='%231c1c1e'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 8px 6px;
+    padding-right: 22px;
+  }
+  main {
+    padding: 18px 32px 40px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px 6px;
+    min-height: 380px;
+  }
+  .panel h2 {
+    margin: 0 0 2px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .panel .panel-sub {
+    color: var(--muted);
+    font-size: 11px;
+    margin-bottom: 6px;
+  }
+  .plot { width: 100%; height: 350px; }
+  .panel .local-controls {
+    margin-bottom: 6px;
+    display: flex;
+    gap: 6px;
+  }
+  footer {
+    text-align: right;
+    color: var(--muted);
+    font-size: 11px;
+    padding: 8px 32px 24px;
+  }
+  .legend-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+    margin-right: 12px;
+  }
+  .legend-chip .swatch {
+    width: 10px; height: 10px; border-radius: 50%;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>BuildStock Projection Dashboard</h1>
+  <div class="sub" id="run-dirs"></div>
+  <div class="summary" id="summary"></div>
+</header>
+
+<section class="controls">
+  <div class="control-group">
+    <span class="label">Scenario</span>
+    <span id="ctl-scenario"></span>
+  </div>
+  <div class="control-group">
+    <span class="label">Stock year</span>
+    <span id="ctl-stockyear"></span>
+  </div>
+  <div class="control-group">
+    <span class="label">Weather year</span>
+    <select class="pill" id="ctl-weatheryear"></select>
+  </div>
+</section>
+
+<main>
+  <div class="grid">
+
+    <div class="panel">
+      <h2>Trajectory — buildings sector, CONUS</h2>
+      <div class="panel-sub">
+        Median (bold) and individual weather years (faded) across all 18 AMY years; one trace per scenario.
+        The toggle below switches between annual energy and annual peak.
+      </div>
+      <div class="local-controls">
+        <button class="pill active" data-metric="annual">Annual GWh</button>
+        <button class="pill"        data-metric="peak">Peak GW</button>
+      </div>
+      <div id="plot-trajectory" class="plot"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Annual energy by state</h2>
+      <div class="panel-sub">
+        Choropleth for the selected scenario, stock year, and weather year. Click a state for a popup of its annual GWh.
+      </div>
+      <div id="plot-map" class="plot"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Peak week — residential + commercial</h2>
+      <div class="panel-sub">
+        Stacked-area hourly load over the 7-day window centered on the seasonal CONUS peak. Toggle picks summer (Jun–Sep) or winter (Dec–Feb) peak.
+      </div>
+      <div class="local-controls">
+        <button class="pill active" data-season="winter">Winter peak</button>
+        <button class="pill"        data-season="summer">Summer peak</button>
+      </div>
+      <div id="plot-peakweek" class="plot"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Cohort decomposition</h2>
+      <div class="panel-sub">
+        Daily totals stacked by cohort for the selected scenario / stock year. Weather year is fixed to the median across the 18 AMY years for stable visual comparison.
+      </div>
+      <div id="plot-cohort" class="plot"></div>
+    </div>
+
+  </div>
+</main>
+
+<footer id="footer-meta"></footer>
+
+<script>
+const PAYLOAD = __PAYLOAD__;
+
+const state = {
+  scenario:    PAYLOAD.scenarios[0],
+  stockYear:   PAYLOAD.stock_years[PAYLOAD.stock_years.length - 1],
+  weatherYear: PAYLOAD.panel1.weather_years.includes(2018) ? 2018 : PAYLOAD.panel1.weather_years[0],
+  metric:      'annual',
+  season:      'winter',
+};
+
+const COHORT_DEF = [
+  {key: 'res_NC',  label: 'Residential — new construction',          color: '#cfe2f3'},
+  {key: 'res_SA',  label: 'Residential — surviving + adopting',      color: '#6fa8dc'},
+  {key: 'res_SNA', label: 'Residential — surviving, not adopting',   color: '#1f4e79'},
+  {key: 'com_NC',  label: 'Commercial — new construction',           color: '#fce5cd'},
+  {key: 'com_SA',  label: 'Commercial — surviving + adopting',       color: '#f6b26b'},
+  {key: 'com_SNA', label: 'Commercial — surviving, not adopting',    color: '#b45f06'},
+  {key: 'com_gap', label: 'Commercial — gap (unsimulated)',          color: '#999999'},
+];
+
+function fmt(n, digits = 0) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return Number(n).toLocaleString(undefined, {maximumFractionDigits: digits, minimumFractionDigits: digits});
+}
+
+function median(arr) {
+  const s = arr.slice().sort((a, b) => a - b);
+  if (s.length === 0) return null;
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : 0.5 * (s[m - 1] + s[m]);
+}
+
+function quantile(arr, q) {
+  const s = arr.slice().sort((a, b) => a - b);
+  const i = (s.length - 1) * q;
+  const lo = Math.floor(i), hi = Math.ceil(i);
+  if (lo === hi) return s[lo];
+  return s[lo] + (s[hi] - s[lo]) * (i - lo);
+}
+
+function buildControls() {
+  document.getElementById('run-dirs').textContent =
+      'ResStock: ' + PAYLOAD.meta.res_run_dir + '   /   ComStock: ' + PAYLOAD.meta.com_run_dir;
+
+  const summary = document.getElementById('summary');
+  PAYLOAD.scenarios.forEach(s => {
+    const x = PAYLOAD.summary[s];
+    if (!x) return;
+    const c = document.createElement('div');
+    c.className = 'card';
+    c.innerHTML = `
+      <div class="label">${s} · ${PAYLOAD.stock_years[PAYLOAD.stock_years.length-1]} (median wy)</div>
+      <div class="value">${fmt(x.annual_gwh_median_2050)} GWh / yr · peak ${fmt(x.peak_gw_median_2050, 1)} GW</div>`;
+    summary.appendChild(c);
+  });
+
+  const scenarioEl = document.getElementById('ctl-scenario');
+  PAYLOAD.scenarios.forEach(s => {
+    const b = document.createElement('button');
+    b.className = 'pill' + (s === state.scenario ? ' active' : '');
+    b.textContent = s;
+    b.onclick = () => { state.scenario = s; refresh(['scenario']); };
+    scenarioEl.appendChild(b);
+  });
+
+  const syEl = document.getElementById('ctl-stockyear');
+  PAYLOAD.stock_years.forEach(y => {
+    const b = document.createElement('button');
+    b.className = 'pill' + (y === state.stockYear ? ' active' : '');
+    b.textContent = y;
+    b.onclick = () => { state.stockYear = y; refresh(['stockyear']); };
+    syEl.appendChild(b);
+  });
+
+  const wyEl = document.getElementById('ctl-weatheryear');
+  PAYLOAD.panel1.weather_years.forEach(wy => {
+    const o = document.createElement('option');
+    o.value = wy; o.textContent = wy;
+    if (wy === state.weatherYear) o.selected = true;
+    wyEl.appendChild(o);
+  });
+  wyEl.onchange = () => { state.weatherYear = parseInt(wyEl.value, 10); refresh(['weatheryear']); };
+
+  document.querySelectorAll('[data-metric]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-metric]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.metric = btn.dataset.metric;
+      renderTrajectory();
+    };
+  });
+  document.querySelectorAll('[data-season]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-season]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.season = btn.dataset.season;
+      renderPeakWeek();
+    };
+  });
+
+  document.getElementById('footer-meta').textContent =
+      'Plotly bake — ' + PAYLOAD.scenarios.length + ' scenarios × ' +
+      PAYLOAD.stock_years.length + ' stock years × ' +
+      PAYLOAD.panel1.weather_years.length + ' weather years';
+}
+
+function syncActivePills() {
+  ['ctl-scenario', 'ctl-stockyear'].forEach(id => {
+    document.getElementById(id).querySelectorAll('.pill').forEach(p => {
+      const text = p.textContent;
+      const matchScenario = id === 'ctl-scenario' && text === state.scenario;
+      const matchYear     = id === 'ctl-stockyear' && parseInt(text, 10) === state.stockYear;
+      p.classList.toggle('active', matchScenario || matchYear);
+    });
+  });
+}
+
+function renderTrajectory() {
+  const seriesByScenario = state.metric === 'annual' ? PAYLOAD.panel1.annual_gwh : PAYLOAD.panel1.peak_gw;
+  const yLabel = state.metric === 'annual' ? 'Annual GWh' : 'Peak GW';
+  const traces = [];
+
+  PAYLOAD.scenarios.forEach(scenario => {
+    const color = PAYLOAD.colors[scenario];
+    const by_year = seriesByScenario[scenario] || {};
+
+    PAYLOAD.panel1.weather_years.forEach(wy => {
+      const ys = PAYLOAD.stock_years.map(y => (by_year[y] || {})[wy] ?? null);
+      traces.push({
+        x: PAYLOAD.stock_years, y: ys,
+        mode: 'lines', name: scenario + ' · ' + wy,
+        line: {color: color, width: 1},
+        opacity: 0.15, showlegend: false, hoverinfo: 'skip',
+      });
+    });
+
+    const med = PAYLOAD.stock_years.map(y => {
+      const vals = Object.values(by_year[y] || {}).filter(v => v !== null && v !== undefined);
+      return vals.length ? median(vals) : null;
+    });
+    traces.push({
+      x: PAYLOAD.stock_years, y: med,
+      mode: 'lines+markers', name: scenario,
+      line: {color: color, width: 3},
+      marker: {color: color, size: 7},
+    });
+  });
+
+  const layout = {
+    margin: {t: 24, r: 8, b: 36, l: 56},
+    xaxis: {tickmode: 'array', tickvals: PAYLOAD.stock_years},
+    yaxis: {title: yLabel, gridcolor: '#eee', zeroline: false},
+    legend: {orientation: 'h', y: -0.18, font: {size: 11}},
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+  };
+  Plotly.react('plot-trajectory', traces, layout, {displayModeBar: false, responsive: true});
+}
+
+function renderMap() {
+  const slice = (PAYLOAD.panel2.annual_gwh_by_state[state.scenario] || {})[state.stockYear] || {};
+  const row   = slice[state.weatherYear] || {};
+  const states = PAYLOAD.panel2.states;
+  const values = states.map(s => row[s] ?? null);
+
+  const data = [{
+    type: 'choropleth',
+    locationmode: 'USA-states',
+    locations: states,
+    z: values,
+    colorscale: 'YlGnBu',
+    colorbar: {title: 'GWh / yr', thickness: 12, len: 0.8},
+    marker: {line: {color: '#fff', width: 0.5}},
+    hovertemplate: '<b>%{location}</b><br>%{z:,.0f} GWh<extra></extra>',
+  }];
+
+  const layout = {
+    margin: {t: 24, r: 0, b: 0, l: 0},
+    geo: {
+      scope: 'usa', projection: {type: 'albers usa'},
+      showlakes: true, lakecolor: '#fafafa', bgcolor: '#fff',
+    },
+  };
+  Plotly.react('plot-map', data, layout, {displayModeBar: false, responsive: true});
+}
+
+function renderPeakWeek() {
+  const wkAll  = ((PAYLOAD.panel3[state.scenario] || {})[state.stockYear] || {})[state.weatherYear];
+  const wkData = wkAll ? wkAll[state.season] : null;
+  if (!wkData) {
+    Plotly.react('plot-peakweek', [], {
+      margin: {t: 24, r: 8, b: 36, l: 56},
+      annotations: [{
+        text: 'No ' + state.season + ' peak data for ' + state.scenario + ' · ' + state.stockYear + ' · ' + state.weatherYear,
+        xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {size: 13, color: '#999'},
+      }],
+    }, {displayModeBar: false, responsive: true});
+    return;
+  }
+  const traces = [
+    {
+      x: wkData.timestamps, y: wkData.residential,
+      type: 'scatter', mode: 'none', name: 'Residential',
+      stackgroup: 'one', fillcolor: '#1f4e79', line: {width: 0},
+    },
+    {
+      x: wkData.timestamps, y: wkData.commercial,
+      type: 'scatter', mode: 'none', name: 'Commercial',
+      stackgroup: 'one', fillcolor: '#f6b26b', line: {width: 0},
+    },
+  ];
+  const layout = {
+    margin: {t: 24, r: 8, b: 36, l: 56},
+    xaxis: {tickformat: '%a %b %d', gridcolor: '#eee'},
+    yaxis: {title: 'GWh', gridcolor: '#eee', zeroline: false},
+    legend: {orientation: 'h', y: -0.18, font: {size: 11}},
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    annotations: [{
+      x: wkData.peak_iso, y: wkData.peak_gw, text: 'peak ' + wkData.peak_gw.toFixed(1) + ' GW',
+      xref: 'x', yref: 'y', showarrow: true, arrowhead: 0, ax: 0, ay: -28,
+      font: {size: 11, color: '#1c4f93'}, bgcolor: 'rgba(255,255,255,0.85)',
+    }],
+  };
+  Plotly.react('plot-peakweek', traces, layout, {displayModeBar: false, responsive: true});
+}
+
+function renderCohort() {
+  const data = (PAYLOAD.panel4[state.scenario] || {})[state.stockYear];
+  if (!data || !data.dates) {
+    Plotly.react('plot-cohort', [], {
+      margin: {t: 24, r: 8, b: 36, l: 56},
+      annotations: [{
+        text: 'No data', xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {color: '#999'},
+      }],
+    }, {displayModeBar: false, responsive: true});
+    return;
+  }
+  const traces = COHORT_DEF
+    .filter(c => Array.isArray(data[c.key]))
+    .map(c => ({
+      x: data.dates, y: data[c.key],
+      type: 'scatter', mode: 'none', name: c.label,
+      stackgroup: 'one', fillcolor: c.color, line: {width: 0},
+    }));
+  const layout = {
+    margin: {t: 24, r: 8, b: 36, l: 56},
+    xaxis: {gridcolor: '#eee'},
+    yaxis: {title: 'GWh / day', gridcolor: '#eee', zeroline: false},
+    legend: {orientation: 'h', y: -0.18, font: {size: 10}, traceorder: 'normal'},
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    title: {text: 'amy ' + data.weather_year + ' (median wy)', x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+  };
+  Plotly.react('plot-cohort', traces, layout, {displayModeBar: false, responsive: true});
+}
+
+function refresh(changed = ['scenario', 'stockyear', 'weatheryear']) {
+  syncActivePills();
+  if (changed.includes('scenario') || changed.includes('stockyear') || changed.includes('weatheryear')) {
+    renderMap();
+    renderPeakWeek();
+  }
+  if (changed.includes('scenario') || changed.includes('stockyear')) {
+    renderCohort();
+  }
+}
+
+buildControls();
+renderTrajectory();
+renderMap();
+renderPeakWeek();
+renderCohort();
+</script>
+</body>
+</html>
