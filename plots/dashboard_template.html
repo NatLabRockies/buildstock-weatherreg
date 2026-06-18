@@ -759,7 +759,7 @@ function renderMap() {
     const maxAbs = stateVals.length ? Math.max(...stateVals.map(v => Math.abs(v))) : 1;
     zmin = -maxAbs;
     zmax = +maxAbs;
-    cbTitle = 'Peak power (GW)<br>↑ winter ⋅ ↓ summer';
+    cbTitle = 'Peak power (GW)';
   } else if (mode === 'absolute') {
     colorscale = 'YlGnBu';
     zmin = 0;
@@ -881,16 +881,37 @@ function renderMap() {
           showlakes: true, lakecolor: '#fafafa', bgcolor: '#fff'},
     title: {text: titleText, x: 0.01, y: 1.0, xanchor: 'left', yanchor: 'top',
             font: {size: 11, color: '#888'}},
-    annotations: [{
-      text: annText,
-      xref: 'paper', yref: 'paper',
-      x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top',
-      showarrow: false,
-      bgcolor: 'rgba(255,255,255,0.94)',
-      bordercolor: annColor, borderwidth: 1, borderpad: 6,
-      font: {size: 12, color: annColor},
-      align: 'right',
-    }],
+    annotations: [
+      {
+        text: annText,
+        xref: 'paper', yref: 'paper',
+        x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top',
+        showarrow: false,
+        bgcolor: 'rgba(255,255,255,0.94)',
+        bordercolor: annColor, borderwidth: 1, borderpad: 6,
+        font: {size: 12, color: annColor},
+        align: 'right',
+      },
+      // Seasonal mode: label the colorbar endpoints. The colorbar lives on
+      // the right of the geo plot at x≈1.02 spanning y∈[0.1, 0.9] (len:0.8,
+      // centered). Anchor labels just outside its top/bottom.
+      ...(isSeasonalPeak ? [
+        {
+          text: '<b>winter</b>',
+          xref: 'paper', yref: 'paper',
+          x: 1.04, y: 0.93, xanchor: 'left', yanchor: 'bottom',
+          showarrow: false,
+          font: {size: 11, color: '#1c4f93'},
+        },
+        {
+          text: '<b>summer</b>',
+          xref: 'paper', yref: 'paper',
+          x: 1.04, y: 0.07, xanchor: 'left', yanchor: 'top',
+          showarrow: false,
+          font: {size: 11, color: '#b25a1a'},
+        },
+      ] : []),
+    ],
   };
   Plotly.react('plot-map', data, layout, {displayModeBar: false, responsive: true});
 }
