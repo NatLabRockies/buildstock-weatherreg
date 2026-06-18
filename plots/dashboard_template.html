@@ -646,7 +646,8 @@ function renderTrajectoryTotal() {
   const layout = {
     margin: {t: 24, r: 8, b: 36, l: 70},
     xaxis: {tickmode: 'array', tickvals: PAYLOAD.stock_years},
-    yaxis: {title: yLabel, gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05],
+    yaxis: {title: {text: yLabel, standoff: 6, font: {size: 12}},
+            gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05],
             tickformat: metric === 'annual_gwh' ? '.2s' : undefined},
     legend: {orientation: 'h', y: -0.18, font: {size: 11}, groupclick: 'togglegroup'},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
@@ -692,7 +693,8 @@ function renderTrajectoryBreakdown() {
   const layout = {
     margin: {t: 24, r: 8, b: 36, l: 70},
     xaxis: {tickmode: 'array', tickvals: PAYLOAD.stock_years},
-    yaxis: {title: yLabel, gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05],
+    yaxis: {title: {text: yLabel, standoff: 6, font: {size: 12}},
+            gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05],
             tickformat: metric === 'annual_gwh' ? '.2s' : undefined},
     legend: {orientation: 'h', y: -0.18, font: {size: 11}},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
@@ -751,11 +753,10 @@ function renderMap() {
       conusVal = null;
     }
     colorscale = SEASONAL_PEAK_COLORSCALE;
-    const maxAbs = Math.max(
-      ...values.filter(v => v !== null && !Number.isNaN(v)).map(v => Math.abs(v)),
-      Math.abs(conusVal || 0),
-      1,
-    );
+    // Use only per-STATE values to set the scale — including CONUS would
+    // wash everything out because CONUS = Σ states is ~10× any state.
+    const stateVals = values.filter(v => v !== null && !Number.isNaN(v));
+    const maxAbs = stateVals.length ? Math.max(...stateVals.map(v => Math.abs(v))) : 1;
     zmin = -maxAbs;
     zmax = +maxAbs;
     cbTitle = 'Peak power (GW)<br>↑ winter ⋅ ↓ summer';
@@ -774,7 +775,7 @@ function renderMap() {
     zmax =  maxAbs;
     cbTitle = mode === 'savings'
       ? (metric === 'annual_gwh' ? 'Energy saved (GWh / yr)' : 'Peak saved (GW)')
-      : 'Energy saved (%)';
+      : (metric === 'annual_gwh' ? 'Energy saved (%)'       : 'Peak saved (%)');
   }
 
   const unit = mode === 'pct_savings' ? ' %'
@@ -936,8 +937,8 @@ function renderCohort() {
   const layout = {
     margin: {t: 30, r: 8, b: 36, l: 70},
     xaxis: {gridcolor: '#eee', tickformat: '%b %d'},
-    yaxis: {title: 'Daily energy (GWh / day)', gridcolor: '#eee', zeroline: false,
-            tickformat: '.2s'},
+    yaxis: {title: {text: 'Daily energy (GWh / day)', standoff: 6, font: {size: 12}},
+            gridcolor: '#eee', zeroline: false, tickformat: '.2s'},
     legend: {orientation: 'h', y: -0.15, font: {size: 10}, traceorder: 'normal'},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
     title: {text: `${state.scenario} · ${state.trajState} · stock ${stockYear()} · amy${wy}`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
@@ -956,7 +957,7 @@ function renderCohortPeakWeek() {
       : `No ${state.cohortSeason} peak data`;
     Plotly.react('plot-cohort-pk', [], {
       margin: {t: 24, r: 8, b: 36, l: 70},
-      yaxis: {title: 'GW'},
+      yaxis: {title: {text: 'Power (GW)', standoff: 6, font: {size: 12}}},
       annotations: [{text: placeholder, xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
                      showarrow: false, font: {color: '#999'}}],
     }, {displayModeBar: false, responsive: true});
@@ -973,7 +974,8 @@ function renderCohortPeakWeek() {
   const layout = {
     margin: {t: 30, r: 8, b: 36, l: 70},
     xaxis: {gridcolor: '#eee', tickformat: '%a %b %d'},
-    yaxis: {title: 'Power (GW)', gridcolor: '#eee', zeroline: false},
+    yaxis: {title: {text: 'Power (GW)', standoff: 6, font: {size: 12}},
+            gridcolor: '#eee', zeroline: false},
     legend: {orientation: 'h', y: -0.18, font: {size: 10}, traceorder: 'normal'},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
     title: {text: `${state.scenario} · ${state.trajState} · stock ${stockYear()} · amy${wy} · ${state.cohortSeason} peak`,

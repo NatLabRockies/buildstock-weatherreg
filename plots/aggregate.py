@@ -343,7 +343,9 @@ def _peak_week_task(args: tuple) -> tuple[str, int, dict]:
             seasons[season_name] = {
                 'timestamps':  timestamps,
                 'peak_iso':    peak_ts.isoformat(),
-                'peak_gw':     float(wy_total_conus.max()),
+                # peak_gw is the SEASON-specific CONUS peak (not the whole
+                # year's max). Use the value at the season's peak timestamp.
+                'peak_gw':     float(wy_total_conus.loc[peak_ts]),
                 'residential': conus_res,
                 'commercial':  conus_com,
                 'cohorts':     conus_cohorts,
