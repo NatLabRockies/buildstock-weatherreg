@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=geohc
-#SBATCH --partition=standard    # <-- single knob: flip to "bigmem" if standard pool goes down again
+#SBATCH --partition=standard
 #SBATCH --time=05:00:00
 #SBATCH --mem=246064    # launcher only uses 1 CPU; mem here is just for B's Athena queries
 #SBATCH --qos=high
@@ -43,15 +43,9 @@ fi
 # Ensure uv is on PATH (adjust if installed elsewhere)
 export PATH="$HOME/.local/bin:$PATH"
 source /kfs2/shared-projects/buildstock/aws_credentials.sh
-# Derive chunk-worker profile (CHUNK_PARTITION/CPUS/MEM_MB/ARRAY_CONCURRENCY)
-# from the partition this launcher is running in. B reads these env vars when
-# building sbatch invocations for the C array and F aggregator.
-source ./slurm_defaults.sh
 # Defensive: SLURM precedence is CLI > env > #SBATCH, so any SBATCH_TIMELIMIT
 # leaked from the user's shell rc would silently shorten C/F (which ask for 3 h
 # / 2 h) on their #SBATCH lines. Unset to make sure that can't happen.
 unset SBATCH_TIMELIMIT SLURM_TIMELIMIT
-echo "Chunk profile: partition=$CHUNK_PARTITION cpus=$CHUNK_CPUS mem_mb=$CHUNK_MEM_MB array_cap=$CHUNK_ARRAY_CONCURRENCY"
-# aws sso login
 
 uv run B_building_stock_parallel_agg.py "$switches_path"

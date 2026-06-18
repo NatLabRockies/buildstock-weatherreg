@@ -899,20 +899,20 @@ if __name__ == "__main__":
                     mf.write(f'{idx},{s_idx},{e_idx},{c_str}\n')
             logger.info("Wrote manifest with %d chunks at %s", n_total, manifest_path)
 
-            # Chunk-worker profile is exported by slurm_defaults.sh (sourced
-            # in A_start_building_stock_parallel_agg.sh). Fallbacks match the
-            # historical standard-partition values so this still works if the
-            # launcher didn't source slurm_defaults.sh.
-            chunk_partition = os.environ.get('CHUNK_PARTITION', 'standard')
-            chunk_cpus = os.environ.get('CHUNK_CPUS', '48')
-            chunk_mem = os.environ.get('CHUNK_MEM_MB', '246064')
-            array_cap = os.environ.get('CHUNK_ARRAY_CONCURRENCY', '200')
+            # Chunk-worker profile, sized for the standard partition
+            # (48 cores / 246 GB / node). If the standard pool is ever
+            # unusable, edit these four values + A's `#SBATCH --partition=`
+            # together; nothing else needs to change.
+            chunk_partition = 'standard'
+            chunk_cpus = '48'
+            chunk_mem = '246064'
+            array_cap = '200'
 
             if n_missing == 0:
                 # All chunks present but agg missing — submit agg directly.
                 # No array dependency needed; chunks already exist on disk.
-                # --time passed explicitly so SBATCH_TIMELIMIT in the env
-                # (e.g. from slurm_defaults.sh) can't shrink it.
+                # --time passed explicitly so a stray SBATCH_TIMELIMIT in
+                # the env can't shrink it (SLURM precedence: CLI > env > #SBATCH).
                 agg_result = subprocess.run([
                     'sbatch',
                     f'--job-name={prefix}agg_{upgrade_tag}',
@@ -934,8 +934,8 @@ if __name__ == "__main__":
                 # _compress_array_indices yields "0-2,5,7-9" style; SLURM
                 # accepts these as a sparse array spec.
                 array_spec = _compress_array_indices(missing_indices)
-                # --time passed explicitly so SBATCH_TIMELIMIT in the env
-                # (e.g. from slurm_defaults.sh) can't shrink it.
+                # --time passed explicitly so a stray SBATCH_TIMELIMIT in
+                # the env can't shrink it (SLURM precedence: CLI > env > #SBATCH).
                 result = subprocess.run([
                     'sbatch',
                     f'--job-name={prefix}chunk_{upgrade_tag}',

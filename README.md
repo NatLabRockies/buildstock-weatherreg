@@ -23,8 +23,8 @@ downstream consumers (ReEDS, LBL, and an Intermediate publishing/debugging view)
           │
           ▼
     ╔═════════════╗
-    ║  A (SLURM)  ║  thin SLURM wrapper; sources slurm_defaults.sh,
-    ║  launcher   ║  authenticates AWS, then invokes B with the switches path.
+    ║  A (SLURM)  ║  thin SLURM wrapper; authenticates AWS, then invokes B
+    ║  launcher   ║  with the switches path.
     ╚═════════════╝
           │
           ▼
@@ -125,7 +125,7 @@ projections.
 | Stage | File | Type | What it does |
 |---|---|---|---|
 | 0 | `switches_agg_resstock.json` / `switches_agg_comstock.json` | config | Per-stock spec list, run_type definitions, calibration path, scenario name map |
-| A | `A_start_building_stock_parallel_agg.sh` | SLURM wrapper | Sources `slurm_defaults.sh`, AWS auth, renames the running job `res_/com_*`, runs B |
+| A | `A_start_building_stock_parallel_agg.sh` | SLURM wrapper | AWS auth, renames the running job `res_/com_*`, runs B |
 | B | `B_building_stock_parallel_agg.py` | Python orchestrator | For each spec: bin-pack chunks, submit C array, submit F (depends C), accumulate F IDs, finally submit Z |
 | C | `C_run_bldg_chunk_agg.sh` | SLURM array task | Runs `D_process_chunk_agg.py` with the chunk's start/end indices |
 | D | `D_process_chunk_agg.py` | Python worker | BSQ Athena pull, **apply calibration factors if set**, RF / NN regression, write chunk CSV |
@@ -137,7 +137,6 @@ projections.
 | — | `projections/` | package | Future-year projections + ReEDs / LBL / intermediate handoff modules (see below) |
 | — | `agg_buildings.py` | Python | Stitches per-chunk hourly CSVs into one per-enduse CSV at county resolution |
 | — | `epw_sync.py` | Python | One-time download of EPW weather files (off-Kestrel only) |
-| — | `slurm_defaults.sh` | shell | Centralizes chunk-worker SLURM profile (partition, cpus, mem, array cap) so A and B agree |
 | — | `validation.py` / `validation_supplemental.py` | Python | Reg-vs-ref diagnostics |
 | — | `res_state_adjustment_factors_amy2018.parquet` | data | Per-(state, hour) calibration factors for ResStock amy2018 |
 | — | `gap_by_state.csv` | data | ComStock gap-model 2018 hourly profile, 49 states |
