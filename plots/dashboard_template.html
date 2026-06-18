@@ -855,13 +855,28 @@ function applyExpand() {
   document.querySelectorAll('.grid-3').forEach(g => {
     g.classList.toggle('expanded', exp !== null);
   });
-  // Force Plotly to reflow into the new container size. responsive:true
-  // usually handles this, but explicit resize is belt-and-braces.
-  setTimeout(() => {
+  // Plotly's responsive mode writes inline width/height on the plot DIV;
+  // those inline styles beat CSS, so a plot expanded to ~1400 px stays
+  // 1400 px after the grid CSS reverts to 1fr 1fr — visually pushing the
+  // right column off-screen. Clear the inline styles before resizing so
+  // Plotly re-reads the actual (post-CSS) container size.
+  PLOT_IDS.forEach(id => {
+    const div = document.getElementById(id);
+    if (div) {
+      div.style.removeProperty('width');
+      div.style.removeProperty('height');
+    }
+  });
+  // Double RAF: wait for the browser to apply the class-toggle layout
+  // change before asking Plotly to resize.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
     PLOT_IDS.forEach(id => {
-      try { Plotly.Plots.resize(id); } catch (e) {}
+      try {
+        Plotly.relayout(id, {autosize: true});
+        Plotly.Plots.resize(id);
+      } catch (e) {}
     });
-  }, 50);
+  }));
 }
 
 // === Tabs + refresh ======================================================
