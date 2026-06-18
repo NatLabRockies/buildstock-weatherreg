@@ -13,64 +13,80 @@ source run_dirs change.
 EXACTLY WHAT GETS COMPUTED
 ==========================
 
-A. ReEDs streaming  →  panel1 (trajectory) + panel2 (state map)
+A. ReEDs streaming  →  panel1 (CONUS trajectory)
    For each of the 24 ReEDs CSVs per stock (scenario × stock_year):
      - read the file (timestamp_EST index, 48 lowercase-state-name columns, MWh)
      - add res + com row-wise if both run_dirs have the file
-     - rename lowercase state names → 2-letter postals (Plotly choropleth)
      - sum across state columns → CONUS hourly MWh series
      - group by year-of-timestamp → 18 (annual GWh, peak GW) pairs per file
-     - keep per-state annual GWh per weather year for the choropleth
    Output:
      panel1.annual_gwh[scenario][stock_year][weather_year] = GWh
      panel1.peak_gw  [scenario][stock_year][weather_year] = GW
-     panel2.annual_gwh_by_state[scenario][stock_year][weather_year][postal] = GWh
 
-B. panel3_peak_week  (parallel)
+B. panel3_peak_week  (parallel; ProcessPool, 24 tasks)
    For each (scenario, stock_year):
-     - sum each cohort's `total` enduse intermediate file across cohorts:
-         residential cohorts (NC + SA + SNA)        → res CONUS hourly GWh
-         commercial  cohorts (NC + SA + SNA + gap)  → com CONUS hourly GWh
+     - load each of the 7 cohort `total` files (res NC/SA/SNA + com NC/SA/SNA/gap)
+     - sum cohorts → res / com / total CONUS hourly GWh (= GW hourly)
      - for each weather year:
          summer peak = max(total) in Jun-Sep
          winter peak = max(total) in Dec-Feb
-         extract ±3-day windows (168 hours each)
+         extract ±3-day windows from the FULL series (not wy-sliced) so
+         Jan-1 boundary peaks still get all 168 hours
    Output:
      panel3[scenario][stock_year][weather_year][summer|winter] =
-       {timestamps, residential, commercial, peak_iso, peak_gw}
+       {timestamps, residential, commercial, peak_iso, peak_gw,
+        cohorts: {res_NC: [168 GW], ..., com_gap: [168 GW]}}
 
-C. panel4_cohort_daily  (parallel)
-   For each (scenario, stock_year):
-     - pick the median CONUS-annual weather year (from panel1)
-     - for each of the 7 cohort × sector channels (res NC/SA/SNA + com NC/SA/SNA/gap):
-         read the cohort's `total` intermediate file
-         sum across state cols → CONUS hourly GWh
-         filter to the chosen weather year
-         daily resample (sum) → 365 or 366 daily totals
+C. panel_state_by_sector  (parallel; ProcessPool, 96 tasks)
+   For each (scenario, stock_year, sector) where sector ∈ {residential,
+   commercial, gap, total}:
+     - read the cohort `total` files matching the (scenario, sector, year)
+     - sum to hourly state-x-time matrix
+     - per-state per-wy: ann = matrix.groupby(year).sum(),
+                        peak = matrix.groupby(year).max()  [intra-state coincident]
+     - CONUS: sum hourly across states first → joint hourly, then take max
+              [correct coincident peak — sum-of-state-peaks would over-count]
+   For sector='total' the task additionally computes per-(wy, state)
+   peak_contributions: each sub-sector's value AT the total-peak hour.
+   These sum to the total peak (coincident decomposition for the
+   trajectory's Peak GW breakdown stacked area).
    Output:
-     panel4[scenario][stock_year][cohort_key] = [daily GWh / day]
-       (+ 'dates': ISO dates, 'weather_year': the chosen median wy)
+     state_by_sector.annual_gwh[scenario][year][wy][sector][state]    = GWh
+     state_by_sector.peak_gw   [scenario][year][wy][sector][state]    = GW
+     state_by_sector.peak_contributions[scenario][year][wy][state]
+                              = {residential, commercial, gap}        = GW
 
-D. panel_intermediate_annual  (parallel)
+D. panel_cohort_daily_all_wys  (parallel; ProcessPool, 168 tasks)
+   For each (scenario, stock_year, sector, cohort):
+     - read the cohort `total` intermediate file
+     - sum across state cols → CONUS hourly GWh
+     - group by year-of-timestamp → per-wy daily resample (24h→1)
+   Output:
+     cohort_daily[scenario][year][wy] = {dates: [iso], cohorts: {key: [daily]}}
+
+E. panel_intermediate_annual  (parallel; ProcessPool)
    For every intermediate/state `total` file:
-     - read, sum across state cols, group by year → annual GWh per weather year
-   Used by Tabs 2 + 3 reconciliation.
+     - read, sum across state cols → CONUS hourly
+     - group by year → annual GWh per weather year
+   Used for tabs 2 + 3 reconciliation against ReEDs and LBL.
    Output:
-     intermediate_annual[scenario][stock_year][weather_year][sector][cohort] = GWh
+     intermediate_annual[scenario][year][wy][sector][cohort] = GWh
 
-E. panel_lbl  (polars one-pass)
+F. panel_lbl  (per-file polars; ProcessPool, POLARS_MAX_THREADS=1 per worker)
    For every LBL/*.csv (long-format, ~9M rows each):
-     - polars scan_csv with include_file_paths='source_file'
-     - group_by('source_file') → sum(value_kwh) per file
+     - polars scan_csv pushes SUM(value_kwh) down into the CSV scanner
      - kWh → GWh
    LBL ships only AMY 2012 and 2018 and excludes the commercial gap by spec.
    Output:
-     lbl_annual[scenario][stock_year][weather_year][sector][cohort] = GWh
+     lbl_annual[scenario][year][wy][sector][cohort] = GWh
 
-F. Axis pin maxes  (cheap)
-   Compute max across all panel1 values for annual GWh and peak GW;
-   add 10 % headroom; round to a tidy step (500 K GWh / 100 GW).
-   Used to fix y-axis ranges so values across tabs stay visually comparable.
+G. Axis pin maxes  (cheap, in build_payload)
+   * annual_gwh_max / peak_gw_max (CONUS legacy pins, rounded to step)
+   * trajectory_max[state][sector][metric] — per-state per-sector global max
+     across all (scenario, year, wy); used to pin y-axes so sliding
+     doesn't rescale.
+   * choropleth_max[sector][metric] — per-sector global max across the
+     non-CONUS states; used to pin the choropleth color scale.
 
 CLI
 ===
@@ -228,18 +244,6 @@ def _extract_window(res_wy: pd.Series, com_wy: pd.Series, total_wy: pd.Series,
     return out
 
 
-def _representative_weather_year_table(panel1: dict) -> dict[tuple[str, int], int]:
-    """Median weather year per (scenario, stock_year) by CONUS annual GWh."""
-    table: dict[tuple[str, int], int] = {}
-    for scenario, by_year in panel1['annual_gwh'].items():
-        for year, by_wy in by_year.items():
-            if not by_wy:
-                continue
-            sorted_wy = sorted(by_wy.items(), key=lambda kv: kv[1])
-            table[(scenario, year)] = sorted_wy[len(sorted_wy) // 2][0]
-    return table
-
-
 def _scenario_color() -> dict[str, str]:
     return {
         'Baseline':      '#7f8c8d',
@@ -317,44 +321,6 @@ def _peak_week_task(args: tuple) -> tuple[str, int, dict]:
         if seasons:
             result[wy] = seasons
     return scenario, year, result
-
-
-def _cohort_daily_task(args: tuple) -> tuple[str, int, dict]:
-    """One (scenario, year) → per-cohort daily GWh at median wy."""
-    res_inter, com_inter, scenario, year, wy = args
-    entry: dict[str, list[float] | list[str] | int] = {}
-    dates_set: list[str] | None = None
-
-    def _series(paths, sector, cohort) -> pd.Series | None:
-        key = (scenario, sector, cohort, 'total', year)
-        p = paths.get(key)
-        if p is None:
-            return None
-        df = _read_with_index(p)
-        s = df.sum(axis=1)
-        return s[s.index.year == wy]
-
-    for cohort in RES_COHORTS:
-        s = _series(res_inter, 'residential', cohort)
-        if s is None:
-            continue
-        daily = s.resample('D').sum()
-        entry[f'res_{cohort}'] = [float(v) for v in daily.values]
-        if dates_set is None:
-            dates_set = [d.isoformat() for d in daily.index]
-    for cohort in COM_COHORTS:
-        s = _series(com_inter, 'commercial', cohort)
-        if s is None:
-            continue
-        daily = s.resample('D').sum()
-        entry[f'com_{cohort}'] = [float(v) for v in daily.values]
-        if dates_set is None:
-            dates_set = [d.isoformat() for d in daily.index]
-
-    if entry:
-        entry['dates'] = dates_set or []
-        entry['weather_year'] = wy
-    return scenario, year, entry
 
 
 def _intermediate_annual_task(args: tuple) -> tuple[tuple, dict[int, float]]:
@@ -544,27 +510,6 @@ def panel3_peak_week(
             if result:
                 weeks[scenario][year] = result
     return weeks
-
-
-def panel4_cohort_daily(
-    res_inter: dict[tuple[str, str, str, str, int], Path],
-    com_inter: dict[tuple[str, str, str, str, int], Path],
-    representative_wy_by_scen_year: dict[tuple[str, int], int],
-) -> dict:
-    """Parallel over (scenario, year): per-cohort daily GWh at median wy."""
-    tasks = [(res_inter, com_inter, s, y, wy)
-             for (s, y), wy in representative_wy_by_scen_year.items()]
-    cohorts: dict[str, dict[int, dict]] = {s: {} for s in SCENARIOS}
-    _log(f'  cohort — {len(tasks)} (scenario, year) tasks across {WORKERS} processes')
-    done = 0
-    with ProcessPoolExecutor(max_workers=WORKERS) as pool:
-        for scenario, year, entry in pool.map(_cohort_daily_task, tasks):
-            done += 1
-            n_coh = sum(1 for k in entry if k.startswith(('res_', 'com_')))
-            _log(f'    ({done:>2}/{len(tasks)}) {scenario} y{year} @ amy{entry.get("weather_year","—")}  cohorts={n_coh}')
-            if entry:
-                cohorts[scenario][year] = entry
-    return cohorts
 
 
 def panel_state_by_sector(

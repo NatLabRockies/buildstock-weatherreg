@@ -66,26 +66,6 @@
     background-size: 8px 6px; padding-right: 18px;
   }
 
-  /* Compact headline cards — one row, two metrics + delta inline */
-  .headline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
-              padding: 6px 24px; border-bottom: 1px solid var(--border); }
-  .scen-card { border: 1px solid var(--border); border-radius: 6px;
-               padding: 4px 10px; background: var(--bg);
-               transition: all 0.12s ease; cursor: pointer; display: flex;
-               flex-direction: column; gap: 1px; }
-  .scen-card.active { background: #fff; box-shadow: 0 0 0 2px var(--accent) inset; }
-  .scen-card .top-row { display: flex; align-items: center; gap: 6px; }
-  .scen-card .swatch { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-  .scen-card .scen-name { font-weight: 600; font-size: 11px; }
-  .scen-card .metrics-row { display: flex; gap: 10px; align-items: baseline; font-size: 11px; }
-  .scen-card .metric-pair { display: flex; gap: 3px; align-items: baseline; }
-  .scen-card .metric-pair .lab { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-  .scen-card .metric-pair .val { font-weight: 600; font-size: 12px; }
-  .scen-card .metric-pair .unit { font-size: 9px; color: var(--muted); }
-  .scen-card .delta-row { display: flex; gap: 8px; font-size: 9px; color: var(--muted); }
-  .scen-card .delta.up   { color: var(--bad); }
-  .scen-card .delta.down { color: var(--good); }
-
   nav.tabs { display: flex; padding: 0 24px; gap: 0; border-bottom: 1px solid var(--border); }
   nav.tabs button { background: none; border: none; border-bottom: 2px solid transparent;
                     padding: 6px 12px; font-size: 12px; font-weight: 500; color: var(--muted); cursor: pointer; }
@@ -467,42 +447,6 @@ function syncActivePills() {
     b.classList.toggle('active', TABS[i].id === state.tab));
   document.getElementById('ctl-stockyear-val').textContent = stockYear();
   document.getElementById('ctl-weatheryear-val').textContent = weatherYear();
-}
-
-// === Headline ============================================================
-function renderHeadline() {
-  const y = stockYear(), wy = weatherYear();
-  const baseAnn  = annualReEDs('Baseline', y, wy);
-  const basePeak = peakReEDs('Baseline', y, wy);
-  const el = document.getElementById('headline');
-  el.innerHTML = '';
-  PAYLOAD.scenarios.forEach(sc => {
-    const ann  = annualReEDs(sc, y, wy);
-    const peak = peakReEDs(sc, y, wy);
-    const annDelta  = (ann !== undefined && baseAnn && sc !== 'Baseline')  ? ((ann - baseAnn) / baseAnn * 100) : null;
-    const peakDelta = (peak !== undefined && basePeak && sc !== 'Baseline') ? ((peak - basePeak) / basePeak * 100) : null;
-    const card = document.createElement('div');
-    card.className = 'scen-card' + (sc === state.scenario ? ' active' : '');
-    card.onclick = () => { state.scenario = sc; refresh(); };
-    const dCls = d => d === null ? '' : (d > 0 ? 'up' : 'down');
-    const dStr = (d, prefix) => d === null ? '' :
-      `<span class="delta ${dCls(d)}">${prefix} ${d > 0 ? '+' : ''}${d.toFixed(1)}%</span>`;
-    card.innerHTML = `
-      <div class="top-row">
-        <span class="swatch" style="background:${PAYLOAD.colors[sc]}"></span>
-        <span class="scen-name">${sc}</span>
-      </div>
-      <div class="metrics-row">
-        <span class="metric-pair">
-          <span class="lab">Ann</span><span class="val">${fmt(ann)}</span><span class="unit">GWh</span>
-        </span>
-        <span class="metric-pair">
-          <span class="lab">Pk</span><span class="val">${peak !== undefined ? peak.toFixed(0) : '—'}</span><span class="unit">GW</span>
-        </span>
-      </div>
-      <div class="delta-row">${dStr(annDelta, 'Δann')} ${dStr(peakDelta, 'Δpk')}</div>`;
-    el.appendChild(card);
-  });
 }
 
 // === ReEDs panels ========================================================
