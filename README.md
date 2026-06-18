@@ -372,7 +372,17 @@ cd buildstock-weatherreg
 uv sync   # creates .venv, installs everything from pyproject.toml
 ```
 
-Then copy the ComStock schema into the venv:
+### Non-HVAC Load Queries (Aggregate Notebooks)
+
+ Use the notebooks in `aggregates/` for queries of non-HVAC electricity loads by state and hour.
+
+
+### Full Runs
+Set these switches in `switches_agg.json`:
+- `"testmode": false`. This deactivates the Vermont-only test run and runs full national.
+- `"upgrades": [0,4]` (or any list of upgrades/measures to run). Upgrade 0 is Baseline. Note that for ComStock runs we typically only run one upgrade at a time on HPC.
+- `"target_year": ["2007-2013","2016-2023"]` (or any integer or list of either integers or strings with ranges, as shown). These are the years for which regressed EULP data is output.
+- Change any other switches as shown in the subsections below. In the subsections below we discuss using [ComStock](#comstock-regressed) rather than ResStock, and running the tool [without regressions](#non-regressed) to simply extract existing ResStock/ComStock data.
 
 ```bash
 uv run python -c "import site; print(site.getsitepackages())"
