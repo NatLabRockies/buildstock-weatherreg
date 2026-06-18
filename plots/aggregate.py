@@ -260,14 +260,15 @@ def _scenario_color() -> dict[str, str]:
 
 # === Top-level worker functions (must be module-level for ProcessPool) =====
 def _peak_week_task(args: tuple) -> tuple[str, int, dict]:
-    """One (scenario, year) → seasonal peak windows per weather year, with
-    per-cohort hourly slices both at CONUS level (for main.js) and per-state
-    (for state_<postal>.js sidecars).
+    """One (scenario, year) → seasonal peak windows per weather year.
 
-    Loads each of the 7 cohort 'total' intermediate files as a state-x-time
-    DataFrame, sums them to res/com/total state-x-time, finds the CONUS peak
-    hour per (wy, season), and extracts the ±3-day window from each cohort's
-    state-x-time matrix.
+    For CONUS: window centered on the CONUS-summed peak hour, with cohort
+    series summed across states.
+
+    For each state: window centered on THAT STATE's own peak hour in the
+    season — so the panel reflects the state's actual peak (not its value
+    at the CONUS peak hour). This makes the map's "TX summer 107 GW"
+    match the cohort panel's "Summer peak 107 GW" for TX.
     """
     res_inter, com_inter, scenario, year = args
     cohort_dfs: dict[str, pd.DataFrame] = {}    # state-x-time per cohort
@@ -298,59 +299,85 @@ def _peak_week_task(args: tuple) -> tuple[str, int, dict]:
     if res_df is None or com_df is None:
         return scenario, year, {}
     total_df = res_df.add(com_df, fill_value=0.0)
-    total_conus = total_df.sum(axis=1)            # CONUS hourly used to find peak
+    total_conus = total_df.sum(axis=1)
+    summer_months = [6, 7, 8, 9]
+    winter_months = [12, 1, 2]
+
+    def _extract_window(peak_ts, series_or_col_fn):
+        """Return (timestamps, cohort_values_per_key) for the ±3-day window
+        around peak_ts. series_or_col_fn(df) returns the series to slice
+        for a given cohort df — either df.sum(axis=1) for CONUS or df[st]
+        for a state."""
+        win_start = peak_ts - pd.Timedelta(days=3)
+        win_end   = peak_ts + pd.Timedelta(days=4) - pd.Timedelta(hours=1)
+        idx = total_df.loc[win_start:win_end].index
+        if len(idx) < 24:
+            return None, None
+        timestamps = [t.isoformat() for t in idx]
+        cohort_window = {}
+        for k, df in cohort_dfs.items():
+            s = series_or_col_fn(df).loc[win_start:win_end]
+            cohort_window[k] = [round(float(v), 2) for v in s.values]
+        return timestamps, cohort_window
 
     result: dict[int, dict[str, dict]] = {}
     for wy in sorted(set(int(y) for y in total_df.index.year.unique())):
         wy_mask = total_df.index.year == wy
         wy_total_conus = total_conus[wy_mask]
-        summer_mask = wy_total_conus.index.month.isin([6, 7, 8, 9])
-        winter_mask = wy_total_conus.index.month.isin([12, 1, 2])
-        summer_peak = wy_total_conus[summer_mask].idxmax() if summer_mask.any() else None
-        winter_peak = wy_total_conus[winter_mask].idxmax() if winter_mask.any() else None
-
         seasons: dict[str, dict] = {}
-        for season_name, peak_ts in [('summer', summer_peak), ('winter', winter_peak)]:
-            if peak_ts is None:
+
+        for season_name, season_months in [('summer', summer_months),
+                                           ('winter', winter_months)]:
+            season_mask_conus = wy_total_conus.index.month.isin(season_months)
+            if not season_mask_conus.any():
                 continue
-            win_start = peak_ts - pd.Timedelta(days=3)
-            win_end   = peak_ts + pd.Timedelta(days=4) - pd.Timedelta(hours=1)
-            window_idx = total_df.loc[win_start:win_end].index
-            if len(window_idx) < 24:
+            conus_peak_ts = wy_total_conus[season_mask_conus].idxmax()
+
+            # CONUS window — cohort series summed across states.
+            timestamps_conus, conus_cohorts = _extract_window(
+                conus_peak_ts, lambda df: df.sum(axis=1))
+            if timestamps_conus is None:
                 continue
 
-            timestamps = [t.isoformat() for t in window_idx]
+            # Res/com sector windows (CONUS-summed) for back-compat.
+            conus_res = [round(float(v), 2) for v in
+                         res_df.sum(axis=1)
+                         .loc[conus_peak_ts - pd.Timedelta(days=3):
+                              conus_peak_ts + pd.Timedelta(days=4) - pd.Timedelta(hours=1)].values]
+            conus_com = [round(float(v), 2) for v in
+                         com_df.sum(axis=1)
+                         .loc[conus_peak_ts - pd.Timedelta(days=3):
+                              conus_peak_ts + pd.Timedelta(days=4) - pd.Timedelta(hours=1)].values]
 
-            # CONUS aggregates (sum across states inside the window).
-            conus_cohorts = {
-                k: [float(v) for v in df.loc[win_start:win_end].sum(axis=1).values]
-                for k, df in cohort_dfs.items()
-            }
-            conus_res = [float(v) for v in res_df.loc[win_start:win_end].sum(axis=1).values]
-            conus_com = [float(v) for v in com_df.loc[win_start:win_end].sum(axis=1).values]
-
-            # Per-state slices: each state gets its own cohort series in the
-            # SAME window (centered on the CONUS peak). State's "peak_gw" is
-            # that state's max within the window. Hourly values are rounded
-            # to 2 decimal places — 10 MW resolution is well below anything
-            # readable on the chart, saves ~40% on JSON file size.
+            # Per-state: each state gets ITS OWN window centered on its
+            # own peak hour in this season. This is what makes the cohort
+            # panel's peak match the map's per-state seasonal peak.
             per_state: dict[str, dict] = {}
+            wy_total_state = total_df[wy_mask]
             for st in total_df.columns:
-                state_cohorts = {
-                    k: [round(float(v), 2) for v in df.loc[win_start:win_end, st].values]
-                    for k, df in cohort_dfs.items()
-                }
+                st_series = wy_total_state[st]
+                st_season_mask = st_series.index.month.isin(season_months)
+                if not st_season_mask.any():
+                    continue
+                st_peak_ts = st_series[st_season_mask].idxmax()
+                ts_st, cohorts_st = _extract_window(
+                    st_peak_ts, lambda df, st=st: df[st])
+                if ts_st is None:
+                    continue
+                # The state's peak_gw IS its season max — equals what the
+                # map's state_by_sector.peak_gw[sector='total'].summer reports.
+                st_peak_gw = float(st_series.loc[st_peak_ts])
                 per_state[st] = {
-                    'cohorts': state_cohorts,
-                    'peak_gw': round(float(total_df.loc[win_start:win_end, st].max()), 2),
+                    'timestamps': ts_st,
+                    'peak_iso':   st_peak_ts.isoformat(),
+                    'peak_gw':    round(st_peak_gw, 2),
+                    'cohorts':    cohorts_st,
                 }
 
             seasons[season_name] = {
-                'timestamps':  timestamps,
-                'peak_iso':    peak_ts.isoformat(),
-                # peak_gw is the SEASON-specific CONUS peak (not the whole
-                # year's max). Use the value at the season's peak timestamp.
-                'peak_gw':     float(wy_total_conus.loc[peak_ts]),
+                'timestamps':  timestamps_conus,
+                'peak_iso':    conus_peak_ts.isoformat(),
+                'peak_gw':     float(wy_total_conus.loc[conus_peak_ts]),
                 'residential': conus_res,
                 'commercial':  conus_com,
                 'cohorts':     conus_cohorts,
@@ -595,24 +622,18 @@ def panel3_peak_week(
             if not result:
                 continue
             # Split each (wy, season) dict into a CONUS-only entry + a
-            # per-state slice. `per_state` field is pop'd out of `result`.
+            # per-state slice. Each per-state entry now carries its OWN
+            # timestamps + peak_iso (windows are state-centered, not
+            # CONUS-centered), so no merge with CONUS is needed at render time.
             conus_only[scenario][year] = {}
             for wy, seasons in result.items():
                 for season, w in seasons.items():
                     state_block = w.pop('per_state', {})
-                    # Per-state files DROP `timestamps` and `peak_iso` — they
-                    # are identical to the CONUS-equivalent entry in main.js
-                    # for the same (scenario, year, wy, season). JS looks
-                    # them up from PAYLOAD.panel3 at render time, saving
-                    # ~10 MB per state file.
                     for st, st_data in state_block.items():
                         (per_state.setdefault(st, {})
                                   .setdefault(scenario, {})
                                   .setdefault(year, {})
-                                  .setdefault(wy, {}))[season] = {
-                            'cohorts': st_data['cohorts'],
-                            'peak_gw': st_data['peak_gw'],
-                        }
+                                  .setdefault(wy, {}))[season] = st_data
                 conus_only[scenario][year][wy] = seasons
     return conus_only, per_state
 

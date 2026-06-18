@@ -442,15 +442,10 @@ function getPeakWeekEntry(postal, scenario, year, wy, season) {
   }
   const st = window.STATE_DATA[postal];
   if (!st || !st.peak_week) return null;
-  const stEntry = (((st.peak_week[scenario] || {})[year] || {})[wy] || {})[season];
-  if (!stEntry) return null;
-  const conusSeason = (((PAYLOAD.panel3[scenario] || {})[year] || {})[wy] || {})[season];
-  return {
-    timestamps: conusSeason?.timestamps || [],
-    cohorts:    stEntry.cohorts,
-    peak_iso:   conusSeason?.peak_iso || '',
-    peak_gw:    stEntry.peak_gw,
-  };
+  // Per-state sidecars now carry their own timestamps + peak_iso
+  // (windows are centered on the state's own peak hour, not CONUS's),
+  // so the entry is fully self-contained — no merge with CONUS needed.
+  return (((st.peak_week[scenario] || {})[year] || {})[wy] || {})[season] || null;
 }
 
 function annualReEDs(sc, y, wy) {
