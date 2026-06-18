@@ -292,29 +292,30 @@ def _peak_week_task(args: tuple) -> tuple[str, int, dict]:
         return scenario, year, {}
     total_gw = res_gw.add(com_gw, fill_value=0.0)
 
+    # Find peaks per (wy, season) by filtering the full series with masks,
+    # but extract the ±3-day windows from the FULL series so windows that
+    # straddle the Jan 1 boundary still get all 168 hours.
+    full_year_idx = total_gw.index.year
     result: dict[int, dict[str, dict]] = {}
-    for wy, group_idx in total_gw.groupby(total_gw.index.year).groups.items():
-        res_wy = res_gw.loc[group_idx]
-        com_wy = com_gw.loc[group_idx]
-        total_wy = total_gw.loc[group_idx]
-        cohorts_wy = {k: s.loc[group_idx] for k, s in cohort_series_gw.items()}
-
-        summer_mask = total_wy.index.month.isin([6, 7, 8, 9])
-        winter_mask = total_wy.index.month.isin([12, 1, 2])
-        summer_peak = total_wy[summer_mask].idxmax() if summer_mask.any() else None
-        winter_peak = total_wy[winter_mask].idxmax() if winter_mask.any() else None
+    for wy in sorted(set(int(y) for y in full_year_idx.unique())):
+        wy_mask = (full_year_idx == wy)
+        wy_total = total_gw[wy_mask]
+        summer_mask = wy_total.index.month.isin([6, 7, 8, 9])
+        winter_mask = wy_total.index.month.isin([12, 1, 2])
+        summer_peak = wy_total[summer_mask].idxmax() if summer_mask.any() else None
+        winter_peak = wy_total[winter_mask].idxmax() if winter_mask.any() else None
 
         seasons: dict[str, dict] = {}
         if summer_peak is not None:
-            w = _extract_window(res_wy, com_wy, total_wy, summer_peak, cohorts_wy)
+            w = _extract_window(res_gw, com_gw, total_gw, summer_peak, cohort_series_gw)
             if w is not None:
                 seasons['summer'] = w
         if winter_peak is not None:
-            w = _extract_window(res_wy, com_wy, total_wy, winter_peak, cohorts_wy)
+            w = _extract_window(res_gw, com_gw, total_gw, winter_peak, cohort_series_gw)
             if w is not None:
                 seasons['winter'] = w
         if seasons:
-            result[int(wy)] = seasons
+            result[wy] = seasons
     return scenario, year, result
 
 
@@ -365,7 +366,7 @@ def _intermediate_annual_task(args: tuple) -> tuple[tuple, dict[int, float]]:
     return key, {int(wy): float(v) for wy, v in ann_by_wy.items()}
 
 
-def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict]:
+def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict, dict | None]:
     """One (scenario, year, sector) → per-state + CONUS annual+peak per wy.
 
     The worker reads every cohort `total` file matching the (scenario, sector,
@@ -376,6 +377,13 @@ def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict]:
     coincident peak. Summing per-state peaks would over-count because peaks
     happen at different hours in different states.
 
+    For sector='total' the task additionally returns a `coincident_decomp`
+    dict carrying each sub-sector's value at the total peak hour, per
+    (wy, state). Summing across {residential, commercial, gap} for a given
+    (wy, state) equals the total peak — i.e. the stack adds up correctly.
+    This is what the breakdown sub-tab needs for metric=Peak GW. For other
+    sectors, coincident_decomp is None.
+
     `sector` is a *display sector*, not the intermediate file's sector column:
       * 'residential' → residential cohorts (NC, SA, SNA)
       * 'commercial'  → commercial cohorts EXCLUDING gap (NC, SA, SNA)
@@ -383,29 +391,41 @@ def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict]:
       * 'total'       → all of the above (read both res and com files)
     """
     res_inter, com_inter, scenario, year, sector = args
-    if sector == 'residential':
-        sources = [(res_inter, 'residential', RES_COHORTS)]
-    elif sector == 'commercial':
-        sources = [(com_inter, 'commercial', ['NC', 'SA', 'SNA'])]
-    elif sector == 'gap':
-        sources = [(com_inter, 'commercial', ['gap'])]
-    elif sector == 'total':
-        sources = [(res_inter, 'residential', RES_COHORTS),
-                   (com_inter, 'commercial',  COM_COHORTS)]
-    else:
-        raise ValueError(f'bad sector: {sector}')
 
-    total: pd.DataFrame | None = None
-    for paths, file_sector, cohorts in sources:
-        for cohort in cohorts:
+    def _sum_files(paths, file_sector, cohort_list) -> pd.DataFrame | None:
+        acc: pd.DataFrame | None = None
+        for cohort in cohort_list:
             key = (scenario, file_sector, cohort, 'total', year)
             p = paths.get(key)
             if p is None:
                 continue
             df = _read_with_index(p)
-            total = df if total is None else total.add(df, fill_value=0.0)
+            acc = df if acc is None else acc.add(df, fill_value=0.0)
+        return acc
+
+    # Build the hourly state-x-time matrix per *sub-sector* when the caller
+    # asked for 'total'; otherwise just produce the one matrix for the sector.
+    if sector == 'total':
+        res_df = _sum_files(res_inter, 'residential', RES_COHORTS)
+        com_df = _sum_files(com_inter, 'commercial', ['NC', 'SA', 'SNA'])
+        gap_df = _sum_files(com_inter, 'commercial', ['gap'])
+        parts: list[pd.DataFrame] = [d for d in (res_df, com_df, gap_df) if d is not None]
+        if not parts:
+            return scenario, year, sector, {}, {}, None
+        total = parts[0].copy()
+        for d in parts[1:]:
+            total = total.add(d, fill_value=0.0)
+    elif sector == 'residential':
+        total = _sum_files(res_inter, 'residential', RES_COHORTS)
+    elif sector == 'commercial':
+        total = _sum_files(com_inter, 'commercial', ['NC', 'SA', 'SNA'])
+    elif sector == 'gap':
+        total = _sum_files(com_inter, 'commercial', ['gap'])
+    else:
+        raise ValueError(f'bad sector: {sector}')
+
     if total is None:
-        return scenario, year, sector, {}, {}
+        return scenario, year, sector, {}, {}, None
 
     # Per-state per-wy: peak is intra-state coincident.
     ann = total.groupby(total.index.year).sum()
@@ -424,7 +444,38 @@ def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict]:
         ann_dict[wy_int]['CONUS'] = float(conus_ann.loc[wy])
         peak_dict[wy_int] = {st: float(v) for st, v in peak.loc[wy].items()}
         peak_dict[wy_int]['CONUS'] = float(conus_peak.loc[wy])
-    return scenario, year, sector, ann_dict, peak_dict
+
+    # Coincident decomposition: per (wy, state) → {res, com, gap} at the hour
+    # of that state's total peak. CONUS uses the hour of CONUS total peak.
+    # Summing the three sub-sectors at the chosen hour yields the total peak.
+    coincident: dict | None = None
+    if sector == 'total':
+        coincident = {}
+        for wy in ann.index:
+            wy_int = int(wy)
+            wy_mask = total.index.year == wy
+            wy_total = total[wy_mask]
+            wy_res = res_df[wy_mask] if res_df is not None else None
+            wy_com = com_df[wy_mask] if com_df is not None else None
+            wy_gap = gap_df[wy_mask] if gap_df is not None else None
+            coincident[wy_int] = {}
+            for st in wy_total.columns:
+                t = wy_total[st].idxmax()
+                coincident[wy_int][st] = {
+                    'residential': float(wy_res.loc[t, st]) if wy_res is not None else 0.0,
+                    'commercial':  float(wy_com.loc[t, st]) if wy_com is not None else 0.0,
+                    'gap':         float(wy_gap.loc[t, st]) if wy_gap is not None else 0.0,
+                }
+            # CONUS: at the hour of CONUS-summed total peak, sum each sub-sector
+            # across states.
+            t = wy_total.sum(axis=1).idxmax()
+            coincident[wy_int]['CONUS'] = {
+                'residential': float(wy_res.loc[t].sum()) if wy_res is not None else 0.0,
+                'commercial':  float(wy_com.loc[t].sum()) if wy_com is not None else 0.0,
+                'gap':         float(wy_gap.loc[t].sum()) if wy_gap is not None else 0.0,
+            }
+
+    return scenario, year, sector, ann_dict, peak_dict, coincident
 
 
 def _cohort_daily_allwys_task(args: tuple) -> tuple[str, int, str, str, dict[int, list[float]], dict[int, list[str]]]:
@@ -532,21 +583,29 @@ def panel_state_by_sector(
 
     annual: dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
     peak:   dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
+    coincident_decomp: dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
 
     _log(f'  state-by-sector — {len(tasks)} (scenario, year, sector) tasks across {WORKERS} processes')
     done = 0
     with ProcessPoolExecutor(max_workers=WORKERS) as pool:
-        for scenario, year, sector, ann_d, peak_d in pool.map(_state_sector_task, tasks):
+        for scenario, year, sector, ann_d, peak_d, coinc in pool.map(_state_sector_task, tasks):
             done += 1
             for wy, by_state in ann_d.items():
                 annual[scenario][year].setdefault(wy, {})[sector] = by_state
             for wy, by_state in peak_d.items():
                 peak[scenario][year].setdefault(wy, {})[sector] = by_state
+            if coinc is not None:
+                for wy, by_state in coinc.items():
+                    coincident_decomp[scenario][year][wy] = by_state
             if done == 1 or done == len(tasks) or done % 16 == 0:
                 _log(f'    ({done:>2}/{len(tasks)}) {scenario}/{year}/{sector}  '
                      f'states={len(next(iter(ann_d.values()), {}))}')
 
-    return {'annual_gwh': annual, 'peak_gw': peak}
+    return {
+        'annual_gwh': annual,
+        'peak_gw': peak,
+        'peak_contributions': coincident_decomp,   # {scen}{year}{wy}{state} = {res, com, gap}
+    }
 
 
 def panel_cohort_daily_all_wys(

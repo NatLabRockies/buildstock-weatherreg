@@ -474,7 +474,21 @@ function renderTrajectoryBreakdown() {
   const stSel = state.trajState;
   const scenario = state.scenario;
 
-  // Stacked area Res / Com / Gap across stock_years.
+  // For Annual: stack the three sector annual values (sums commute).
+  // For Peak: use coincident decomposition — each sector's value AT the
+  // total-peak hour. Summing res+com+gap at that hour equals the total
+  // peak, so the stack adds up correctly. Without this, the stack would
+  // overshoot the total peak (sum of per-sector peaks > peak of sum).
+  let dataLookup;
+  if (metric === 'annual_gwh') {
+    dataLookup = (sec, y) => stateMetricLookup('annual_gwh', scenario, y, wySel, sec, stSel) || 0;
+  } else {
+    dataLookup = (sec, y) => {
+      const decomp = (((PAYLOAD.state_by_sector.peak_contributions[scenario] || {})[y] || {})[wySel] || {})[stSel] || {};
+      return decomp[sec] || 0;
+    };
+  }
+
   const SECTOR_DEF = [
     {key: 'residential', label: 'Residential', color: '#1f4e79'},
     {key: 'commercial',  label: 'Commercial',  color: '#f6b26b'},
@@ -482,12 +496,11 @@ function renderTrajectoryBreakdown() {
   ];
   const traces = SECTOR_DEF.map(sec => ({
     x: PAYLOAD.stock_years,
-    y: PAYLOAD.stock_years.map(y =>
-        stateMetricLookup(metric, scenario, y, wySel, sec.key, stSel) || 0),
+    y: PAYLOAD.stock_years.map(y => dataLookup(sec.key, y)),
     type: 'scatter', mode: 'none', name: sec.label,
     stackgroup: 'one', fillcolor: sec.color, line: {width: 0},
   }));
-  const yLabel = metric === 'annual_gwh' ? 'Annual energy (GWh / yr)' : 'Annual peak power (GW)';
+  const yLabel = metric === 'annual_gwh' ? 'Annual energy (GWh / yr)' : 'Annual peak power — coincident decomposition (GW)';
   const yMax = (PAYLOAD.axis.trajectory_max[stSel] || {})['total']?.[metric] || 1;
   const layout = {
     margin: {t: 24, r: 8, b: 36, l: 70},
@@ -495,7 +508,8 @@ function renderTrajectoryBreakdown() {
     yaxis: {title: yLabel, gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05]},
     legend: {orientation: 'h', y: -0.18, font: {size: 11}},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    title: {text: `${scenario} · ${stSel} · amy${wySel}`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+    title: {text: `${scenario} · ${stSel} · amy${wySel}` + (metric === 'peak_gw' ? '  (Σ at peak hour)' : ''),
+            x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
   };
   Plotly.react('plot-trajectory', traces, layout, {displayModeBar: false, responsive: true});
 }
@@ -546,6 +560,8 @@ function renderCohort() {
     }));
 
   // Pick the larger of winter/summer peak from panel3 for the annotation.
+  // Anchor at top of plot (y=1, yref=paper) with arrow pointing down to the
+  // peak day on the x-axis. Avoids the off-chart positioning bug from yshift.
   const wkAll = ((PAYLOAD.panel3[state.scenario] || {})[stockYear()] || {})[wy];
   let peakAnn = null;
   if (wkAll) {
@@ -553,11 +569,12 @@ function renderCohort() {
     const winner = (s && (!w || s.peak_gw >= w.peak_gw)) ? s : w;
     if (winner) {
       peakAnn = {
-        x: winner.peak_iso.slice(0, 10), y: 0,
-        text: `peak ${winner.peak_gw.toFixed(1)} GW @ ${winner.peak_iso.slice(0, 13)}`,
-        xref: 'x', yref: 'paper', yshift: 360, showarrow: true,
-        arrowhead: 0, ax: 0, ay: 20,
+        x: winner.peak_iso.slice(0, 10), y: 1.0,
+        text: `peak ${winner.peak_gw.toFixed(1)} GW @ ${winner.peak_iso.slice(5, 13)}h`,
+        xref: 'x', yref: 'paper', showarrow: true,
+        arrowhead: 2, ay: -28, ax: 0,
         font: {size: 11, color: '#1c4f93'}, bgcolor: 'rgba(255,255,255,0.85)',
+        bordercolor: '#1c4f93', borderwidth: 1, borderpad: 3,
       };
     }
   }
