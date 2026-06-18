@@ -117,12 +117,25 @@
   }
   .pill.active .chip-dot { box-shadow: 0 0 0 1.5px #fff; }
 
-  /* Stock-year tick labels under the slider, aligned to the track */
+  /* Stock-year tick labels under the slider, aligned to the track.
+     Flex space-between works because the 6 values are evenly spaced. */
   .tick-labels {
     display: flex; justify-content: space-between;
     font-size: 9px; color: var(--muted);
     margin: 1px 42px 0 88px;
   }
+  /* Weather-year ticks: 7 anchors at non-uniform positions on an 18-value
+     slider. Absolute positioning by percent matches thumb positions exactly. */
+  .tick-labels-positioned {
+    position: relative; display: block; height: 12px;
+    margin: 1px 42px 0 88px;
+  }
+  .tick-labels-positioned span {
+    position: absolute; font-size: 9px; color: var(--muted);
+    white-space: nowrap; transform: translateX(-50%);
+  }
+  .tick-labels-positioned span:first-child { transform: translateX(0); }
+  .tick-labels-positioned span:last-child  { transform: translateX(-100%); }
 
   /* First-paint splash. Hidden by JS after initial render. */
   #loading-splash {
@@ -388,13 +401,24 @@ function buildControls() {
   syTicks.classList.remove('endpts');
   syTicks.innerHTML = PAYLOAD.stock_years.map(y => `<span>${y}</span>`).join('');
 
-  // Weather year slider
+  // Weather year slider — 18 values; show 7 anchor years as ticks
   const wyEl = document.getElementById('ctl-weatheryear');
   wyEl.min = 0; wyEl.max = PAYLOAD.panel1.weather_years.length - 1; wyEl.value = state.weatherYearIdx;
   wyEl.oninput = () => { state.weatherYearIdx = +wyEl.value; refresh(); };
   document.getElementById('ctl-weatheryear-val').textContent = weatherYear();
-  document.getElementById('ctl-weatheryear-ends').innerHTML =
-      `<span style="margin-left:96px;">${PAYLOAD.panel1.weather_years[0]}</span><span>${PAYLOAD.panel1.weather_years[PAYLOAD.panel1.weather_years.length-1]}</span>`;
+  const wyTicks = document.getElementById('ctl-weatheryear-ends');
+  wyTicks.classList.remove('endpts');
+  wyTicks.classList.add('tick-labels-positioned');
+  const wys = PAYLOAD.panel1.weather_years;
+  const lastIdx = wys.length - 1;
+  // Anchor indices: first, every 3 years, then last (deduped).
+  const anchors = [...new Set([0, 3, 6, 9, 12, 15, lastIdx])]
+      .filter(i => i >= 0 && i <= lastIdx)
+      .sort((a, b) => a - b);
+  wyTicks.innerHTML = anchors.map(i => {
+    const pct = (i / lastIdx) * 100;
+    return `<span style="left:${pct}%;">${wys[i]}</span>`;
+  }).join('');
 
   // Tabs
   const tabsEl = document.getElementById('tabs');
@@ -535,7 +559,6 @@ function renderTrajectoryTotal() {
             tickformat: metric === 'annual_gwh' ? '.2s' : undefined},
     legend: {orientation: 'h', y: -0.18, font: {size: 11}, groupclick: 'togglegroup'},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    hovermode: 'x unified',           // all visible scenario lines at hovered year
     title: {text: `${stSel} · amy${wySel} highlighted`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
   };
   Plotly.react('plot-trajectory', traces, layout, {displayModeBar: false, responsive: true});
@@ -582,7 +605,6 @@ function renderTrajectoryBreakdown() {
             tickformat: metric === 'annual_gwh' ? '.2s' : undefined},
     legend: {orientation: 'h', y: -0.18, font: {size: 11}},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    hovermode: 'x unified',
     title: {text: `${scenario} · ${stSel} · amy${wySel}` + (metric === 'peak_gw' ? '  (Σ at peak hour)' : ''),
             x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
   };
