@@ -198,8 +198,14 @@ def _sum_intermediate_to_conus(
 
 
 def _extract_window(res_wy: pd.Series, com_wy: pd.Series, total_wy: pd.Series,
-                    center_ts: pd.Timestamp) -> dict | None:
-    """Build a payload dict for a 7-day window centered on center_ts."""
+                    center_ts: pd.Timestamp,
+                    cohort_series_wy: dict[str, pd.Series] | None = None) -> dict | None:
+    """Build a payload dict for a 7-day window centered on center_ts.
+
+    Always includes timestamps + residential + commercial + peak metadata.
+    If cohort_series_wy is provided, also includes per-cohort hourly windows
+    for the hourly peak-week cohort decomposition panel.
+    """
     win_start = center_ts - pd.Timedelta(days=3)
     win_end   = center_ts + pd.Timedelta(days=4) - pd.Timedelta(hours=1)
     res_win = res_wy.loc[win_start:win_end]
@@ -207,13 +213,19 @@ def _extract_window(res_wy: pd.Series, com_wy: pd.Series, total_wy: pd.Series,
     tot_win = total_wy.loc[win_start:win_end]
     if len(res_win) < 24:
         return None
-    return {
+    out: dict = {
         'timestamps':  [t.isoformat() for t in res_win.index],
         'residential': [float(v) for v in res_win.values],
         'commercial':  [float(v) for v in com_win.values],
         'peak_iso':    center_ts.isoformat(),
         'peak_gw':     float(tot_win.max()),
     }
+    if cohort_series_wy:
+        out['cohorts'] = {
+            k: [float(v) for v in s.loc[win_start:win_end].values]
+            for k, s in cohort_series_wy.items()
+        }
+    return out
 
 
 def _representative_weather_year_table(panel1: dict) -> dict[tuple[str, int], int]:
@@ -239,10 +251,43 @@ def _scenario_color() -> dict[str, str]:
 
 # === Top-level worker functions (must be module-level for ProcessPool) =====
 def _peak_week_task(args: tuple) -> tuple[str, int, dict]:
-    """One (scenario, year) → seasonal peak windows per weather year."""
+    """One (scenario, year) → seasonal peak windows per weather year, with
+    per-cohort hourly slices for the cohort decomposition panel.
+
+    Loads each of the 7 cohort 'total' intermediate files individually (so
+    per-cohort series are retained), sums them to res / com / total CONUS,
+    finds summer + winter peak hours per weather year, and extracts the
+    ±3-day window for both res+com (back-compat) and per-cohort traces.
+    """
     res_inter, com_inter, scenario, year = args
-    res_gw = _sum_intermediate_to_conus(res_inter, scenario, 'residential', year, 'total')
-    com_gw = _sum_intermediate_to_conus(com_inter, scenario, 'commercial', year, 'total')
+    cohort_series_gw: dict[str, pd.Series] = {}
+
+    for paths, file_sector, cohorts in [
+        (res_inter, 'residential', RES_COHORTS),
+        (com_inter, 'commercial',  COM_COHORTS),
+    ]:
+        prefix = 'res_' if file_sector == 'residential' else 'com_'
+        for cohort in cohorts:
+            key = (scenario, file_sector, cohort, 'total', year)
+            p = paths.get(key)
+            if p is None:
+                continue
+            df = _read_with_index(p)
+            cohort_series_gw[prefix + cohort] = df.sum(axis=1)  # CONUS hourly GWh
+
+    if not cohort_series_gw:
+        return scenario, year, {}
+
+    # Sector totals from the cohort series we have in memory. Use the
+    # accumulator-pattern (`None → first, then .add`) — `sum(... , start=empty)`
+    # gives NaN because pandas aligns indexes against the empty Series.
+    res_gw: pd.Series | None = None
+    com_gw: pd.Series | None = None
+    for k, s in cohort_series_gw.items():
+        if k.startswith('res_'):
+            res_gw = s if res_gw is None else res_gw.add(s, fill_value=0.0)
+        else:
+            com_gw = s if com_gw is None else com_gw.add(s, fill_value=0.0)
     if res_gw is None or com_gw is None:
         return scenario, year, {}
     total_gw = res_gw.add(com_gw, fill_value=0.0)
@@ -252,20 +297,20 @@ def _peak_week_task(args: tuple) -> tuple[str, int, dict]:
         res_wy = res_gw.loc[group_idx]
         com_wy = com_gw.loc[group_idx]
         total_wy = total_gw.loc[group_idx]
+        cohorts_wy = {k: s.loc[group_idx] for k, s in cohort_series_gw.items()}
 
         summer_mask = total_wy.index.month.isin([6, 7, 8, 9])
         winter_mask = total_wy.index.month.isin([12, 1, 2])
-
         summer_peak = total_wy[summer_mask].idxmax() if summer_mask.any() else None
         winter_peak = total_wy[winter_mask].idxmax() if winter_mask.any() else None
 
         seasons: dict[str, dict] = {}
         if summer_peak is not None:
-            w = _extract_window(res_wy, com_wy, total_wy, summer_peak)
+            w = _extract_window(res_wy, com_wy, total_wy, summer_peak, cohorts_wy)
             if w is not None:
                 seasons['summer'] = w
         if winter_peak is not None:
-            w = _extract_window(res_wy, com_wy, total_wy, winter_peak)
+            w = _extract_window(res_wy, com_wy, total_wy, winter_peak, cohorts_wy)
             if w is not None:
                 seasons['winter'] = w
         if seasons:

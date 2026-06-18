@@ -178,12 +178,24 @@
       <div id="plot-map" class="plot"></div>
     </div>
 
-    <div class="panel wide">
+    <div class="panel">
       <h2>Cohort decomposition — daily, year-long</h2>
       <div class="panel-sub">
-        Daily-aggregated stacked area by cohort (res NC/SA/SNA + com NC/SA/SNA + com gap) for the current (scenario, stock year, weather year). Annotated peak comes from the precomputed hourly peak (winter or summer, whichever is larger). Daily resolution avoids ~26 M floats in payload; the visual is indistinguishable from hourly at year-long zoom.
+        Daily-aggregated stacked area by cohort (res NC/SA/SNA + com NC/SA/SNA + com gap) for the current (scenario, stock year, weather year). Peak annotation comes from the precomputed hourly peak (the larger of winter/summer).
       </div>
-      <div id="plot-cohort" class="plot" style="height: 380px;"></div>
+      <div id="plot-cohort" class="plot" style="height: 360px;"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Cohort decomposition — hourly, peak week</h2>
+      <div class="panel-sub">
+        Hourly stacked area by cohort over the ±3-day window centered on the seasonal CONUS peak. Same cohort palette as the year-long panel.
+      </div>
+      <div class="local-controls">
+        <button class="pill active" data-cohort-season="winter">Winter peak</button>
+        <button class="pill"        data-cohort-season="summer">Summer peak</button>
+      </div>
+      <div id="plot-cohort-pk" class="plot" style="height: 320px;"></div>
     </div>
   </div>
 
@@ -236,6 +248,7 @@ const state = {
   trajState:     'CONUS',
   mapMetric:     'annual_gwh',
   mapSector:     'total',
+  cohortSeason:  'winter',
 };
 
 // === Selectors derived from state ========================================
@@ -345,6 +358,14 @@ function buildControls() {
       btn.classList.add('active');
       state.mapSector = btn.dataset.mapSector;
       renderMap();
+    };
+  });
+  document.querySelectorAll('[data-cohort-season]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-cohort-season]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.cohortSeason = btn.dataset.cohortSeason;
+      renderCohortPeakWeek();
     };
   });
 
@@ -553,6 +574,46 @@ function renderCohort() {
   Plotly.react('plot-cohort', traces, layout, {displayModeBar: false, responsive: true});
 }
 
+function renderCohortPeakWeek() {
+  const wy = weatherYear();
+  const wkAll = ((PAYLOAD.panel3[state.scenario] || {})[stockYear()] || {})[wy];
+  const wk = wkAll ? wkAll[state.cohortSeason] : null;
+  if (!wk || !wk.cohorts) {
+    Plotly.react('plot-cohort-pk', [], {
+      margin: {t: 24, r: 8, b: 36, l: 70},
+      yaxis: {title: 'GW'},
+      annotations: [{text: 'No ' + state.cohortSeason + ' peak data',
+                     xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
+                     showarrow: false, font: {color: '#999'}}],
+    }, {displayModeBar: false, responsive: true});
+    return;
+  }
+  const traces = COHORT_DEF
+    .filter(c => Array.isArray(wk.cohorts[c.key]))
+    .map(c => ({
+      x: wk.timestamps, y: wk.cohorts[c.key],
+      type: 'scatter', mode: 'none', name: c.label,
+      stackgroup: 'one', fillcolor: c.color, line: {width: 0},
+      hovertemplate: `<b>${c.label}</b><br>%{x|%a %b %d %H:%M}: %{y:,.1f} GW<extra></extra>`,
+    }));
+  const layout = {
+    margin: {t: 30, r: 8, b: 36, l: 70},
+    xaxis: {gridcolor: '#eee', tickformat: '%a %b %d'},
+    yaxis: {title: 'Power (GW)', gridcolor: '#eee', zeroline: false},
+    legend: {orientation: 'h', y: -0.18, font: {size: 10}, traceorder: 'normal'},
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    title: {text: `${state.scenario} · stock ${stockYear()} · amy${wy} · ${state.cohortSeason} peak`,
+            x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+    annotations: [{
+      x: wk.peak_iso, y: wk.peak_gw,
+      text: `peak ${wk.peak_gw.toFixed(1)} GW`,
+      xref: 'x', yref: 'y', showarrow: true, arrowhead: 0, ax: 0, ay: -22,
+      font: {size: 11, color: '#1c4f93'}, bgcolor: 'rgba(255,255,255,0.85)',
+    }],
+  };
+  Plotly.react('plot-cohort-pk', traces, layout, {displayModeBar: false, responsive: true});
+}
+
 // === Tabs + refresh ======================================================
 function showTab(id) {
   ['reeds', 'lbl', 'inter'].forEach(t =>
@@ -569,6 +630,7 @@ function refresh() {
     renderTrajectory();
     renderMap();
     renderCohort();
+    renderCohortPeakWeek();
   }
 }
 
