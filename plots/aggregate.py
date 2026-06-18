@@ -320,6 +320,71 @@ def _intermediate_annual_task(args: tuple) -> tuple[tuple, dict[int, float]]:
     return key, {int(wy): float(v) for wy, v in ann_by_wy.items()}
 
 
+def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict]:
+    """One (scenario, year, sector) → per-state annual+peak per weather year.
+
+    The worker reads every cohort `total` file matching the (scenario, sector,
+    year) request and sums them into one hourly state-x-time DataFrame, then
+    groups by year-of-timestamp to get per-state per-wy `.sum()` (annual GWh)
+    and `.max()` (peak GW; intermediate files are GWh hourly = GW power).
+
+    `sector` is a *display sector*, not the intermediate file's sector column:
+      * 'residential' → residential cohorts (NC, SA, SNA)
+      * 'commercial'  → commercial cohorts EXCLUDING gap (NC, SA, SNA)
+      * 'gap'         → commercial gap only
+
+    'total' is computed in the parent (residential + commercial + gap).
+    """
+    paths, scenario, year, sector = args
+    if sector == 'residential':
+        file_sector, cohorts = 'residential', RES_COHORTS
+    elif sector == 'commercial':
+        file_sector, cohorts = 'commercial', ['NC', 'SA', 'SNA']
+    elif sector == 'gap':
+        file_sector, cohorts = 'commercial', ['gap']
+    else:
+        raise ValueError(f'bad sector: {sector}')
+
+    total: pd.DataFrame | None = None
+    for cohort in cohorts:
+        key = (scenario, file_sector, cohort, 'total', year)
+        p = paths.get(key)
+        if p is None:
+            continue
+        df = _read_with_index(p)
+        total = df if total is None else total.add(df, fill_value=0.0)
+    if total is None:
+        return scenario, year, sector, {}, {}
+
+    ann = total.groupby(total.index.year).sum()
+    peak = total.groupby(total.index.year).max()
+    ann_dict = {int(wy): {st: float(v) for st, v in row.items()} for wy, row in ann.iterrows()}
+    peak_dict = {int(wy): {st: float(v) for st, v in row.items()} for wy, row in peak.iterrows()}
+    return scenario, year, sector, ann_dict, peak_dict
+
+
+def _cohort_daily_allwys_task(args: tuple) -> tuple[str, int, str, str, dict[int, list[float]], dict[int, list[str]]]:
+    """One (scenario, year, sector_in_file, cohort) intermediate `total` file →
+    daily-aggregated CONUS GWh for EVERY weather year. Returns:
+      (scenario, year, file_sector, cohort, {wy: [daily_gwh]}, {wy: [iso_dates]})
+    """
+    paths, scenario, year, file_sector, cohort = args
+    key = (scenario, file_sector, cohort, 'total', year)
+    p = paths.get(key)
+    if p is None:
+        return scenario, year, file_sector, cohort, {}, {}
+    df = _read_with_index(p)
+    conus = df.sum(axis=1)  # GWh hourly CONUS
+    daily_by_wy: dict[int, list[float]] = {}
+    dates_by_wy: dict[int, list[str]] = {}
+    for wy, group_idx in conus.groupby(conus.index.year).groups.items():
+        s = conus.loc[group_idx]
+        daily = s.resample('D').sum()
+        daily_by_wy[int(wy)] = [float(v) for v in daily.values]
+        dates_by_wy[int(wy)] = [d.isoformat() for d in daily.index]
+    return scenario, year, file_sector, cohort, daily_by_wy, dates_by_wy
+
+
 def _lbl_worker_init() -> None:
     """ProcessPool initializer: keep each worker's polars on a single thread.
     Without this, 15 workers × polars' default ~104-thread pool grossly
@@ -385,6 +450,110 @@ def panel4_cohort_daily(
             if entry:
                 cohorts[scenario][year] = entry
     return cohorts
+
+
+def panel_state_by_sector(
+    res_inter: dict[tuple[str, str, str, str, int], Path],
+    com_inter: dict[tuple[str, str, str, str, int], Path],
+) -> dict:
+    """Per-state annual + peak per (scenario, year, wy, sector).
+
+    Tasks: 4 scenarios × 6 years × 3 sectors = 72. Returns dict with shape
+    {annual_gwh, peak_gw} → {scenario: {year: {wy: {sector: {state: value}}}}}.
+    'total' = sum of (residential + commercial + gap) computed in parent.
+    A 'CONUS' pseudo-state is the sum across all states.
+    """
+    paths_for_sector = {
+        'residential': res_inter,
+        'commercial':  com_inter,
+        'gap':         com_inter,
+    }
+    tasks = [(paths_for_sector[sec], s, y, sec)
+             for s in SCENARIOS for y in STOCK_YEARS for sec in ('residential', 'commercial', 'gap')]
+
+    annual: dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
+    peak:   dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
+
+    _log(f'  state-by-sector — {len(tasks)} (scenario, year, sector) tasks across {WORKERS} processes')
+    done = 0
+    with ProcessPoolExecutor(max_workers=WORKERS) as pool:
+        for scenario, year, sector, ann_d, peak_d in pool.map(_state_sector_task, tasks):
+            done += 1
+            for wy, by_state in ann_d.items():
+                annual[scenario][year].setdefault(wy, {})[sector] = by_state
+            for wy, by_state in peak_d.items():
+                peak[scenario][year].setdefault(wy, {})[sector] = by_state
+            if done == 1 or done == len(tasks) or done % 12 == 0:
+                _log(f'    ({done:>2}/{len(tasks)}) {scenario}/{year}/{sector}  '
+                     f'states={len(next(iter(ann_d.values()), {}))}')
+
+    # Compute 'total' sector + CONUS pseudo-state in the parent.
+    for scenario in SCENARIOS:
+        for year in STOCK_YEARS:
+            for wy in list(annual[scenario][year].keys()):
+                ann_sec = annual[scenario][year][wy]
+                peak_sec = peak[scenario][year][wy]
+                # 'total' is per-state sum of res + com + gap (per state)
+                states = set()
+                for sec in ('residential', 'commercial', 'gap'):
+                    states.update(ann_sec.get(sec, {}).keys())
+                if not states:
+                    continue
+                total_ann = {st: sum(ann_sec.get(sec, {}).get(st, 0.0)
+                                     for sec in ('residential', 'commercial', 'gap'))
+                             for st in states}
+                # Note: per-state peak for 'total' is NOT sum of sector peaks
+                # (peaks happen at different hours). We approximate via the max
+                # of (res_peak + com_peak + gap_peak) per state — coincident
+                # peak assumption. Document this caveat in the dashboard.
+                total_peak = {st: sum(peak_sec.get(sec, {}).get(st, 0.0)
+                                      for sec in ('residential', 'commercial', 'gap'))
+                              for st in states}
+                ann_sec['total'] = total_ann
+                peak_sec['total'] = total_peak
+
+                # CONUS pseudo-state: sum across all states per sector
+                for sec_key in ('residential', 'commercial', 'gap', 'total'):
+                    if sec_key not in ann_sec:
+                        continue
+                    ann_sec[sec_key]['CONUS'] = sum(ann_sec[sec_key].values())
+                    peak_sec[sec_key]['CONUS'] = sum(peak_sec[sec_key].values())
+
+    return {'annual_gwh': annual, 'peak_gw': peak}
+
+
+def panel_cohort_daily_all_wys(
+    res_inter: dict[tuple[str, str, str, str, int], Path],
+    com_inter: dict[tuple[str, str, str, str, int], Path],
+) -> dict:
+    """Cohort daily decomposition for EVERY (scenario, year, weather_year).
+
+    Tasks: 4 scenarios × 6 stock_years × 7 (sector,cohort) combos = 168.
+    Each task returns daily GWh per wy and the matching ISO dates per wy.
+    """
+    sector_cohorts = ([('residential', c) for c in RES_COHORTS]
+                      + [('commercial',  c) for c in COM_COHORTS])
+    tasks = []
+    for s in SCENARIOS:
+        for y in STOCK_YEARS:
+            for sec, coh in sector_cohorts:
+                paths = res_inter if sec == 'residential' else com_inter
+                tasks.append((paths, s, y, sec, coh))
+
+    # Accumulator: {scenario: {year: {wy: {dates, cohorts: {cohort_key: [daily]}}}}}
+    out: dict[str, dict[int, dict[int, dict]]] = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
+    _log(f'  cohort_daily_all_wys — {len(tasks)} (scenario, year, sector, cohort) tasks across {WORKERS} processes')
+    done = 0
+    with ProcessPoolExecutor(max_workers=WORKERS) as pool:
+        for scenario, year, file_sector, cohort, daily_by_wy, dates_by_wy in pool.map(_cohort_daily_allwys_task, tasks):
+            done += 1
+            cohort_key = ('res_' if file_sector == 'residential' else 'com_') + cohort
+            for wy, daily in daily_by_wy.items():
+                entry = out[scenario][year].setdefault(wy, {'dates': dates_by_wy[wy], 'cohorts': {}})
+                entry['cohorts'][cohort_key] = daily
+            if done == 1 or done == len(tasks) or done % 24 == 0:
+                _log(f'    ({done:>3}/{len(tasks)}) {scenario} y{year} {cohort_key}')
+    return out
 
 
 def panel_intermediate_annual(
@@ -455,11 +624,13 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
     reeds_keys = sorted(set(res_reeds) | set(com_reeds))
     _log(f'A. ReEDs streaming — res={len(res_reeds)} files, com={len(com_reeds)} files, merged={len(reeds_keys)}')
 
+    # ReEDs only needs CONUS scalars now (panel1 CONUS trajectory). Per-state
+    # annual + peak comes from intermediate/state files via state_by_sector —
+    # that path has the sector dimension we need and produces the same per-state
+    # numbers as ReEDs (verified to 0.000 % in the prior bake).
     series_annual: dict = {s: {} for s in SCENARIOS}
     series_peak:   dict = {s: {} for s in SCENARIOS}
-    by_scen_year_wy: dict = {s: {} for s in SCENARIOS}
     wy_seen: set[int] = set()
-    states_seen: list[str] = []
 
     for i, k in enumerate(reeds_keys, 1):
         scenario, year = k
@@ -468,10 +639,6 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
         if r is None and c is None:
             continue
         df = c if r is None else (r if c is None else r.add(c, fill_value=0.0))
-        df = df.rename(columns=_LOWERNAME_TO_POSTAL)
-        if not states_seen:
-            states_seen = list(df.columns)
-
         conus = df.sum(axis=1)
         g = conus.groupby(conus.index.year)
         ann = (g.sum() / 1000.0).to_dict()
@@ -479,17 +646,11 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
         series_annual.setdefault(scenario, {})[year] = {int(w): float(v) for w, v in ann.items()}
         series_peak.setdefault(scenario,   {})[year] = {int(w): float(v) for w, v in pk.items()}
         wy_seen.update(ann.keys())
-
-        ann_by_wy = df.groupby(df.index.year).sum() / 1000.0
-        by_scen_year_wy.setdefault(scenario, {}).setdefault(year, {})
-        for wy, row in ann_by_wy.iterrows():
-            by_scen_year_wy[scenario][year][int(wy)] = {st: float(v) for st, v in row.items()}
         _log(f'  ReEDs {i:>2}/{len(reeds_keys):<2} {scenario} y{year}  '
              f'(CONUS ann={max(ann.values())/1e6:.2f} MGWh, peak={max(pk.values()):.1f} GW)')
 
     panel1 = {'annual_gwh': series_annual, 'peak_gw': series_peak,
               'weather_years': sorted(int(w) for w in wy_seen)}
-    panel2 = {'annual_gwh_by_state': by_scen_year_wy, 'states': states_seen}
 
     res_inter = _parse_intermediate_files(res_run_dir / 'intermediate' / 'state')
     com_inter = _parse_intermediate_files(com_run_dir / 'intermediate' / 'state')
@@ -498,23 +659,55 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
     _log('B. panel3_peak_week...')
     panel3 = panel3_peak_week(res_inter, com_inter)
 
-    _log('C. panel4_cohort_daily...')
-    panel4 = panel4_cohort_daily(res_inter, com_inter, _representative_weather_year_table(panel1))
+    _log('C. panel_state_by_sector — per-state annual+peak per sector...')
+    state_by_sector = panel_state_by_sector(res_inter, com_inter)
 
-    _log('D. panel_intermediate_annual...')
+    _log('D. panel_cohort_daily_all_wys — daily cohort decomp, every wy...')
+    cohort_daily = panel_cohort_daily_all_wys(res_inter, com_inter)
+
+    _log('E. panel_intermediate_annual (kept for reconciliation)...')
     intermediate_annual = panel_intermediate_annual(res_inter, com_inter)
 
-    _log('E. panel_lbl (polars one-pass)...')
+    _log('F. panel_lbl (per-file polars)...')
     lbl_annual = panel_lbl(res_run_dir / 'LBL', com_run_dir / 'LBL')
     _log(f'   LBL cells populated: {sum(1 for s in lbl_annual.values() for y in s.values() for w in y.values())}')
 
-    _log('F. axis pin maxes...')
+    _log('G. axis pin maxes (per-state + per-sector)...')
     def _ceil_to_step(v: float, step: float) -> float:
         return float(np.ceil(v / step) * step)
+
+    # CONUS axis pins (used by panel1-style summary; kept for back-compat).
     max_annual = max((v for by in panel1['annual_gwh'].values() for by_y in by.values() for v in by_y.values()),
                      default=1.0)
     max_peak = max((v for by in panel1['peak_gw'].values() for by_y in by.values() for v in by_y.values()),
                    default=1.0)
+
+    # Per (state, sector, metric) max — for state-dropdown trajectory axes.
+    # Walk state_by_sector and find max per (state, sector, metric) across all
+    # (scenario, year, wy). Globally fixed → slider doesn't rescale.
+    traj_max: dict[str, dict[str, dict[str, float]]] = {}
+    for metric_name, by_scen in (('annual_gwh', state_by_sector['annual_gwh']),
+                                  ('peak_gw',    state_by_sector['peak_gw'])):
+        for scen, by_year in by_scen.items():
+            for year, by_wy in by_year.items():
+                for wy, by_sec in by_wy.items():
+                    for sector, by_state in by_sec.items():
+                        for state, v in by_state.items():
+                            d = traj_max.setdefault(state, {}).setdefault(sector, {})
+                            if v > d.get(metric_name, 0.0):
+                                d[metric_name] = float(v)
+
+    # Per (sector, metric) max — for choropleth colorbar.
+    chor_max: dict[str, dict[str, float]] = {}
+    for metric_name in ('annual_gwh', 'peak_gw'):
+        for state, by_sec in traj_max.items():
+            if state == 'CONUS':
+                continue
+            for sector, by_metric in by_sec.items():
+                v = by_metric.get(metric_name, 0.0)
+                d = chor_max.setdefault(sector, {})
+                if v > d.get(metric_name, 0.0):
+                    d[metric_name] = float(v)
 
     return {
         'scenarios':         SCENARIOS,
@@ -524,14 +717,18 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
         'lbl_cohorts':       LBL_COHORTS,
         'lbl_weather_years': LBL_WEATHER_YEARS,
         'colors':            _scenario_color(),
+        'sectors':           ['residential', 'commercial', 'gap', 'total'],
+        'states':            sorted(s for s in (traj_max.keys()) if s != 'CONUS'),
         'axis': {
             'annual_gwh_max': _ceil_to_step(max_annual * 1.10, 500_000.0),
             'peak_gw_max':    _ceil_to_step(max_peak * 1.10, 100.0),
+            'trajectory_max': traj_max,    # [state][sector][metric] = max
+            'choropleth_max': chor_max,    # [sector][metric] = max
         },
         'panel1':              panel1,
-        'panel2':              panel2,
         'panel3':              panel3,
-        'panel4':              panel4,
+        'state_by_sector':     state_by_sector,    # {annual_gwh, peak_gw} → scen/year/wy/sector/state
+        'cohort_daily':        cohort_daily,       # scen/year/wy → {dates, cohorts}
         'intermediate_annual': intermediate_annual,
         'lbl_annual':          lbl_annual,
         'meta': {

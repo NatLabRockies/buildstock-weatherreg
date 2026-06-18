@@ -6,194 +6,104 @@
 <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
 <style>
   :root {
-    --bg: #fafafa;
-    --panel: #ffffff;
-    --ink: #1c1c1e;
-    --muted: #6b6b6f;
-    --border: #e5e5ea;
-    --accent: #1c4f93;
-    --pill-bg: #f1f1f3;
-    --pill-bg-active: #1c4f93;
-    --pill-ink-active: #ffffff;
-    --tab-active: #1c4f93;
-    --good: #2c7a3d;
-    --warn: #b25a1a;
-    --bad:  #b03434;
+    --bg: #fafafa; --panel: #ffffff; --ink: #1c1c1e; --muted: #6b6b6f;
+    --border: #e5e5ea; --accent: #1c4f93; --pill-bg: #f1f1f3;
+    --pill-bg-active: #1c4f93; --pill-ink-active: #ffffff; --tab-active: #1c4f93;
+    --good: #2c7a3d; --warn: #b25a1a; --bad: #b03434;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    color: var(--ink);
-    background: var(--bg);
-    line-height: 1.4;
+    color: var(--ink); background: var(--bg); line-height: 1.4;
   }
 
-  /* === Top: title + global controls === */
-  header.title {
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
-    padding: 14px 32px 6px;
-  }
-  header.title h1 {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-  }
-  header.title .sub {
-    color: var(--muted);
-    font-size: 11px;
-    margin-top: 2px;
-  }
+  header.title { background: var(--panel); border-bottom: 1px solid var(--border);
+                 padding: 12px 32px 6px; }
+  header.title h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  header.title .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
 
   .controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 22px;
-    padding: 12px 32px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
-    align-items: center;
+    display: grid; grid-template-columns: auto 1fr 1fr; gap: 22px;
+    padding: 12px 32px; background: var(--panel);
+    border-bottom: 1px solid var(--border); align-items: center;
   }
   .control-group { display: flex; gap: 8px; align-items: center; }
   .control-group .label {
-    font-size: 11px;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    margin-right: 4px;
+    font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.04em; margin-right: 4px;
   }
+  .slider-group { display: flex; flex-direction: column; gap: 2px; }
+  .slider-row { display: flex; align-items: center; gap: 12px; }
+  .slider-row input[type=range] {
+    flex: 1; accent-color: var(--accent); height: 4px; cursor: pointer;
+  }
+  .slider-row .value { font-weight: 600; font-size: 13px; min-width: 38px; text-align: right; color: var(--accent); }
+  .slider-row .label { font-size: 11px; color: var(--muted);
+                       text-transform: uppercase; letter-spacing: 0.04em;
+                       min-width: 92px; }
+  .slider-row .endpts { font-size: 10px; color: var(--muted); display: flex; justify-content: space-between; }
   .pill {
-    border: 1px solid var(--border);
-    background: var(--pill-bg);
-    color: var(--ink);
-    border-radius: 999px;
-    padding: 4px 11px;
-    font-size: 12px;
-    cursor: pointer;
-    user-select: none;
-    transition: all 0.12s ease;
+    border: 1px solid var(--border); background: var(--pill-bg); color: var(--ink);
+    border-radius: 999px; padding: 4px 11px; font-size: 12px;
+    cursor: pointer; user-select: none; transition: all 0.12s ease;
   }
   .pill:hover { border-color: var(--accent); }
-  .pill.active {
-    background: var(--pill-bg-active);
-    color: var(--pill-ink-active);
-    border-color: var(--pill-bg-active);
-  }
+  .pill.active { background: var(--pill-bg-active); color: var(--pill-ink-active); border-color: var(--pill-bg-active); }
   select.pill {
     appearance: none;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'><path d='M0 0 L4 6 L8 0 Z' fill='%231c1c1e'/></svg>");
-    background-repeat: no-repeat;
-    background-position: right 8px center;
-    background-size: 8px 6px;
-    padding-right: 22px;
+    background-repeat: no-repeat; background-position: right 8px center;
+    background-size: 8px 6px; padding-right: 22px;
   }
 
-  /* === Dynamic headline cards === */
-  .headline {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-    padding: 14px 32px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
-  }
-  .scen-card {
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px 14px;
-    background: var(--bg);
-    position: relative;
-    transition: all 0.12s ease;
-  }
-  .scen-card.active {
-    background: #fff;
-    box-shadow: 0 0 0 2px var(--accent) inset;
-  }
-  .scen-card .swatch {
-    width: 10px; height: 10px; border-radius: 50%; display: inline-block;
-    margin-right: 6px; vertical-align: middle;
-  }
-  .scen-card .scen-name {
-    font-weight: 600; font-size: 13px;
-  }
-  .scen-card .row {
-    display: flex; gap: 16px; margin-top: 8px;
-  }
-  .scen-card .metric {
-    flex: 1;
-  }
-  .scen-card .metric .lab { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .headline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+              padding: 12px 32px; background: var(--panel);
+              border-bottom: 1px solid var(--border); }
+  .scen-card { border: 1px solid var(--border); border-radius: 10px;
+               padding: 10px 14px; background: var(--bg);
+               position: relative; transition: all 0.12s ease; cursor: pointer; }
+  .scen-card.active { background: #fff; box-shadow: 0 0 0 2px var(--accent) inset; }
+  .scen-card .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+                       margin-right: 6px; vertical-align: middle; }
+  .scen-card .scen-name { font-weight: 600; font-size: 13px; }
+  .scen-card .row { display: flex; gap: 16px; margin-top: 6px; }
+  .scen-card .metric { flex: 1; }
+  .scen-card .metric .lab { font-size: 10px; color: var(--muted);
+                            text-transform: uppercase; letter-spacing: 0.04em; }
   .scen-card .metric .val { font-weight: 600; font-size: 16px; }
   .scen-card .metric .unit { font-size: 10px; color: var(--muted); margin-left: 2px; }
   .scen-card .delta { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .scen-card .delta.up   { color: var(--bad); }
   .scen-card .delta.down { color: var(--good); }
 
-  /* === Tabs === */
-  nav.tabs {
-    display: flex;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
-    padding: 0 32px;
-    gap: 0;
-  }
-  nav.tabs button {
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    padding: 12px 18px;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  nav.tabs button.active {
-    color: var(--tab-active);
-    border-bottom-color: var(--tab-active);
-  }
+  nav.tabs { display: flex; background: var(--panel);
+             border-bottom: 1px solid var(--border); padding: 0 32px; gap: 0; }
+  nav.tabs button { background: none; border: none; border-bottom: 2px solid transparent;
+                    padding: 11px 18px; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; }
+  nav.tabs button.active { color: var(--tab-active); border-bottom-color: var(--tab-active); }
   nav.tabs button:hover { color: var(--ink); }
 
-  /* === Tab body === */
-  main { padding: 18px 32px 40px; }
-  .grid-3 {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto;
-    gap: 16px;
-  }
+  main { padding: 16px 32px 32px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto; gap: 16px; }
   .grid-3 .panel.wide { grid-column: 1 / -1; }
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px 6px;
-    min-height: 360px;
-  }
-  .panel h2 {
-    margin: 0 0 2px;
-    font-size: 14px;
-    font-weight: 600;
-  }
-  .panel .panel-sub {
-    color: var(--muted);
-    font-size: 11px;
-    margin-bottom: 6px;
-  }
-  .panel .local-controls {
-    margin-bottom: 6px;
-    display: flex;
-    gap: 6px;
-  }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 10px; padding: 12px 16px 6px; min-height: 360px; }
+  .panel h2 { margin: 0 0 2px; font-size: 14px; font-weight: 600; }
+  .panel .panel-sub { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+  .panel .local-controls { margin-bottom: 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .panel .local-controls .label { font-size: 10px; color: var(--muted);
+                                  text-transform: uppercase; letter-spacing: 0.04em; }
+  .panel .subtabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .panel .subtabs button { background: none; border: none; border-bottom: 2px solid transparent;
+                           padding: 6px 10px; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .panel .subtabs button.active { color: var(--tab-active); border-bottom-color: var(--tab-active); }
   .plot { width: 100%; height: 360px; }
 
-  footer {
-    text-align: right;
-    color: var(--muted);
-    font-size: 11px;
-    padding: 8px 32px 24px;
-  }
+  .stub { padding: 32px; text-align: center; color: var(--muted); font-size: 13px;
+          background: var(--panel); border: 1px dashed var(--border); border-radius: 10px; }
+
+  footer { text-align: right; color: var(--muted); font-size: 11px; padding: 8px 32px 24px; }
 </style>
 </head>
 <body>
@@ -208,13 +118,21 @@
     <span class="label">Scenario</span>
     <span id="ctl-scenario"></span>
   </div>
-  <div class="control-group">
-    <span class="label">Stock year</span>
-    <span id="ctl-stockyear"></span>
+  <div class="slider-group">
+    <div class="slider-row">
+      <span class="label">Stock year</span>
+      <input type="range" id="ctl-stockyear" min="0" max="0" step="1">
+      <span class="value" id="ctl-stockyear-val">—</span>
+    </div>
+    <div class="slider-row endpts" id="ctl-stockyear-ends"></div>
   </div>
-  <div class="control-group">
-    <span class="label">Weather year</span>
-    <select class="pill" id="ctl-weatheryear"></select>
+  <div class="slider-group">
+    <div class="slider-row">
+      <span class="label">Weather year</span>
+      <input type="range" id="ctl-weatheryear" min="0" max="0" step="1">
+      <span class="value" id="ctl-weatheryear-val">—</span>
+    </div>
+    <div class="slider-row endpts" id="ctl-weatheryear-ends"></div>
   </div>
 </section>
 
@@ -226,89 +144,60 @@
   <!-- ReEDs tab -->
   <div class="grid-3" id="tab-reeds" style="display: none;">
     <div class="panel">
-      <h2>Trajectory — CONUS, all scenarios</h2>
+      <h2>Trajectory</h2>
       <div class="panel-sub">
-        Median (bold) plus individual weather years (faded) across all 18 AMY years. The toggle switches between annual energy (GWh / yr) and annual peak power (GW).
+        Buildings sector load vs stock year, all scenarios overlaid. Per-state scale is pinned globally so sliding doesn't rescale.
+      </div>
+      <div class="subtabs" id="traj-subtabs">
+        <button class="active" data-subtab="total">Total</button>
+        <button data-subtab="breakdown">Breakdown (Res / Com / Gap)</button>
       </div>
       <div class="local-controls">
-        <button class="pill active" data-metric="annual">Annual GWh</button>
-        <button class="pill"        data-metric="peak">Peak GW</button>
+        <button class="pill active" data-traj-metric="annual_gwh">Annual GWh</button>
+        <button class="pill"        data-traj-metric="peak_gw">Peak GW</button>
+        <span class="label" style="margin-left: 8px;">State</span>
+        <select class="pill" id="traj-state"></select>
       </div>
       <div id="plot-trajectory" class="plot"></div>
     </div>
 
     <div class="panel">
-      <h2>Annual energy by state</h2>
+      <h2>Map — annual or peak by state</h2>
       <div class="panel-sub">
-        Choropleth at the current scenario / stock year / weather year. DC merged into MD per the ReEDS handoff spec. Colorbar: GWh / yr, fixed range so values are visually comparable across selections.
+        Choropleth at the current (scenario, stock year, weather year). Sector picks res / com / gap / total. Color scale pinned globally per (sector, metric).
+      </div>
+      <div class="local-controls">
+        <button class="pill active" data-map-metric="annual_gwh">Annual GWh</button>
+        <button class="pill"        data-map-metric="peak_gw">Peak GW</button>
+        <span class="label" style="margin-left: 8px;">Sector</span>
+        <button class="pill active" data-map-sector="total">Total</button>
+        <button class="pill"        data-map-sector="residential">Res</button>
+        <button class="pill"        data-map-sector="commercial">Com</button>
+        <button class="pill"        data-map-sector="gap">Gap</button>
       </div>
       <div id="plot-map" class="plot"></div>
     </div>
 
     <div class="panel wide">
-      <h2>Scenario Δ vs Baseline — annual energy &amp; annual peak</h2>
+      <h2>Cohort decomposition — daily, year-long</h2>
       <div class="panel-sub">
-        Percent change in annual GWh and peak GW at the current stock year / weather year, relative to the Baseline scenario at the same year. Negative = scenario saves vs Baseline.
+        Daily-aggregated stacked area by cohort (res NC/SA/SNA + com NC/SA/SNA + com gap) for the current (scenario, stock year, weather year). Annotated peak comes from the precomputed hourly peak (winter or summer, whichever is larger). Daily resolution avoids ~26 M floats in payload; the visual is indistinguishable from hourly at year-long zoom.
       </div>
-      <div id="plot-delta" class="plot" style="height: 260px;"></div>
-    </div>
-  </div>
-
-  <!-- Intermediate tab -->
-  <div class="grid-3" id="tab-inter" style="display: none;">
-    <div class="panel">
-      <h2>Cohort decomposition (daily)</h2>
-      <div class="panel-sub">
-        Daily totals stacked by cohort (residential NC/SA/SNA + commercial NC/SA/SNA/gap) for the current scenario / stock year. Weather year fixed to the median across all 18 AMYs for stable visual comparison. Y-axis: GWh / day.
-      </div>
-      <div id="plot-cohort" class="plot"></div>
-    </div>
-
-    <div class="panel">
-      <h2>Peak week — residential + commercial</h2>
-      <div class="panel-sub">
-        Hourly stacked-area load over the 7-day window centered on the CONUS peak in summer (Jun–Sep) or winter (Dec–Feb), for the current scenario / stock year / weather year. Y-axis: GW.
-      </div>
-      <div class="local-controls">
-        <button class="pill active" data-season="winter">Winter peak</button>
-        <button class="pill"        data-season="summer">Summer peak</button>
-      </div>
-      <div id="plot-peakweek" class="plot"></div>
-    </div>
-
-    <div class="panel wide">
-      <h2>Validation — ReEDS vs Intermediate-summed annual energy</h2>
-      <div class="panel-sub">
-        For every scenario at the current stock year / weather year: ReEDs CSV (sector-summed, MWh → GWh) vs sum of intermediate per-component CSVs (GWh). These describe the same load through two summation paths and should agree to floating-point precision; bars sitting at the same height confirms internal consistency.
-      </div>
-      <div id="plot-validation-inter" class="plot" style="height: 260px;"></div>
+      <div id="plot-cohort" class="plot" style="height: 380px;"></div>
     </div>
   </div>
 
   <!-- LBL tab -->
-  <div class="grid-3" id="tab-lbl" style="display: none;">
-    <div class="panel">
-      <h2>LBL cohort breakdown — annual energy</h2>
-      <div class="panel-sub">
-        Annual GWh per (sector × cohort) summed over CONUS county-groups, for the current scenario / stock year / weather year. LBL ships only AMY 2012 and 2018 and excludes the commercial gap profile per spec.
-      </div>
-      <div id="plot-lbl-cohort" class="plot"></div>
+  <div id="tab-lbl" style="display: none;">
+    <div class="stub">
+      LBL tab (county_group dropdown + breakdown sub-tab + county_group choropleth + cohort decomp + Number of Buildings) is Phase B — will land in the next iteration. The aggregator now ships <code>lbl_annual</code> and <code>state_by_sector</code> data; the missing pieces are <code>intermediate/county_group/</code> reads and <code>aux_samples_*.csv</code> weights.
     </div>
+  </div>
 
-    <div class="panel">
-      <h2>4-scenario annual energy comparison (LBL)</h2>
-      <div class="panel-sub">
-        LBL CONUS annual GWh side-by-side for all four scenarios at the current stock year / weather year. Y-axis range pinned to the same scale as the ReEDS trajectory panel.
-      </div>
-      <div id="plot-lbl-scen" class="plot"></div>
-    </div>
-
-    <div class="panel wide">
-      <h2>Three-way validation — LBL + commercial gap = ReEDS</h2>
-      <div class="panel-sub">
-        LBL CONUS (cohorts only; no gap) + Intermediate commercial gap should equal ReEDS CONUS for the same (scenario, stock year, weather year), within polars / pandas rounding. Bars are stacked: green = LBL, gray = added gap. ReEDs target is the dashed line. Only AMY 2012 / 2018 are available from LBL.
-      </div>
-      <div id="plot-validation-lbl" class="plot" style="height: 260px;"></div>
+  <!-- Internal tab -->
+  <div id="tab-inter" style="display: none;">
+    <div class="stub">
+      Internal tab (split into State / County_group, with cooling / heating / non_hvac / total enduse dimension) is Phase B — will land in the next iteration.
     </div>
   </div>
 </main>
@@ -318,83 +207,66 @@
 <script>
 const PAYLOAD = __PAYLOAD__;
 
-const state = {
-  tab:         'reeds',
-  scenario:    PAYLOAD.scenarios[0],
-  stockYear:   PAYLOAD.stock_years[PAYLOAD.stock_years.length - 1],
-  weatherYear: PAYLOAD.panel1.weather_years.includes(2018) ? 2018 : PAYLOAD.panel1.weather_years[0],
-  metric:      'annual',
-  season:      'winter',
-};
-
+// Cohort colors and order.
 const COHORT_DEF = [
-  {key: 'res_NC',  label: 'Res NC',          color: '#cfe2f3'},
-  {key: 'res_SA',  label: 'Res SA',          color: '#6fa8dc'},
-  {key: 'res_SNA', label: 'Res SNA',         color: '#1f4e79'},
-  {key: 'com_NC',  label: 'Com NC',          color: '#fce5cd'},
-  {key: 'com_SA',  label: 'Com SA',          color: '#f6b26b'},
-  {key: 'com_SNA', label: 'Com SNA',         color: '#b45f06'},
-  {key: 'com_gap', label: 'Com gap',         color: '#999999'},
+  {key: 'res_NC',  label: 'Res NC',  color: '#cfe2f3'},
+  {key: 'res_SA',  label: 'Res SA',  color: '#6fa8dc'},
+  {key: 'res_SNA', label: 'Res SNA', color: '#1f4e79'},
+  {key: 'com_NC',  label: 'Com NC',  color: '#fce5cd'},
+  {key: 'com_SA',  label: 'Com SA',  color: '#f6b26b'},
+  {key: 'com_SNA', label: 'Com SNA', color: '#b45f06'},
+  {key: 'com_gap', label: 'Com gap', color: '#999999'},
 ];
 
 const TABS = [
   {id: 'reeds', label: 'ReEDS handoff'},
-  {id: 'inter', label: 'Intermediate handoff'},
-  {id: 'lbl',   label: 'LBL handoff'},
+  {id: 'lbl',   label: 'LBL handoff (Phase B)'},
+  {id: 'inter', label: 'Internal handoff (Phase B)'},
 ];
 
-function fmt(n, digits = 0) {
+const state = {
+  tab:           'reeds',
+  scenario:      PAYLOAD.scenarios[0],
+  stockYearIdx:  PAYLOAD.stock_years.length - 1,
+  weatherYearIdx: PAYLOAD.panel1.weather_years.includes(2018)
+                    ? PAYLOAD.panel1.weather_years.indexOf(2018)
+                    : PAYLOAD.panel1.weather_years.length - 1,
+  trajSubtab:    'total',
+  trajMetric:    'annual_gwh',
+  trajState:     'CONUS',
+  mapMetric:     'annual_gwh',
+  mapSector:     'total',
+};
+
+// === Selectors derived from state ========================================
+function stockYear()   { return PAYLOAD.stock_years[state.stockYearIdx]; }
+function weatherYear() { return PAYLOAD.panel1.weather_years[state.weatherYearIdx]; }
+
+function fmt(n, digits=0) {
   if (n === null || n === undefined || Number.isNaN(n)) return '—';
   return Number(n).toLocaleString(undefined, {maximumFractionDigits: digits, minimumFractionDigits: digits});
 }
 
-function median(arr) {
-  const s = arr.slice().sort((a, b) => a - b);
-  if (s.length === 0) return null;
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : 0.5 * (s[m - 1] + s[m]);
+function annualReEDs(sc, y, wy) {
+  return ((PAYLOAD.panel1.annual_gwh[sc] || {})[y] || {})[wy];
+}
+function peakReEDs(sc, y, wy) {
+  return ((PAYLOAD.panel1.peak_gw[sc] || {})[y] || {})[wy];
 }
 
-// === Generic getters into nested payload tables ============================
-function annualGwhReEDs(scenario, year, wy) {
-  return ((PAYLOAD.panel1.annual_gwh[scenario] || {})[year] || {})[wy];
-}
-function peakGwReEDs(scenario, year, wy) {
-  return ((PAYLOAD.panel1.peak_gw[scenario] || {})[year] || {})[wy];
-}
-function intermediateSumAnnual(scenario, year, wy) {
-  const by_sector = (((PAYLOAD.intermediate_annual[scenario] || {})[year] || {})[wy] || {});
-  let s = 0, any = false;
-  for (const sec of ['residential', 'commercial']) {
-    const by_coh = by_sector[sec] || {};
-    for (const c of Object.keys(by_coh)) {
-      s += by_coh[c] || 0;
-      any = true;
-    }
-  }
-  return any ? s : null;
-}
-function intermediateCommercialGap(scenario, year, wy) {
-  return ((((PAYLOAD.intermediate_annual[scenario] || {})[year] || {})[wy] || {}).commercial || {}).gap;
-}
-function lblTotalAnnual(scenario, year, wy) {
-  const by_sector = (((PAYLOAD.lbl_annual[scenario] || {})[year] || {})[wy] || {});
-  let s = 0, any = false;
-  for (const sec of ['residential', 'commercial']) {
-    const by_coh = by_sector[sec] || {};
-    for (const c of Object.keys(by_coh)) {
-      s += by_coh[c] || 0;
-      any = true;
-    }
-  }
-  return any ? s : null;
+function stateMetricLookup(metric, sc, y, wy, sector, stOrConus) {
+  // metric: 'annual_gwh' | 'peak_gw';  stOrConus: 'CONUS' | postal
+  const tree = (PAYLOAD.state_by_sector[metric][sc] || {})[y] || {};
+  const sec_d = (tree[wy] || {})[sector] || {};
+  return sec_d[stOrConus];
 }
 
-// === Controls + headline ===================================================
+// === Build controls ======================================================
 function buildControls() {
   document.getElementById('run-dirs').textContent =
       'res: ' + PAYLOAD.meta.res_run_dir + '   ·   com: ' + PAYLOAD.meta.com_run_dir;
 
+  // Scenario chips
   const scenarioEl = document.getElementById('ctl-scenario');
   PAYLOAD.scenarios.forEach(s => {
     const b = document.createElement('button');
@@ -404,25 +276,23 @@ function buildControls() {
     scenarioEl.appendChild(b);
   });
 
+  // Stock year slider
   const syEl = document.getElementById('ctl-stockyear');
-  PAYLOAD.stock_years.forEach(y => {
-    const b = document.createElement('button');
-    b.className = 'pill' + (y === state.stockYear ? ' active' : '');
-    b.textContent = y;
-    b.onclick = () => { state.stockYear = y; refresh(); };
-    syEl.appendChild(b);
-  });
+  syEl.min = 0; syEl.max = PAYLOAD.stock_years.length - 1; syEl.value = state.stockYearIdx;
+  syEl.oninput = () => { state.stockYearIdx = +syEl.value; refresh(); };
+  document.getElementById('ctl-stockyear-val').textContent = stockYear();
+  document.getElementById('ctl-stockyear-ends').innerHTML =
+      `<span style="margin-left:96px;">${PAYLOAD.stock_years[0]}</span><span>${PAYLOAD.stock_years[PAYLOAD.stock_years.length-1]}</span>`;
 
+  // Weather year slider
   const wyEl = document.getElementById('ctl-weatheryear');
-  PAYLOAD.panel1.weather_years.forEach(wy => {
-    const o = document.createElement('option');
-    o.value = wy; o.textContent = wy;
-    if (wy === state.weatherYear) o.selected = true;
-    wyEl.appendChild(o);
-  });
-  wyEl.onchange = () => { state.weatherYear = parseInt(wyEl.value, 10); refresh(); };
+  wyEl.min = 0; wyEl.max = PAYLOAD.panel1.weather_years.length - 1; wyEl.value = state.weatherYearIdx;
+  wyEl.oninput = () => { state.weatherYearIdx = +wyEl.value; refresh(); };
+  document.getElementById('ctl-weatheryear-val').textContent = weatherYear();
+  document.getElementById('ctl-weatheryear-ends').innerHTML =
+      `<span style="margin-left:96px;">${PAYLOAD.panel1.weather_years[0]}</span><span>${PAYLOAD.panel1.weather_years[PAYLOAD.panel1.weather_years.length-1]}</span>`;
 
-  // Tab bar
+  // Tabs
   const tabsEl = document.getElementById('tabs');
   TABS.forEach(t => {
     const b = document.createElement('button');
@@ -432,58 +302,96 @@ function buildControls() {
     tabsEl.appendChild(b);
   });
 
-  // Panel-local toggles
-  document.querySelectorAll('[data-metric]').forEach(btn => {
+  // Trajectory sub-tabs
+  document.querySelectorAll('#traj-subtabs button').forEach(btn => {
     btn.onclick = () => {
-      document.querySelectorAll('[data-metric]').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('#traj-subtabs button').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      state.metric = btn.dataset.metric;
+      state.trajSubtab = btn.dataset.subtab;
       renderTrajectory();
     };
   });
-  document.querySelectorAll('[data-season]').forEach(btn => {
+
+  // Trajectory metric + state dropdown
+  document.querySelectorAll('[data-traj-metric]').forEach(btn => {
     btn.onclick = () => {
-      document.querySelectorAll('[data-season]').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('[data-traj-metric]').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      state.season = btn.dataset.season;
-      renderPeakWeek();
+      state.trajMetric = btn.dataset.trajMetric;
+      renderTrajectory();
+    };
+  });
+  const stEl = document.getElementById('traj-state');
+  ['CONUS', ...PAYLOAD.states].forEach(s => {
+    const o = document.createElement('option');
+    o.value = s; o.textContent = s;
+    if (s === state.trajState) o.selected = true;
+    stEl.appendChild(o);
+  });
+  stEl.onchange = () => { state.trajState = stEl.value; renderTrajectory(); };
+
+  // Map metric + sector chips
+  document.querySelectorAll('[data-map-metric]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-map-metric]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.mapMetric = btn.dataset.mapMetric;
+      renderMap();
+    };
+  });
+  document.querySelectorAll('[data-map-sector]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-map-sector]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.mapSector = btn.dataset.mapSector;
+      renderMap();
     };
   });
 
   document.getElementById('footer-meta').textContent =
       PAYLOAD.scenarios.length + ' scenarios × ' +
       PAYLOAD.stock_years.length + ' stock years × ' +
-      PAYLOAD.panel1.weather_years.length + ' weather years · Plotly bake';
+      PAYLOAD.panel1.weather_years.length + ' weather years · payload ' +
+      (JSON.stringify(PAYLOAD).length / 1e6).toFixed(1) + ' MB';
 }
 
+function syncActivePills() {
+  document.getElementById('ctl-scenario').querySelectorAll('.pill').forEach(p =>
+    p.classList.toggle('active', p.textContent === state.scenario));
+  document.querySelectorAll('nav.tabs button').forEach((b, i) =>
+    b.classList.toggle('active', TABS[i].id === state.tab));
+  document.getElementById('ctl-stockyear-val').textContent = stockYear();
+  document.getElementById('ctl-weatheryear-val').textContent = weatherYear();
+}
+
+// === Headline ============================================================
 function renderHeadline() {
-  const baseAnnual = annualGwhReEDs('Baseline', state.stockYear, state.weatherYear);
-  const basePeak   = peakGwReEDs('Baseline', state.stockYear, state.weatherYear);
+  const y = stockYear(), wy = weatherYear();
+  const baseAnn  = annualReEDs('Baseline', y, wy);
+  const basePeak = peakReEDs('Baseline', y, wy);
   const el = document.getElementById('headline');
   el.innerHTML = '';
   PAYLOAD.scenarios.forEach(sc => {
-    const ann  = annualGwhReEDs(sc, state.stockYear, state.weatherYear);
-    const peak = peakGwReEDs(sc, state.stockYear, state.weatherYear);
-    const annDelta = (ann !== undefined && baseAnnual && sc !== 'Baseline')
-        ? ((ann - baseAnnual) / baseAnnual * 100) : null;
-    const peakDelta = (peak !== undefined && basePeak && sc !== 'Baseline')
-        ? ((peak - basePeak) / basePeak * 100) : null;
+    const ann  = annualReEDs(sc, y, wy);
+    const peak = peakReEDs(sc, y, wy);
+    const annDelta  = (ann !== undefined && baseAnn && sc !== 'Baseline')  ? ((ann - baseAnn) / baseAnn * 100) : null;
+    const peakDelta = (peak !== undefined && basePeak && sc !== 'Baseline') ? ((peak - basePeak) / basePeak * 100) : null;
     const card = document.createElement('div');
     card.className = 'scen-card' + (sc === state.scenario ? ' active' : '');
     card.onclick = () => { state.scenario = sc; refresh(); };
-    card.style.cursor = 'pointer';
-    const dCls = (d) => d === null ? '' : (d > 0 ? 'up' : 'down');
-    const dStr = (d, suf) => d === null ? '' : `<div class="delta ${dCls(d)}">Δ Baseline: ${d > 0 ? '+' : ''}${d.toFixed(1)} %${suf || ''}</div>`;
+    const dCls = d => d === null ? '' : (d > 0 ? 'up' : 'down');
+    const dStr = d => d === null ? '' :
+      `<div class="delta ${dCls(d)}">Δ Baseline: ${d > 0 ? '+' : ''}${d.toFixed(1)} %</div>`;
     card.innerHTML = `
       <div><span class="swatch" style="background:${PAYLOAD.colors[sc]}"></span><span class="scen-name">${sc}</span></div>
       <div class="row">
         <div class="metric">
-          <div class="lab">Annual</div>
+          <div class="lab">${y} · amy${wy} · Annual</div>
           <div class="val">${fmt(ann)}<span class="unit"> GWh</span></div>
           ${dStr(annDelta)}
         </div>
         <div class="metric">
-          <div class="lab">Peak</div>
+          <div class="lab">${y} · amy${wy} · Peak</div>
           <div class="val">${peak !== undefined ? peak.toFixed(0) : '—'}<span class="unit"> GW</span></div>
           ${dStr(peakDelta)}
         </div>
@@ -492,85 +400,102 @@ function renderHeadline() {
   });
 }
 
-function syncActivePills() {
-  ['ctl-scenario', 'ctl-stockyear'].forEach(id => {
-    document.getElementById(id).querySelectorAll('.pill').forEach(p => {
-      const text = p.textContent;
-      const matchScenario = id === 'ctl-scenario' && text === state.scenario;
-      const matchYear     = id === 'ctl-stockyear' && parseInt(text, 10) === state.stockYear;
-      p.classList.toggle('active', matchScenario || matchYear);
-    });
-  });
-  document.querySelectorAll('nav.tabs button').forEach((b, i) => {
-    b.classList.toggle('active', TABS[i].id === state.tab);
-  });
+// === ReEDs panels ========================================================
+function renderTrajectory() {
+  if (state.trajSubtab === 'total') {
+    return renderTrajectoryTotal();
+  }
+  return renderTrajectoryBreakdown();
 }
 
-// === Panel renderers =======================================================
-function renderTrajectory() {
-  const seriesByScenario = state.metric === 'annual' ? PAYLOAD.panel1.annual_gwh : PAYLOAD.panel1.peak_gw;
-  const yLabel = state.metric === 'annual' ? 'Annual energy (GWh / yr)' : 'Annual peak power (GW)';
-  const yMax = state.metric === 'annual' ? PAYLOAD.axis.annual_gwh_max : PAYLOAD.axis.peak_gw_max;
+function renderTrajectoryTotal() {
+  const metric = state.trajMetric;
+  const sectorForState = 'total';
+  const wySel = weatherYear();
+  const stSel = state.trajState;
   const traces = [];
 
   PAYLOAD.scenarios.forEach(scenario => {
     const color = PAYLOAD.colors[scenario];
-    const by_year = seriesByScenario[scenario] || {};
+
     PAYLOAD.panel1.weather_years.forEach(wy => {
-      const ys = PAYLOAD.stock_years.map(y => (by_year[y] || {})[wy] ?? null);
+      const ys = PAYLOAD.stock_years.map(y =>
+        stateMetricLookup(metric, scenario, y, wy, sectorForState, stSel));
+      const isSel = (wy === wySel);
       traces.push({
         x: PAYLOAD.stock_years, y: ys,
-        mode: 'lines', name: scenario + ' · ' + wy,
-        line: {color: color, width: 1},
-        opacity: 0.13, showlegend: false, hoverinfo: 'skip',
+        mode: 'lines', name: scenario,
+        legendgroup: scenario,                                  // <-- grouped toggle
+        showlegend: isSel,                                      // one legend chip per scenario
+        line: {color: color, width: isSel ? 4 : 1.5},
+        opacity: isSel ? 1.0 : 0.20,
+        hovertemplate: `<b>${scenario}</b> · amy${wy}<br>%{x}: %{y:,.0f}<extra></extra>`,
       });
-    });
-    const med = PAYLOAD.stock_years.map(y => {
-      const vals = Object.values(by_year[y] || {}).filter(v => v !== null && v !== undefined);
-      return vals.length ? median(vals) : null;
-    });
-    traces.push({
-      x: PAYLOAD.stock_years, y: med,
-      mode: 'lines+markers', name: scenario,
-      line: {color: color, width: 3},
-      marker: {color: color, size: 7},
     });
   });
 
+  const yLabel = metric === 'annual_gwh' ? 'Annual energy (GWh / yr)' : 'Annual peak power (GW)';
+  const yMax = (PAYLOAD.axis.trajectory_max[stSel] || {})[sectorForState]?.[metric] || 1;
   const layout = {
     margin: {t: 24, r: 8, b: 36, l: 70},
     xaxis: {tickmode: 'array', tickvals: PAYLOAD.stock_years},
-    yaxis: {title: yLabel, gridcolor: '#eee', zeroline: false, range: [0, yMax]},
+    yaxis: {title: yLabel, gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05]},
+    legend: {orientation: 'h', y: -0.18, font: {size: 11}, groupclick: 'togglegroup'},
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    title: {text: `${stSel} · amy${wySel} highlighted`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+  };
+  Plotly.react('plot-trajectory', traces, layout, {displayModeBar: false, responsive: true});
+}
+
+function renderTrajectoryBreakdown() {
+  const metric = state.trajMetric;
+  const wySel = weatherYear();
+  const stSel = state.trajState;
+  const scenario = state.scenario;
+
+  // Stacked area Res / Com / Gap across stock_years.
+  const SECTOR_DEF = [
+    {key: 'residential', label: 'Residential', color: '#1f4e79'},
+    {key: 'commercial',  label: 'Commercial',  color: '#f6b26b'},
+    {key: 'gap',         label: 'Gap',         color: '#999999'},
+  ];
+  const traces = SECTOR_DEF.map(sec => ({
+    x: PAYLOAD.stock_years,
+    y: PAYLOAD.stock_years.map(y =>
+        stateMetricLookup(metric, scenario, y, wySel, sec.key, stSel) || 0),
+    type: 'scatter', mode: 'none', name: sec.label,
+    stackgroup: 'one', fillcolor: sec.color, line: {width: 0},
+  }));
+  const yLabel = metric === 'annual_gwh' ? 'Annual energy (GWh / yr)' : 'Annual peak power (GW)';
+  const yMax = (PAYLOAD.axis.trajectory_max[stSel] || {})['total']?.[metric] || 1;
+  const layout = {
+    margin: {t: 24, r: 8, b: 36, l: 70},
+    xaxis: {tickmode: 'array', tickvals: PAYLOAD.stock_years},
+    yaxis: {title: yLabel, gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05]},
     legend: {orientation: 'h', y: -0.18, font: {size: 11}},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    title: {text: `${scenario} · ${stSel} · amy${wySel}`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
   };
   Plotly.react('plot-trajectory', traces, layout, {displayModeBar: false, responsive: true});
 }
 
 function renderMap() {
-  const slice = (PAYLOAD.panel2.annual_gwh_by_state[state.scenario] || {})[state.stockYear] || {};
-  const row   = slice[state.weatherYear] || {};
-  const states = PAYLOAD.panel2.states;
-  const values = states.map(s => row[s] ?? null);
-
-  // Pin colorbar zmax so colors are visually comparable across selections.
-  const stateMaxAcrossSelections = (function() {
-    let mx = 0;
-    const reedSlice = PAYLOAD.panel2.annual_gwh_by_state[state.scenario] || {};
-    Object.values(reedSlice).forEach(by_y => Object.values(by_y).forEach(by_st => {
-      Object.values(by_st).forEach(v => { if (v > mx) mx = v; });
-    }));
-    return mx || 1;
-  })();
+  const metric = state.mapMetric, sector = state.mapSector;
+  const y = stockYear(), wy = weatherYear();
+  const tree = (PAYLOAD.state_by_sector[metric][state.scenario] || {})[y] || {};
+  const sec_d = (tree[wy] || {})[sector] || {};
+  const states = PAYLOAD.states;
+  const values = states.map(s => sec_d[s] ?? null);
+  const zmax = (PAYLOAD.axis.choropleth_max[sector] || {})[metric] || 1;
 
   const data = [{
     type: 'choropleth', locationmode: 'USA-states',
     locations: states, z: values,
-    zmin: 0, zmax: stateMaxAcrossSelections,
+    zmin: 0, zmax: zmax,
     colorscale: 'YlGnBu',
-    colorbar: {title: 'GWh / yr', thickness: 12, len: 0.8},
+    colorbar: {title: metric === 'annual_gwh' ? 'GWh / yr' : 'GW peak', thickness: 12, len: 0.8},
     marker: {line: {color: '#fff', width: 0.5}},
-    hovertemplate: '<b>%{location}</b><br>%{z:,.0f} GWh / yr<extra></extra>',
+    hovertemplate: '<b>%{location}</b><br>%{z:,.1f}<extra></extra>',
   }];
   const layout = {
     margin: {t: 24, r: 0, b: 0, l: 0},
@@ -580,230 +505,70 @@ function renderMap() {
   Plotly.react('plot-map', data, layout, {displayModeBar: false, responsive: true});
 }
 
-function renderDelta() {
-  const baseAnn  = annualGwhReEDs('Baseline', state.stockYear, state.weatherYear);
-  const basePeak = peakGwReEDs('Baseline', state.stockYear, state.weatherYear);
-  const scens = PAYLOAD.scenarios.filter(s => s !== 'Baseline');
-  const annDeltas  = scens.map(s => {
-    const v = annualGwhReEDs(s, state.stockYear, state.weatherYear);
-    return (v !== undefined && baseAnn) ? (v - baseAnn) / baseAnn * 100 : null;
-  });
-  const peakDeltas = scens.map(s => {
-    const v = peakGwReEDs(s, state.stockYear, state.weatherYear);
-    return (v !== undefined && basePeak) ? (v - basePeak) / basePeak * 100 : null;
-  });
-  const traces = [
-    {x: scens, y: annDeltas,  type: 'bar', name: 'Annual energy Δ',
-     marker: {color: scens.map(s => PAYLOAD.colors[s])}, text: annDeltas.map(d => d===null?'':(d>0?'+':'')+d.toFixed(1)+'%'),
-     textposition: 'outside'},
-    {x: scens, y: peakDeltas, type: 'bar', name: 'Peak power Δ',
-     marker: {color: scens.map(s => PAYLOAD.colors[s]), pattern: {shape: '/'}},
-     text: peakDeltas.map(d => d===null?'':(d>0?'+':'')+d.toFixed(1)+'%'),
-     textposition: 'outside'},
-  ];
-  const layout = {
-    barmode: 'group',
-    margin: {t: 24, r: 8, b: 36, l: 70},
-    yaxis: {title: '% change vs Baseline', gridcolor: '#eee', zeroline: true, zerolinecolor: '#888'},
-    legend: {orientation: 'h', y: -0.22, font: {size: 11}},
-    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-  };
-  Plotly.react('plot-delta', traces, layout, {displayModeBar: false, responsive: true});
-}
-
 function renderCohort() {
-  const data = (PAYLOAD.panel4[state.scenario] || {})[state.stockYear];
-  if (!data || !data.dates) {
+  const wy = weatherYear();
+  const entry = ((PAYLOAD.cohort_daily[state.scenario] || {})[stockYear()] || {})[wy];
+  if (!entry || !entry.cohorts) {
     Plotly.react('plot-cohort', [], {
       margin: {t: 24, r: 8, b: 36, l: 70},
-      yaxis: {title: 'GWh / day'},
       annotations: [{text: 'No data', xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {color: '#999'}}],
     }, {displayModeBar: false, responsive: true});
     return;
   }
   const traces = COHORT_DEF
-    .filter(c => Array.isArray(data[c.key]))
+    .filter(c => Array.isArray(entry.cohorts[c.key]))
     .map(c => ({
-      x: data.dates, y: data[c.key],
+      x: entry.dates, y: entry.cohorts[c.key],
       type: 'scatter', mode: 'none', name: c.label,
       stackgroup: 'one', fillcolor: c.color, line: {width: 0},
+      hovertemplate: `<b>${c.label}</b><br>%{x|%b %d}: %{y:,.0f} GWh<extra></extra>`,
     }));
+
+  // Pick the larger of winter/summer peak from panel3 for the annotation.
+  const wkAll = ((PAYLOAD.panel3[state.scenario] || {})[stockYear()] || {})[wy];
+  let peakAnn = null;
+  if (wkAll) {
+    const w = wkAll.winter, s = wkAll.summer;
+    const winner = (s && (!w || s.peak_gw >= w.peak_gw)) ? s : w;
+    if (winner) {
+      peakAnn = {
+        x: winner.peak_iso.slice(0, 10), y: 0,
+        text: `peak ${winner.peak_gw.toFixed(1)} GW @ ${winner.peak_iso.slice(0, 13)}`,
+        xref: 'x', yref: 'paper', yshift: 360, showarrow: true,
+        arrowhead: 0, ax: 0, ay: 20,
+        font: {size: 11, color: '#1c4f93'}, bgcolor: 'rgba(255,255,255,0.85)',
+      };
+    }
+  }
+
   const layout = {
-    margin: {t: 24, r: 8, b: 36, l: 70},
-    xaxis: {gridcolor: '#eee'},
-    yaxis: {title: 'GWh / day', gridcolor: '#eee', zeroline: false},
-    legend: {orientation: 'h', y: -0.18, font: {size: 10}, traceorder: 'normal'},
+    margin: {t: 30, r: 8, b: 36, l: 70},
+    xaxis: {gridcolor: '#eee', tickformat: '%b %d'},
+    yaxis: {title: 'Daily energy (GWh / day)', gridcolor: '#eee', zeroline: false},
+    legend: {orientation: 'h', y: -0.15, font: {size: 10}, traceorder: 'normal'},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    title: {text: 'amy ' + data.weather_year + ' (median weather year)', x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+    title: {text: `${state.scenario} · stock ${stockYear()} · amy${wy}`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+    annotations: peakAnn ? [peakAnn] : [],
   };
   Plotly.react('plot-cohort', traces, layout, {displayModeBar: false, responsive: true});
 }
 
-function renderPeakWeek() {
-  const wkAll  = ((PAYLOAD.panel3[state.scenario] || {})[state.stockYear] || {})[state.weatherYear];
-  const wkData = wkAll ? wkAll[state.season] : null;
-  if (!wkData) {
-    Plotly.react('plot-peakweek', [], {
-      margin: {t: 24, r: 8, b: 36, l: 70},
-      yaxis: {title: 'GW'},
-      annotations: [{text: 'No ' + state.season + ' peak data for ' + state.scenario + ' · ' + state.stockYear + ' · ' + state.weatherYear,
-                     xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {color: '#999'}}],
-    }, {displayModeBar: false, responsive: true});
-    return;
-  }
-  const traces = [
-    {x: wkData.timestamps, y: wkData.residential, type: 'scatter', mode: 'none', name: 'Residential',
-     stackgroup: 'one', fillcolor: '#1f4e79', line: {width: 0}},
-    {x: wkData.timestamps, y: wkData.commercial, type: 'scatter', mode: 'none', name: 'Commercial',
-     stackgroup: 'one', fillcolor: '#f6b26b', line: {width: 0}},
-  ];
-  const layout = {
-    margin: {t: 24, r: 8, b: 36, l: 70},
-    xaxis: {tickformat: '%a %b %d', gridcolor: '#eee'},
-    yaxis: {title: 'Power (GW)', gridcolor: '#eee', zeroline: false, range: [0, PAYLOAD.axis.peak_gw_max]},
-    legend: {orientation: 'h', y: -0.18, font: {size: 11}},
-    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    annotations: [{x: wkData.peak_iso, y: wkData.peak_gw, text: 'peak ' + wkData.peak_gw.toFixed(1) + ' GW',
-                   xref: 'x', yref: 'y', showarrow: true, arrowhead: 0, ax: 0, ay: -28,
-                   font: {size: 11, color: '#1c4f93'}, bgcolor: 'rgba(255,255,255,0.85)'}],
-  };
-  Plotly.react('plot-peakweek', traces, layout, {displayModeBar: false, responsive: true});
-}
-
-function renderValidationInter() {
-  // ReEDs vs Intermediate-summed annual GWh per scenario, at current year/wy.
-  const reeds = PAYLOAD.scenarios.map(s => annualGwhReEDs(s, state.stockYear, state.weatherYear));
-  const inter = PAYLOAD.scenarios.map(s => intermediateSumAnnual(s, state.stockYear, state.weatherYear));
-  const diffs = PAYLOAD.scenarios.map((s, i) =>
-    (inter[i] && reeds[i]) ? (inter[i] - reeds[i]) / reeds[i] * 100 : null);
-
-  const traces = [
-    {x: PAYLOAD.scenarios, y: reeds, type: 'bar', name: 'ReEDs',
-     marker: {color: '#1c4f93'},
-     text: reeds.map(v => v ? fmt(v) : ''),
-     textposition: 'outside'},
-    {x: PAYLOAD.scenarios, y: inter, type: 'bar', name: 'Intermediate (Σ components)',
-     marker: {color: '#a6c0db'},
-     text: inter.map(v => v ? fmt(v) : ''),
-     textposition: 'outside'},
-  ];
-  const layout = {
-    barmode: 'group',
-    margin: {t: 24, r: 8, b: 36, l: 70},
-    yaxis: {title: 'Annual energy (GWh / yr)', gridcolor: '#eee', zeroline: false, range: [0, PAYLOAD.axis.annual_gwh_max]},
-    legend: {orientation: 'h', y: -0.22, font: {size: 11}},
-    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    annotations: PAYLOAD.scenarios.map((s, i) => ({
-      x: s, y: Math.max(reeds[i] || 0, inter[i] || 0),
-      text: diffs[i] === null ? '' : ('Δ ' + (diffs[i] > 0 ? '+' : '') + diffs[i].toFixed(3) + ' %'),
-      xref: 'x', yref: 'y', yshift: 30, showarrow: false,
-      font: {size: 10, color: Math.abs(diffs[i] || 0) < 0.1 ? '#2c7a3d' : '#b25a1a'},
-    })),
-  };
-  Plotly.react('plot-validation-inter', traces, layout, {displayModeBar: false, responsive: true});
-}
-
-function renderLblCohort() {
-  // Stacked bar: one bar per sector, segments = cohorts. Annual GWh for current selection.
-  const byBox = (((PAYLOAD.lbl_annual[state.scenario] || {})[state.stockYear] || {})[state.weatherYear]) || {};
-  const sectors = ['residential', 'commercial'];
-  const traces = [];
-  COHORT_DEF.filter(c => !c.key.endsWith('gap')).forEach(c => {
-    const [sectorPrefix, cohort] = c.key.split('_');
-    const sectorName = sectorPrefix === 'res' ? 'residential' : 'commercial';
-    const ys = sectors.map(sec => sec === sectorName ? ((byBox[sec] || {})[cohort] || 0) : 0);
-    traces.push({
-      x: sectors.map(s => s[0].toUpperCase() + s.slice(1)),
-      y: ys, type: 'bar', name: c.label, marker: {color: c.color},
-    });
-  });
-  const layout = {
-    barmode: 'stack',
-    margin: {t: 24, r: 8, b: 36, l: 70},
-    yaxis: {title: 'Annual energy (GWh / yr)', gridcolor: '#eee', zeroline: false, range: [0, PAYLOAD.axis.annual_gwh_max]},
-    legend: {orientation: 'h', y: -0.18, font: {size: 10}},
-    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    annotations: !PAYLOAD.lbl_weather_years.includes(state.weatherYear) ? [{
-      text: 'LBL ships only AMY ' + PAYLOAD.lbl_weather_years.join(' / ') + ' — no data for wy=' + state.weatherYear,
-      xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {color: '#b25a1a', size: 12},
-    }] : [],
-  };
-  Plotly.react('plot-lbl-cohort', traces, layout, {displayModeBar: false, responsive: true});
-}
-
-function renderLblScenarios() {
-  const wy = state.weatherYear;
-  const ys = PAYLOAD.scenarios.map(s => lblTotalAnnual(s, state.stockYear, wy));
-  const traces = [{
-    x: PAYLOAD.scenarios, y: ys, type: 'bar',
-    marker: {color: PAYLOAD.scenarios.map(s => PAYLOAD.colors[s])},
-    text: ys.map(v => v ? fmt(v) : ''), textposition: 'outside',
-  }];
-  const layout = {
-    margin: {t: 24, r: 8, b: 36, l: 70},
-    yaxis: {title: 'Annual energy — LBL CONUS (GWh / yr)', gridcolor: '#eee', zeroline: false, range: [0, PAYLOAD.axis.annual_gwh_max]},
-    showlegend: false,
-    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    annotations: !PAYLOAD.lbl_weather_years.includes(wy) ? [{
-      text: 'LBL ships only AMY ' + PAYLOAD.lbl_weather_years.join(' / '),
-      xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {color: '#b25a1a', size: 12},
-    }] : [],
-  };
-  Plotly.react('plot-lbl-scen', traces, layout, {displayModeBar: false, responsive: true});
-}
-
-function renderValidationLbl() {
-  // Three-way: LBL + Intermediate commercial gap == ReEDs
-  const wy = state.weatherYear;
-  const lbl   = PAYLOAD.scenarios.map(s => lblTotalAnnual(s, state.stockYear, wy));
-  const gaps  = PAYLOAD.scenarios.map(s => intermediateCommercialGap(s, state.stockYear, wy) || 0);
-  const reeds = PAYLOAD.scenarios.map(s => annualGwhReEDs(s, state.stockYear, wy));
-  const diffs = PAYLOAD.scenarios.map((s, i) =>
-    (lbl[i] && reeds[i]) ? ((lbl[i] + gaps[i]) - reeds[i]) / reeds[i] * 100 : null);
-
-  const traces = [
-    {x: PAYLOAD.scenarios, y: lbl,  type: 'bar', name: 'LBL CONUS',
-     marker: {color: '#2c7a3d'}, text: lbl.map(v => v ? fmt(v) : ''), textposition: 'inside'},
-    {x: PAYLOAD.scenarios, y: gaps, type: 'bar', name: '+ Intermediate commercial gap',
-     marker: {color: '#999999'}, text: gaps.map(v => v ? fmt(v) : ''), textposition: 'inside'},
-    {x: PAYLOAD.scenarios, y: reeds, type: 'scatter', mode: 'markers', name: 'ReEDs CONUS target',
-     marker: {color: '#1c4f93', symbol: 'diamond-tall', size: 11, line: {color: '#fff', width: 1}},
-     text: reeds.map(v => v ? fmt(v) : ''), textposition: 'top right'},
-  ];
-  const layout = {
-    barmode: 'stack',
-    margin: {t: 24, r: 8, b: 36, l: 70},
-    yaxis: {title: 'Annual energy (GWh / yr)', gridcolor: '#eee', zeroline: false, range: [0, PAYLOAD.axis.annual_gwh_max]},
-    legend: {orientation: 'h', y: -0.22, font: {size: 11}},
-    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    annotations: PAYLOAD.scenarios.map((s, i) => ({
-      x: s, y: (lbl[i] || 0) + (gaps[i] || 0),
-      text: diffs[i] === null ? '(no LBL data)' : ('Δ ' + (diffs[i] > 0 ? '+' : '') + diffs[i].toFixed(2) + ' %'),
-      xref: 'x', yref: 'y', yshift: 22, showarrow: false,
-      font: {size: 10, color: Math.abs(diffs[i] || 99) < 0.5 ? '#2c7a3d' : '#b25a1a'},
-    })),
-  };
-  Plotly.react('plot-validation-lbl', traces, layout, {displayModeBar: false, responsive: true});
-}
-
-// === Tab switcher + refresh ===============================================
+// === Tabs + refresh ======================================================
 function showTab(id) {
-  ['reeds', 'inter', 'lbl'].forEach(t =>
-    document.getElementById('tab-' + t).style.display = (t === id) ? 'grid' : 'none');
+  ['reeds', 'lbl', 'inter'].forEach(t =>
+    document.getElementById('tab-' + t).style.display = (t === id)
+      ? (t === 'reeds' ? 'grid' : 'block')
+      : 'none');
 }
 
 function refresh() {
   syncActivePills();
   renderHeadline();
   showTab(state.tab);
-  // Re-render every visible panel — Plotly.react is cheap when the figure
-  // shape hasn't changed.
   if (state.tab === 'reeds') {
-    renderTrajectory(); renderMap(); renderDelta();
-  } else if (state.tab === 'inter') {
-    renderCohort(); renderPeakWeek(); renderValidationInter();
-  } else if (state.tab === 'lbl') {
-    renderLblCohort(); renderLblScenarios(); renderValidationLbl();
+    renderTrajectory();
+    renderMap();
+    renderCohort();
   }
 }
 
