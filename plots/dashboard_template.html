@@ -18,34 +18,43 @@
     color: var(--ink); background: var(--bg); line-height: 1.4;
   }
 
-  header.title { background: var(--panel); border-bottom: 1px solid var(--border);
-                 padding: 12px 32px 6px; }
-  header.title h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
-  header.title .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  /* Sticky top bar holding title / controls / headline / tabs. Stays
+     visible while scrolling so users can swipe sliders and switch tabs
+     from anywhere on the page. Shadow on bottom edge signals "pinned". */
+  .sticky-top {
+    position: sticky; top: 0; z-index: 50;
+    background: var(--panel);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  }
+
+  header.title { padding: 6px 24px 2px; display: flex; align-items: baseline; gap: 18px;
+                 border-bottom: 1px solid var(--border); }
+  header.title h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  header.title .sub { color: var(--muted); font-size: 10px;
+                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   .controls {
-    display: grid; grid-template-columns: auto 1fr 1fr; gap: 22px;
-    padding: 12px 32px; background: var(--panel);
-    border-bottom: 1px solid var(--border); align-items: center;
+    display: grid; grid-template-columns: auto 1fr 1fr; gap: 18px;
+    padding: 6px 24px; border-bottom: 1px solid var(--border); align-items: center;
   }
-  .control-group { display: flex; gap: 8px; align-items: center; }
+  .control-group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .control-group .label {
-    font-size: 11px; color: var(--muted); text-transform: uppercase;
-    letter-spacing: 0.04em; margin-right: 4px;
+    font-size: 10px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.04em; margin-right: 2px;
   }
-  .slider-group { display: flex; flex-direction: column; gap: 2px; }
-  .slider-row { display: flex; align-items: center; gap: 12px; }
+  .slider-group { display: flex; flex-direction: column; gap: 0; }
+  .slider-row { display: flex; align-items: center; gap: 10px; }
   .slider-row input[type=range] {
-    flex: 1; accent-color: var(--accent); height: 4px; cursor: pointer;
+    flex: 1; accent-color: var(--accent); height: 3px; cursor: pointer;
   }
-  .slider-row .value { font-weight: 600; font-size: 13px; min-width: 38px; text-align: right; color: var(--accent); }
-  .slider-row .label { font-size: 11px; color: var(--muted);
+  .slider-row .value { font-weight: 600; font-size: 12px; min-width: 32px; text-align: right; color: var(--accent); }
+  .slider-row .label { font-size: 10px; color: var(--muted);
                        text-transform: uppercase; letter-spacing: 0.04em;
-                       min-width: 92px; }
-  .slider-row .endpts { font-size: 10px; color: var(--muted); display: flex; justify-content: space-between; }
+                       min-width: 78px; }
+  .slider-row .endpts { font-size: 9px; color: var(--muted); display: flex; justify-content: space-between; }
   .pill {
     border: 1px solid var(--border); background: var(--pill-bg); color: var(--ink);
-    border-radius: 999px; padding: 4px 11px; font-size: 12px;
+    border-radius: 999px; padding: 2px 8px; font-size: 11px;
     cursor: pointer; user-select: none; transition: all 0.12s ease;
   }
   .pill:hover { border-color: var(--accent); }
@@ -53,34 +62,33 @@
   select.pill {
     appearance: none;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'><path d='M0 0 L4 6 L8 0 Z' fill='%231c1c1e'/></svg>");
-    background-repeat: no-repeat; background-position: right 8px center;
-    background-size: 8px 6px; padding-right: 22px;
+    background-repeat: no-repeat; background-position: right 6px center;
+    background-size: 8px 6px; padding-right: 18px;
   }
 
-  .headline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
-              padding: 12px 32px; background: var(--panel);
-              border-bottom: 1px solid var(--border); }
-  .scen-card { border: 1px solid var(--border); border-radius: 10px;
-               padding: 10px 14px; background: var(--bg);
-               position: relative; transition: all 0.12s ease; cursor: pointer; }
+  /* Compact headline cards — one row, two metrics + delta inline */
+  .headline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+              padding: 6px 24px; border-bottom: 1px solid var(--border); }
+  .scen-card { border: 1px solid var(--border); border-radius: 6px;
+               padding: 4px 10px; background: var(--bg);
+               transition: all 0.12s ease; cursor: pointer; display: flex;
+               flex-direction: column; gap: 1px; }
   .scen-card.active { background: #fff; box-shadow: 0 0 0 2px var(--accent) inset; }
-  .scen-card .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block;
-                       margin-right: 6px; vertical-align: middle; }
-  .scen-card .scen-name { font-weight: 600; font-size: 13px; }
-  .scen-card .row { display: flex; gap: 16px; margin-top: 6px; }
-  .scen-card .metric { flex: 1; }
-  .scen-card .metric .lab { font-size: 10px; color: var(--muted);
-                            text-transform: uppercase; letter-spacing: 0.04em; }
-  .scen-card .metric .val { font-weight: 600; font-size: 16px; }
-  .scen-card .metric .unit { font-size: 10px; color: var(--muted); margin-left: 2px; }
-  .scen-card .delta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .scen-card .top-row { display: flex; align-items: center; gap: 6px; }
+  .scen-card .swatch { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .scen-card .scen-name { font-weight: 600; font-size: 11px; }
+  .scen-card .metrics-row { display: flex; gap: 10px; align-items: baseline; font-size: 11px; }
+  .scen-card .metric-pair { display: flex; gap: 3px; align-items: baseline; }
+  .scen-card .metric-pair .lab { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .scen-card .metric-pair .val { font-weight: 600; font-size: 12px; }
+  .scen-card .metric-pair .unit { font-size: 9px; color: var(--muted); }
+  .scen-card .delta-row { display: flex; gap: 8px; font-size: 9px; color: var(--muted); }
   .scen-card .delta.up   { color: var(--bad); }
   .scen-card .delta.down { color: var(--good); }
 
-  nav.tabs { display: flex; background: var(--panel);
-             border-bottom: 1px solid var(--border); padding: 0 32px; gap: 0; }
+  nav.tabs { display: flex; padding: 0 24px; gap: 0; border-bottom: 1px solid var(--border); }
   nav.tabs button { background: none; border: none; border-bottom: 2px solid transparent;
-                    padding: 11px 18px; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; }
+                    padding: 6px 12px; font-size: 12px; font-weight: 500; color: var(--muted); cursor: pointer; }
   nav.tabs button.active { color: var(--tab-active); border-bottom-color: var(--tab-active); }
   nav.tabs button:hover { color: var(--ink); }
 
@@ -108,37 +116,39 @@
 </head>
 <body>
 
-<header class="title">
-  <h1>BuildStock Projection Dashboard</h1>
-  <div class="sub" id="run-dirs"></div>
-</header>
+<div class="sticky-top">
+  <header class="title">
+    <h1>BuildStock Projection Dashboard</h1>
+    <div class="sub" id="run-dirs"></div>
+  </header>
 
-<section class="controls">
-  <div class="control-group">
-    <span class="label">Scenario</span>
-    <span id="ctl-scenario"></span>
-  </div>
-  <div class="slider-group">
-    <div class="slider-row">
-      <span class="label">Stock year</span>
-      <input type="range" id="ctl-stockyear" min="0" max="0" step="1">
-      <span class="value" id="ctl-stockyear-val">—</span>
+  <section class="controls">
+    <div class="control-group">
+      <span class="label">Scenario</span>
+      <span id="ctl-scenario"></span>
     </div>
-    <div class="slider-row endpts" id="ctl-stockyear-ends"></div>
-  </div>
-  <div class="slider-group">
-    <div class="slider-row">
-      <span class="label">Weather year</span>
-      <input type="range" id="ctl-weatheryear" min="0" max="0" step="1">
-      <span class="value" id="ctl-weatheryear-val">—</span>
+    <div class="slider-group">
+      <div class="slider-row">
+        <span class="label">Stock year</span>
+        <input type="range" id="ctl-stockyear" min="0" max="0" step="1">
+        <span class="value" id="ctl-stockyear-val">—</span>
+      </div>
+      <div class="slider-row endpts" id="ctl-stockyear-ends"></div>
     </div>
-    <div class="slider-row endpts" id="ctl-weatheryear-ends"></div>
-  </div>
-</section>
+    <div class="slider-group">
+      <div class="slider-row">
+        <span class="label">Weather year</span>
+        <input type="range" id="ctl-weatheryear" min="0" max="0" step="1">
+        <span class="value" id="ctl-weatheryear-val">—</span>
+      </div>
+      <div class="slider-row endpts" id="ctl-weatheryear-ends"></div>
+    </div>
+  </section>
 
-<section class="headline" id="headline"></section>
+  <section class="headline" id="headline"></section>
 
-<nav class="tabs" id="tabs"></nav>
+  <nav class="tabs" id="tabs"></nav>
+</div>
 
 <main>
   <!-- ReEDs tab -->
@@ -401,22 +411,22 @@ function renderHeadline() {
     card.className = 'scen-card' + (sc === state.scenario ? ' active' : '');
     card.onclick = () => { state.scenario = sc; refresh(); };
     const dCls = d => d === null ? '' : (d > 0 ? 'up' : 'down');
-    const dStr = d => d === null ? '' :
-      `<div class="delta ${dCls(d)}">Δ Baseline: ${d > 0 ? '+' : ''}${d.toFixed(1)} %</div>`;
+    const dStr = (d, prefix) => d === null ? '' :
+      `<span class="delta ${dCls(d)}">${prefix} ${d > 0 ? '+' : ''}${d.toFixed(1)}%</span>`;
     card.innerHTML = `
-      <div><span class="swatch" style="background:${PAYLOAD.colors[sc]}"></span><span class="scen-name">${sc}</span></div>
-      <div class="row">
-        <div class="metric">
-          <div class="lab">${y} · amy${wy} · Annual</div>
-          <div class="val">${fmt(ann)}<span class="unit"> GWh</span></div>
-          ${dStr(annDelta)}
-        </div>
-        <div class="metric">
-          <div class="lab">${y} · amy${wy} · Peak</div>
-          <div class="val">${peak !== undefined ? peak.toFixed(0) : '—'}<span class="unit"> GW</span></div>
-          ${dStr(peakDelta)}
-        </div>
-      </div>`;
+      <div class="top-row">
+        <span class="swatch" style="background:${PAYLOAD.colors[sc]}"></span>
+        <span class="scen-name">${sc}</span>
+      </div>
+      <div class="metrics-row">
+        <span class="metric-pair">
+          <span class="lab">Ann</span><span class="val">${fmt(ann)}</span><span class="unit">GWh</span>
+        </span>
+        <span class="metric-pair">
+          <span class="lab">Pk</span><span class="val">${peak !== undefined ? peak.toFixed(0) : '—'}</span><span class="unit">GW</span>
+        </span>
+      </div>
+      <div class="delta-row">${dStr(annDelta, 'Δann')} ${dStr(peakDelta, 'Δpk')}</div>`;
     el.appendChild(card);
   });
 }
@@ -560,19 +570,26 @@ function renderCohort() {
     }));
 
   // Pick the larger of winter/summer peak from panel3 for the annotation.
-  // Anchor at top of plot (y=1, yref=paper) with arrow pointing down to the
-  // peak day on the x-axis. Avoids the off-chart positioning bug from yshift.
+  // Anchor at the stacked daily total ON the peak day (yref='y'), matching
+  // the shape used by the bottom-right peak-week panel. Label still reads
+  // the hourly peak power; position just makes the arrow land at the stack.
   const wkAll = ((PAYLOAD.panel3[state.scenario] || {})[stockYear()] || {})[wy];
   let peakAnn = null;
   if (wkAll) {
     const w = wkAll.winter, s = wkAll.summer;
     const winner = (s && (!w || s.peak_gw >= w.peak_gw)) ? s : w;
     if (winner) {
+      const peakDateStr = winner.peak_iso.slice(0, 10);
+      const peakDayIdx = entry.dates.findIndex(d => d.startsWith(peakDateStr));
+      const stackHeight = peakDayIdx >= 0
+        ? COHORT_DEF.filter(c => Array.isArray(entry.cohorts[c.key]))
+            .reduce((sum, c) => sum + (entry.cohorts[c.key][peakDayIdx] || 0), 0)
+        : 0;
       peakAnn = {
-        x: winner.peak_iso.slice(0, 10), y: 1.0,
+        x: peakDateStr, y: stackHeight,
         text: `peak ${winner.peak_gw.toFixed(1)} GW @ ${winner.peak_iso.slice(5, 13)}h`,
-        xref: 'x', yref: 'paper', showarrow: true,
-        arrowhead: 2, ay: -28, ax: 0,
+        xref: 'x', yref: 'y', showarrow: true,
+        arrowhead: 0, ay: -22, ax: 0,
         font: {size: 11, color: '#1c4f93'}, bgcolor: 'rgba(255,255,255,0.85)',
         bordercolor: '#1c4f93', borderwidth: 1, borderpad: 3,
       };
