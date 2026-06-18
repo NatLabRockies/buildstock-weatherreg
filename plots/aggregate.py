@@ -366,45 +366,64 @@ def _intermediate_annual_task(args: tuple) -> tuple[tuple, dict[int, float]]:
 
 
 def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict]:
-    """One (scenario, year, sector) → per-state annual+peak per weather year.
+    """One (scenario, year, sector) → per-state + CONUS annual+peak per wy.
 
     The worker reads every cohort `total` file matching the (scenario, sector,
     year) request and sums them into one hourly state-x-time DataFrame, then
     groups by year-of-timestamp to get per-state per-wy `.sum()` (annual GWh)
-    and `.max()` (peak GW; intermediate files are GWh hourly = GW power).
+    and `.max()` (peak GW). For CONUS, we sum *hourly* across states first
+    (giving the joint hourly series), then take the max — this is the true
+    coincident peak. Summing per-state peaks would over-count because peaks
+    happen at different hours in different states.
 
     `sector` is a *display sector*, not the intermediate file's sector column:
       * 'residential' → residential cohorts (NC, SA, SNA)
       * 'commercial'  → commercial cohorts EXCLUDING gap (NC, SA, SNA)
       * 'gap'         → commercial gap only
-
-    'total' is computed in the parent (residential + commercial + gap).
+      * 'total'       → all of the above (read both res and com files)
     """
-    paths, scenario, year, sector = args
+    res_inter, com_inter, scenario, year, sector = args
     if sector == 'residential':
-        file_sector, cohorts = 'residential', RES_COHORTS
+        sources = [(res_inter, 'residential', RES_COHORTS)]
     elif sector == 'commercial':
-        file_sector, cohorts = 'commercial', ['NC', 'SA', 'SNA']
+        sources = [(com_inter, 'commercial', ['NC', 'SA', 'SNA'])]
     elif sector == 'gap':
-        file_sector, cohorts = 'commercial', ['gap']
+        sources = [(com_inter, 'commercial', ['gap'])]
+    elif sector == 'total':
+        sources = [(res_inter, 'residential', RES_COHORTS),
+                   (com_inter, 'commercial',  COM_COHORTS)]
     else:
         raise ValueError(f'bad sector: {sector}')
 
     total: pd.DataFrame | None = None
-    for cohort in cohorts:
-        key = (scenario, file_sector, cohort, 'total', year)
-        p = paths.get(key)
-        if p is None:
-            continue
-        df = _read_with_index(p)
-        total = df if total is None else total.add(df, fill_value=0.0)
+    for paths, file_sector, cohorts in sources:
+        for cohort in cohorts:
+            key = (scenario, file_sector, cohort, 'total', year)
+            p = paths.get(key)
+            if p is None:
+                continue
+            df = _read_with_index(p)
+            total = df if total is None else total.add(df, fill_value=0.0)
     if total is None:
         return scenario, year, sector, {}, {}
 
+    # Per-state per-wy: peak is intra-state coincident.
     ann = total.groupby(total.index.year).sum()
     peak = total.groupby(total.index.year).max()
-    ann_dict = {int(wy): {st: float(v) for st, v in row.items()} for wy, row in ann.iterrows()}
-    peak_dict = {int(wy): {st: float(v) for st, v in row.items()} for wy, row in peak.iterrows()}
+    # CONUS: build joint hourly first, then aggregate. This is the *correct*
+    # coincident peak — summing per-state peaks would over-count.
+    conus_hourly = total.sum(axis=1)
+    conus_ann = conus_hourly.groupby(conus_hourly.index.year).sum()
+    conus_peak = conus_hourly.groupby(conus_hourly.index.year).max()
+
+    ann_dict: dict = {}
+    peak_dict: dict = {}
+    for wy in ann.index:
+        wy_int = int(wy)
+        ann_dict[wy_int] = {st: float(v) for st, v in ann.loc[wy].items()}
+        ann_dict[wy_int]['CONUS'] = float(conus_ann.loc[wy])
+        peak_dict[wy_int] = {st: float(v) for st, v in peak.loc[wy].items()}
+        peak_dict[wy_int]['CONUS'] = float(conus_peak.loc[wy])
     return scenario, year, sector, ann_dict, peak_dict
 
 
@@ -503,18 +522,13 @@ def panel_state_by_sector(
 ) -> dict:
     """Per-state annual + peak per (scenario, year, wy, sector).
 
-    Tasks: 4 scenarios × 6 years × 3 sectors = 72. Returns dict with shape
-    {annual_gwh, peak_gw} → {scenario: {year: {wy: {sector: {state: value}}}}}.
-    'total' = sum of (residential + commercial + gap) computed in parent.
-    A 'CONUS' pseudo-state is the sum across all states.
+    Tasks: 4 scenarios × 6 years × 4 sectors = 96. Each task computes its own
+    'CONUS' pseudo-state from the joint hourly series (the coincident peak),
+    so there's no parent-side combining that could over-count.
     """
-    paths_for_sector = {
-        'residential': res_inter,
-        'commercial':  com_inter,
-        'gap':         com_inter,
-    }
-    tasks = [(paths_for_sector[sec], s, y, sec)
-             for s in SCENARIOS for y in STOCK_YEARS for sec in ('residential', 'commercial', 'gap')]
+    tasks = [(res_inter, com_inter, s, y, sec)
+             for s in SCENARIOS for y in STOCK_YEARS
+             for sec in ('residential', 'commercial', 'gap', 'total')]
 
     annual: dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
     peak:   dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
@@ -528,41 +542,9 @@ def panel_state_by_sector(
                 annual[scenario][year].setdefault(wy, {})[sector] = by_state
             for wy, by_state in peak_d.items():
                 peak[scenario][year].setdefault(wy, {})[sector] = by_state
-            if done == 1 or done == len(tasks) or done % 12 == 0:
+            if done == 1 or done == len(tasks) or done % 16 == 0:
                 _log(f'    ({done:>2}/{len(tasks)}) {scenario}/{year}/{sector}  '
                      f'states={len(next(iter(ann_d.values()), {}))}')
-
-    # Compute 'total' sector + CONUS pseudo-state in the parent.
-    for scenario in SCENARIOS:
-        for year in STOCK_YEARS:
-            for wy in list(annual[scenario][year].keys()):
-                ann_sec = annual[scenario][year][wy]
-                peak_sec = peak[scenario][year][wy]
-                # 'total' is per-state sum of res + com + gap (per state)
-                states = set()
-                for sec in ('residential', 'commercial', 'gap'):
-                    states.update(ann_sec.get(sec, {}).keys())
-                if not states:
-                    continue
-                total_ann = {st: sum(ann_sec.get(sec, {}).get(st, 0.0)
-                                     for sec in ('residential', 'commercial', 'gap'))
-                             for st in states}
-                # Note: per-state peak for 'total' is NOT sum of sector peaks
-                # (peaks happen at different hours). We approximate via the max
-                # of (res_peak + com_peak + gap_peak) per state — coincident
-                # peak assumption. Document this caveat in the dashboard.
-                total_peak = {st: sum(peak_sec.get(sec, {}).get(st, 0.0)
-                                      for sec in ('residential', 'commercial', 'gap'))
-                              for st in states}
-                ann_sec['total'] = total_ann
-                peak_sec['total'] = total_peak
-
-                # CONUS pseudo-state: sum across all states per sector
-                for sec_key in ('residential', 'commercial', 'gap', 'total'):
-                    if sec_key not in ann_sec:
-                        continue
-                    ann_sec[sec_key]['CONUS'] = sum(ann_sec[sec_key].values())
-                    peak_sec[sec_key]['CONUS'] = sum(peak_sec[sec_key].values())
 
     return {'annual_gwh': annual, 'peak_gw': peak}
 
