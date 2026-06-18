@@ -854,6 +854,11 @@ function renderMap() {
   const annText = sameAsRef
     ? `<b>CONUS</b><br>(${state.scenario} vs ${refSc} = self)`
     : `<b>CONUS:</b> ${fmtConus(conusVal)}`;
+  // In seasonal Peak GW mode, color the annotation by which season is the
+  // CONUS peak (matches the dual peak annotations on the cohort daily panel).
+  const annColor = (isSeasonalPeak && conusVal !== null && conusVal < 0)
+                   ? '#b25a1a'  // summer (orange)
+                   : '#1c4f93'; // winter (blue) — also the neutral default
 
   // Title label — same pattern as other panels. For savings/pct_savings,
   // include "vs <ref>" so the comparison is visible at a glance.
@@ -873,8 +878,8 @@ function renderMap() {
       x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top',
       showarrow: false,
       bgcolor: 'rgba(255,255,255,0.94)',
-      bordercolor: '#1c4f93', borderwidth: 1, borderpad: 6,
-      font: {size: 12, color: '#1c4f93'},
+      bordercolor: annColor, borderwidth: 1, borderpad: 6,
+      font: {size: 12, color: annColor},
       align: 'right',
     }],
   };
