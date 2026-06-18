@@ -3,8 +3,8 @@
 #SBATCH --time=12:00:00
 #SBATCH --qos=high
 
-# Partition / --mem / --cpus-per-task are passed by B at sbatch time so they
-# can flex between standard (48c / 246GB) and bigmem (104c / 2TB) profiles.
+# Partition / --mem / --cpus-per-task are passed by B at sbatch time — the
+# chunk-worker profile lives in B's CHUNK_* constants.
 # add >>> #SBATCH --qos=high <<< above for quicker launch at double AU cost
 
 # This script runs as a SLURM array task. The chunk-specific args (start_index,

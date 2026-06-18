@@ -2,20 +2,21 @@
 
 Modules (each sits on the one below):
     projection      the projection components + the parallel driver
-    factors         efficiency and cohort-growth multipliers
-    gap             ComStock gap-model loader (state CSV / per-county S3)
+    factors         efficiency and cohort-growth multipliers + T&D derating
+    gap             ComStock gap-model loader (state/county_group/county)
     growth_factors  AEO 2025 cohort splits
     common          shared types, config, geography, and input loaders
-    reeds           state-aggregated total-electricity handoff (long format)
+    reeds           state-aggregated total-electricity handoff (wide MWh)
     lbl             county-group timeseries + per-cohort sample lists
     intermediate    relabeled per-component view for publishing/debugging
 
 Run the projection (submit as SLURM batch — never the login node):
     sbatch G_run_projection.sh <run_dir> <stock> <state|county|county_group>
-Run the handoffs (light, login node is fine):
-    python -m projections.reeds        <res_run_dir> <com_run_dir> --out DIR
-    python -m projections.lbl          <res_run_dir> <com_run_dir> --out DIR
-    python -m projections.intermediate <res_run_dir> <com_run_dir> --out DIR
+Run the handoffs — one or more run_dirs; output sums across them and lands
+in <first_run_dir>/{ReEDs,LBL,intermediate}/ unless --out is passed:
+    python -m projections.reeds        <run_dir> [<run_dir> ...] [--out DIR]
+    python -m projections.intermediate <run_dir> [<run_dir> ...] [--out DIR] [--copy]
+    sbatch H_run_lbl.sh                <run_dir>      # heavy — needs medmem
 """
 
 from .projection import (

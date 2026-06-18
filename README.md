@@ -374,17 +374,32 @@ uv sync   # creates .venv, installs everything from pyproject.toml
  Use the notebooks in `aggregates/` for queries of non-HVAC electricity loads by state and hour.
 
 
-### Full Runs
-Set these switches in `switches_agg.json`:
-- `"testmode": false`. This deactivates the Vermont-only test run and runs full national.
-- `"upgrades": [0,4]` (or any list of upgrades/measures to run). Upgrade 0 is Baseline. Note that for ComStock runs we typically only run one upgrade at a time on HPC.
-- `"target_year": ["2007-2013","2016-2023"]` (or any integer or list of either integers or strings with ranges, as shown). These are the years for which regressed EULP data is output.
-- Change any other switches as shown in the subsections below. In the subsections below we discuss using [ComStock](#comstock-regressed) rather than ResStock, and running the tool [without regressions](#non-regressed) to simply extract existing ResStock/ComStock data.
+### BuildStockQuery schema install (one-time)
+
+ComStock pulls use a custom BSQ schema (`comstock_oedi_state_and_county`) that
+isn't shipped with `buildstock-query`. Copy this repo's `comstock_oedi.toml`
+into the BSQ package's `db_schema/` directory after `uv sync`:
 
 ```bash
 uv run python -c "import site; print(site.getsitepackages())"
 # copy comstock_oedi.toml to <site-packages-dir>/buildstock_query/db_schema/
 ```
+
+### Configuring a run
+
+Edit one of the four templates at the repo root (or copy one to a new name):
+
+| Template | Stock | Regression | Calibration |
+|---|---|---|---|
+| `switches_agg_resstock.json` | ResStock | cross-validation | on (per-state hourly) |
+| `switches_agg_comstock.json` | ComStock | cross-validation | n/a |
+| `switches_agg_resstock_2018.json` | ResStock | off (base year only) | on |
+| `switches_agg_comstock_2018.json` | ComStock | off (base year only) | n/a |
+
+Bump `output_dir` to a fresh path, adjust `run_specs` and `scenario_names` to
+match what you want to produce, and submit via the entry point at the top of
+this README. The **switches_agg_*.json reference** and **Switches reference
+(full)** sections above describe every field.
 
 ### Weather files (off-Kestrel only)
 

@@ -3,8 +3,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --qos=high
 
-# Partition / --mem are passed by B at sbatch time (matches the chunk profile
-# active on the launcher).
+# Partition / --mem are passed by B at sbatch time — matches what B uses for C.
 
 bldg_path="$1"
 bldg_type="$2"

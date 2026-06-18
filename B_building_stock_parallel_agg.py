@@ -1,3 +1,23 @@
+"""Pipeline orchestrator. Reads a switches_agg_*.json, and for every run_spec:
+
+  1. Bin-packs the spec's counties into chunks (balanced by weather_loc).
+  2. Submits one C array (per-chunk BSQ pulls + D processing) and one F
+     aggregator job (chunk-CSV stitching), with the aggregator depending on
+     the array via `--dependency=afterok`.
+  3. Accumulates the F job IDs.
+
+At the end it submits E (auxiliary BSQ queries) and Z (post-pipeline launcher
+for projection + handoffs), both gated on every F.
+
+The chunk-worker SLURM profile (partition / cpus / mem / array concurrency) is
+defined as four constants inside this module — see the block above the
+sbatch invocations. The launcher (A_*.sh) only handles AWS auth and runs B.
+
+Runs as a SLURM batch job itself (see A_start_building_stock_parallel_agg.sh).
+Never on a login node — Athena pulls and the orchestration footprint trip the
+HPC monitor and throttle the user.
+"""
+
 import os
 import certifi
 _CA = certifi.where()

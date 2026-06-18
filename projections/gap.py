@@ -1,7 +1,10 @@
 """The ComStock gap-model loader: the commercial floorspace ComStock doesn't
 simulate. Total-electricity only, from a fixed 2018 base replicated across the
 target weather years. `load_gap` picks the source by common.RESOLUTION:
-state → one local CSV (49 cols); county → one cached CSV per county from S3.
+    state         → one local CSV (49 cols)
+    county        → one cached CSV per county from S3 (~3,107 cols)
+    county_group  → load all CONUS counties from S3, collapse via the
+                    COUNTY_TO_COUNTY_GROUP mapping (1,038 cols).
 """
 
 from __future__ import annotations

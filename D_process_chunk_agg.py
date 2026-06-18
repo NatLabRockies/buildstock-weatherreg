@@ -1,3 +1,23 @@
+"""Per-chunk BSQ pull + (optional) calibration + regression + write.
+
+Run by C as a SLURM array task. For one chunk (a counties-by-weather-loc bin):
+
+  1. Athena pulls of meta + ts_agg from the spec's base_run and target_run.
+  2. ResStock calibration (only when the run_type has `adjustment_factor` set):
+     `_apply_state_adjustment` multiplies every electricity column of ts_agg
+     uniformly by `factor[state, hour]` so downstream gap / net consumption
+     math sees a calibrated trajectory. PV scales in lockstep with total, so
+     `net = total - pv` calibrates exactly.
+  3. Builds the regression feature matrix (weather + temperature lags +
+     building metadata), fits a RandomForest / hybrid model, predicts each
+     target year, and writes one chunk CSV per (spec, weather year) to
+     <output_dir>/chunks_*_b<base_year>/.
+
+When `apply_regression: false`, step 3 is skipped and the base-year load is
+written directly. Calibration (step 2) runs in both modes — it sits *before*
+the regression branch.
+"""
+
 # IMPORTS
 # Import libraries
 import os

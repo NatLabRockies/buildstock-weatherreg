@@ -1,8 +1,13 @@
 """The multipliers the projection applies.
 
 new_construction_efficiency_factor varies per (stock, enduse, year, state) and
-comes from shell_factors_combined.csv. The rest are scalar cohort-growth ratios
-per (stock, year), derived from growth_factors' AEO cohort splits.
+comes from shell_factors_combined.csv. upgrade_factors / baseline_scenario_factors
+return scalar cohort-growth ratios per (stock, year), derived from
+growth_factors' AEO cohort splits. gap_growth_factor scales the commercial gap
+profile by AEO floorspace growth. GAP_DERATING_FACTOR is a year-/scenario-
+independent constant applied to the ComStock gap profile (T&D losses + other
+consumption-side adjustments between the gap-model output and what shows up at
+the consumption meter).
 """
 
 from __future__ import annotations
