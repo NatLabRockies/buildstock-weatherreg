@@ -136,7 +136,6 @@ projections.
 | H | `H_run_lbl.sh` | SLURM wrapper | Runs `python -m projections.lbl <run_dir>` (parallel ProcessPool) |
 | — | `projections/` | package | Future-year projections + ReEDs / LBL / intermediate handoff modules (see below) |
 | — | `agg_buildings.py` | Python | Stitches per-chunk hourly CSVs into one per-enduse CSV at county resolution |
-| — | `recover_chunk.py` | Python | Manual chunk re-run helper (used during incident response) |
 | — | `epw_sync.py` | Python | One-time download of EPW weather files (off-Kestrel only) |
 | — | `slurm_defaults.sh` | shell | Centralizes chunk-worker SLURM profile (partition, cpus, mem, array cap) so A and B agree |
 | — | `validation.py` / `validation_supplemental.py` | Python | Reg-vs-ref diagnostics |
@@ -267,8 +266,7 @@ Resolutions supported by `--resolution`:
 ## Handoffs
 
 Three folders under the run_dir, one per downstream consumer. Each handoff
-follows its own spec image (see `LBL_Handoff_requirement.png`, `ReEDs.png`,
-`intermediate.png`):
+follows its own spec image:
 
 ### `ReEDs/` — state-aggregated, wide, MWh, lowercase
 

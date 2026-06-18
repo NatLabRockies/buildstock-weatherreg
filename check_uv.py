@@ -1,1 +1,0 @@
-print("Hello from check_uv.py!")
