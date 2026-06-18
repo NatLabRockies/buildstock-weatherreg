@@ -7,18 +7,14 @@
 #SBATCH --job-name=dash_bake
 #SBATCH --output=slurm-%x_%j.out
 
-# Bake the BuildStock projection dashboard from one res run_dir + one com
-# run_dir, in two stages:
-#   1. aggregate.py        — reads ReEDs/, intermediate/state/, LBL/ and
-#                            writes plots/data/main.js + plots/data/state_*.js
-#                            (heavy I/O, ~5-7 min).
-#   2. build_dashboard.py  — copies the template into plots/dashboard.html
-#                            (sub-second). The HTML references
-#                            data/main.js via <script src> and lazy-loads
-#                            data/state_<postal>.js on state click.
+# Bake the BuildStock projection dashboard's data sidecars from one res run_dir
+# + one com run_dir. Writes:
+#   plots/data/main.js      ~55 MB   (CONUS payload, eager load)
+#   plots/data/state_*.js   ~10 MB × 49 (per-state, lazy-loaded on click)
 #
-# Iterate on plot design by re-running just step 2 from the login node —
-# no need to repeat step 1 unless the source run_dirs change.
+# The dashboard itself is `plots/dashboard.html` — committed to git, edit
+# directly. It references data/main.js via <script src>. After this bake,
+# refresh the browser to pick up new data.
 #
 # Usage:
 #   sbatch plots/I_run_bake.sh <res_run_dir> <com_run_dir>
@@ -42,15 +38,7 @@ echo "com:        $com_run_dir"
 echo "workers:    $BAKE_WORKERS"
 echo "slurm node: ${SLURMD_NODENAME:-unknown}"
 echo
-echo "============================================================"
-echo "STAGE 1: aggregate.py — reading handoffs, writing payload.json"
-echo "============================================================"
+
 uv run python -u plots/aggregate.py \
     --res-run-dir "$res_run_dir" \
     --com-run-dir "$com_run_dir"
-
-echo
-echo "============================================================"
-echo "STAGE 2: build_dashboard.py — payload + template → HTML"
-echo "============================================================"
-uv run python -u plots/build_dashboard.py

@@ -2,13 +2,18 @@
 
 Reads three handoff folders (ReEDs/, intermediate/state/, LBL/) from one
 ResStock and one ComStock run_dir, pre-aggregates everything to the smallest
-shapes the dashboard's four-tab plot set actually needs, and writes the
-result as a single payload.json file to disk.
+shapes the dashboard's four-tab plot set actually needs, and writes:
 
-This file is the *intermediate* between heavy I/O and HTML emission, so you
-can iterate on plot design (dashboard_template.html, build_dashboard.py)
-without re-reading the source CSVs. Re-run aggregate.py only when the
-source run_dirs change.
+  plots/data/main.js          ~55 MB   (CONUS payload — sets window.PAYLOAD)
+  plots/data/state_<postal>.js ~10 MB × 49  (per-state — lazy-loaded via
+                                            <script> injection on click)
+
+The dashboard itself is `plots/dashboard.html` (tracked in git, edit
+directly). It references `data/main.js` via <script src>. After this
+script writes new data/, refresh the browser to pick it up.
+
+Re-run aggregate.py only when the source run_dirs change. Edit
+dashboard.html directly to iterate on plot design — no build step.
 
 EXACTLY WHAT GETS COMPUTED
 ==========================
