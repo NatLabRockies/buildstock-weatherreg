@@ -941,35 +941,32 @@ function renderCohort() {
       hovertemplate: `<b>${c.label}</b><br>%{x|%b %d}: %{y:,.0f} GWh<extra></extra>`,
     }));
 
-  // Show BOTH winter + summer peak annotations on the daily view (the daily
-  // chart doesn't visualize hourly peaks itself, so two labels mark when
-  // and how big each seasonal peak was). Each annotation anchors at the
-  // stacked daily total on its peak day.
-  const wkAll = ((PAYLOAD.panel3[state.scenario] || {})[stockYear()] || {})[wy];
+  // Show BOTH winter + summer peak annotations on the daily view. Use
+  // getPeakWeekEntry — the same state-aware helper the bottom-right uses
+  // — so when a state is selected the annotation shows that state's peak
+  // (within the CONUS peak window) rather than CONUS's.
   const peakAnns = [];
-  if (wkAll) {
-    [
-      {key: 'winter', label: 'Winter peak', color: '#1c4f93'},
-      {key: 'summer', label: 'Summer peak', color: '#b25a1a'},
-    ].forEach(({key, label, color}) => {
-      const w = wkAll[key];
-      if (!w) return;
-      const peakDateStr = w.peak_iso.slice(0, 10);
-      const peakDayIdx = entry.dates.findIndex(d => d.startsWith(peakDateStr));
-      const stackHeight = peakDayIdx >= 0
-        ? COHORT_DEF.filter(c => Array.isArray(entry.cohorts[c.key]))
-            .reduce((sum, c) => sum + (entry.cohorts[c.key][peakDayIdx] || 0), 0)
-        : 0;
-      peakAnns.push({
-        x: peakDateStr, y: stackHeight,
-        text: `${label}<br>${w.peak_gw.toFixed(1)} GW`,
-        xref: 'x', yref: 'y', showarrow: true,
-        arrowhead: 0, ay: -22, ax: 0,
-        font: {size: 10, color: color}, bgcolor: 'rgba(255,255,255,0.9)',
-        bordercolor: color, borderwidth: 1, borderpad: 3,
-      });
+  [
+    {key: 'winter', label: 'Winter peak', color: '#1c4f93'},
+    {key: 'summer', label: 'Summer peak', color: '#b25a1a'},
+  ].forEach(({key, label, color}) => {
+    const w = getPeakWeekEntry(state.trajState, state.scenario, stockYear(), wy, key);
+    if (!w) return;
+    const peakDateStr = w.peak_iso.slice(0, 10);
+    const peakDayIdx = entry.dates.findIndex(d => d.startsWith(peakDateStr));
+    const stackHeight = peakDayIdx >= 0
+      ? COHORT_DEF.filter(c => Array.isArray(entry.cohorts[c.key]))
+          .reduce((sum, c) => sum + (entry.cohorts[c.key][peakDayIdx] || 0), 0)
+      : 0;
+    peakAnns.push({
+      x: peakDateStr, y: stackHeight,
+      text: `${label}<br>${w.peak_gw.toFixed(1)} GW`,
+      xref: 'x', yref: 'y', showarrow: true,
+      arrowhead: 0, ay: -22, ax: 0,
+      font: {size: 10, color: color}, bgcolor: 'rgba(255,255,255,0.9)',
+      bordercolor: color, borderwidth: 1, borderpad: 3,
     });
-  }
+  });
 
   const layout = {
     margin: {t: 30, r: 8, b: 36, l: 70},
