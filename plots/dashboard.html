@@ -460,11 +460,17 @@ function peakReEDs(sc, y, wy) {
   return ((PAYLOAD.panel1.peak_gw[sc] || {})[y] || {})[wy];
 }
 
+// Unified lookup into state_by_sector. For peak_gw the stored value is a
+// dict {annual, summer, winter} — this helper returns the annual scalar so
+// existing call sites (trajectory + breakdown + axis pinning) keep working.
+// The seasonal Peak GW choropleth reads the dict directly via its own path.
 function stateMetricLookup(metric, sc, y, wy, sector, stOrConus) {
   // metric: 'annual_gwh' | 'peak_gw';  stOrConus: 'CONUS' | postal
   const tree = (PAYLOAD.state_by_sector[metric][sc] || {})[y] || {};
   const sec_d = (tree[wy] || {})[sector] || {};
-  return sec_d[stOrConus];
+  const v = sec_d[stOrConus];
+  // peak_gw stores {annual, summer, winter}; non-seasonal callers want annual.
+  return (v && typeof v === 'object') ? v.annual : v;
 }
 
 // === Build controls ======================================================
@@ -732,26 +738,22 @@ function renderMap() {
   // for savings/pct_savings.
   let colorscale, zmin, zmax, cbTitle;
   let isSeasonalPeak = false;
-  if (mode === 'absolute' && metric === 'peak_gw' && PAYLOAD.seasonal_peak_by_state) {
+  if (mode === 'absolute' && metric === 'peak_gw') {
     // Diverging: + winter-peaking, − summer-peaking; magnitude = peak GW.
+    // Read straight from state_by_sector.peak_gw — the values are now
+    // {annual, summer, winter} dicts so the seasonal split lives where
+    // every other peak lookup already goes (no duplicate data structure).
     isSeasonalPeak = true;
-    const sp = ((PAYLOAD.seasonal_peak_by_state[state.scenario] || {})[y] || {})[wy] || {};
+    const sec_d = (((PAYLOAD.state_by_sector.peak_gw[state.scenario] || {})[y] || {})[wy] || {})[sector] || {};
     values = states.map(s => {
-      const e = sp[s];
-      if (!e) return null;
-      return e.winter_peak >= e.summer_peak ? +e.winter_peak : -e.summer_peak;
+      const e = sec_d[s];
+      if (!e || typeof e !== 'object') return null;
+      return e.winter >= e.summer ? +e.winter : -e.summer;
     });
-    // CONUS signed value: which season's CONUS peak is bigger?
-    const c = (((PAYLOAD.panel3[state.scenario] || {})[y] || {})[wy] || {});
-    if (c.winter && c.summer) {
-      conusVal = c.winter.peak_gw >= c.summer.peak_gw ? +c.winter.peak_gw : -c.summer.peak_gw;
-    } else if (c.winter) {
-      conusVal = +c.winter.peak_gw;
-    } else if (c.summer) {
-      conusVal = -c.summer.peak_gw;
-    } else {
-      conusVal = null;
-    }
+    const cE = sec_d['CONUS'];
+    conusVal = (cE && typeof cE === 'object')
+      ? (cE.winter >= cE.summer ? +cE.winter : -cE.summer)
+      : null;
     colorscale = SEASONAL_PEAK_COLORSCALE;
     // Use only per-STATE values to set the scale — including CONUS would
     // wash everything out because CONUS = Σ states is ~10× any state.
