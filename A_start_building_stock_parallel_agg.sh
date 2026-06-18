@@ -47,10 +47,9 @@ source /kfs2/shared-projects/buildstock/aws_credentials.sh
 # from the partition this launcher is running in. B reads these env vars when
 # building sbatch invocations for the C array and F aggregator.
 source ./slurm_defaults.sh
-# Unset srun-convenience defaults that would otherwise be inherited by B's
-# subprocess sbatch calls and OVERRIDE C/F's #SBATCH directives. Slurm
-# precedence is CLI > env > #SBATCH, so a leaked SBATCH_TIMELIMIT=00:20:00
-# silently caps chunk jobs to 20 min (this hit us once already).
+# Defensive: SLURM precedence is CLI > env > #SBATCH, so any SBATCH_TIMELIMIT
+# leaked from the user's shell rc would silently shorten C/F (which ask for 3 h
+# / 2 h) on their #SBATCH lines. Unset to make sure that can't happen.
 unset SBATCH_TIMELIMIT SLURM_TIMELIMIT
 echo "Chunk profile: partition=$CHUNK_PARTITION cpus=$CHUNK_CPUS mem_mb=$CHUNK_MEM_MB array_cap=$CHUNK_ARRAY_CONCURRENCY"
 # aws sso login
