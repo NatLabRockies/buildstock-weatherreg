@@ -326,6 +326,17 @@ const SAVINGS_COLORSCALE = [
   [1.00, 'rgb(27,120,55)'],     // green at zmax
 ];
 
+// Seasonal peak colorscale: red (negative = summer-peaking, hot states)
+// → white (balanced) → blue (positive = winter-peaking, cold states).
+// Magnitude = state's peak GW for the dominant season.
+const SEASONAL_PEAK_COLORSCALE = [
+  [0.00, 'rgb(178,24,43)'],     // red — summer peak (bottom)
+  [0.25, 'rgb(214,96,77)'],
+  [0.50, 'rgb(247,247,247)'],   // white — balanced
+  [0.75, 'rgb(67,147,195)'],
+  [1.00, 'rgb(33,102,172)'],    // blue — winter peak (top)
+];
+
 const state = {
   tab:           'reeds',
   scenario:      PAYLOAD.scenarios[0],
@@ -711,16 +722,48 @@ function renderMap() {
     if (mode === 'pct_savings') return refV ? (refV - curV) / refV * 100 : null;
     return curV;
   };
-  const values = states.map(s => computeValue(cur[s], ref[s]));
-  const conusVal = computeValue(cur['CONUS'], ref['CONUS']);
+  let values = states.map(s => computeValue(cur[s], ref[s]));
+  let conusVal = computeValue(cur['CONUS'], ref['CONUS']);
 
-  // Colorscale + zmin/zmax: monotonic for absolute, diverging for savings.
+  // Colorscale + zmin/zmax: monotonic for absolute energy, diverging
+  // (signed by season) for absolute peak, diverging (signed by savings)
+  // for savings/pct_savings.
   let colorscale, zmin, zmax, cbTitle;
-  if (mode === 'absolute') {
+  let isSeasonalPeak = false;
+  if (mode === 'absolute' && metric === 'peak_gw') {
+    // Diverging: + winter-peaking, − summer-peaking; magnitude = peak GW.
+    isSeasonalPeak = true;
+    const sp = ((PAYLOAD.seasonal_peak_by_state[state.scenario] || {})[y] || {})[wy] || {};
+    values = states.map(s => {
+      const e = sp[s];
+      if (!e) return null;
+      return e.winter_peak >= e.summer_peak ? +e.winter_peak : -e.summer_peak;
+    });
+    // CONUS signed value: which season's CONUS peak is bigger?
+    const c = (((PAYLOAD.panel3[state.scenario] || {})[y] || {})[wy] || {});
+    if (c.winter && c.summer) {
+      conusVal = c.winter.peak_gw >= c.summer.peak_gw ? +c.winter.peak_gw : -c.summer.peak_gw;
+    } else if (c.winter) {
+      conusVal = +c.winter.peak_gw;
+    } else if (c.summer) {
+      conusVal = -c.summer.peak_gw;
+    } else {
+      conusVal = null;
+    }
+    colorscale = SEASONAL_PEAK_COLORSCALE;
+    const maxAbs = Math.max(
+      ...values.filter(v => v !== null && !Number.isNaN(v)).map(v => Math.abs(v)),
+      Math.abs(conusVal || 0),
+      1,
+    );
+    zmin = -maxAbs;
+    zmax = +maxAbs;
+    cbTitle = 'Peak power (GW)<br>↑ winter ⋅ ↓ summer';
+  } else if (mode === 'absolute') {
     colorscale = 'YlGnBu';
     zmin = 0;
     zmax = (PAYLOAD.axis.choropleth_max[sector] || {})[metric] || 1;
-    cbTitle = metric === 'annual_gwh' ? 'GWh / yr' : 'GW peak';
+    cbTitle = metric === 'annual_gwh' ? 'Annual energy (GWh / yr)' : 'Peak power (GW)';
   } else {
     colorscale = SAVINGS_COLORSCALE;     // red=uses more, white=zero, green=saves
     const numeric = values.filter(v => v !== null && !Number.isNaN(v));
@@ -730,8 +773,8 @@ function renderMap() {
     zmin = -maxAbs;
     zmax =  maxAbs;
     cbTitle = mode === 'savings'
-      ? (metric === 'annual_gwh' ? 'GWh / yr saved' : 'GW peak saved')
-      : '% saved';
+      ? (metric === 'annual_gwh' ? 'Energy saved (GWh / yr)' : 'Peak saved (GW)')
+      : 'Energy saved (%)';
   }
 
   const unit = mode === 'pct_savings' ? ' %'
@@ -740,6 +783,10 @@ function renderMap() {
   const fmtConus = v => {
     if (v === null) return '—';
     if (mode === 'pct_savings') return (v > 0 ? '+' : '') + v.toFixed(2) + ' %';
+    if (isSeasonalPeak) {
+      const season = v >= 0 ? 'winter' : 'summer';
+      return `${fmtPower(Math.abs(v))} (${season})`;
+    }
     return metric === 'annual_gwh' ? fmtEnergy(v) : fmtPower(v);
   };
   const fmtVal = v => v === null ? '—'
@@ -748,9 +795,15 @@ function renderMap() {
 
   // Compact label for on-map text: state postal + a tight value summary.
   // Numbers with |v|>=10k get a 'k' suffix; percent gets 1 decimal + sign.
+  // In seasonalPeak mode, the sign carries season info (− summer, + winter)
+  // so show absolute magnitude and prefix with W/S.
   const fmtCompact = (v) => {
     if (v === null || v === undefined || Number.isNaN(v)) return '';
     if (mode === 'pct_savings') return (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+    if (isSeasonalPeak) {
+      const season = v >= 0 ? 'W' : 'S';
+      return `${season} ${Math.abs(v).toFixed(0)}`;
+    }
     const abs = Math.abs(v);
     if (abs >= 100000) return (v/1000).toFixed(0) + 'k';
     if (abs >=  10000) return (v/1000).toFixed(1) + 'k';
@@ -763,14 +816,24 @@ function renderMap() {
     return compact ? `<b>${s}</b><br>${compact}` : `<b>${s}</b>`;
   });
 
+  // In seasonal-peak mode, customdata carries the season name so the hover
+  // tooltip can display "129 GW peak (summer)" rather than a raw negative.
+  const customData = isSeasonalPeak
+    ? values.map(v => v === null ? '' : (v >= 0 ? 'winter' : 'summer'))
+    : null;
+  const hoverTpl = isSeasonalPeak
+    ? `<b>%{location}</b><br>%{z:.1f} GW (%{customdata} peak)<extra></extra>`
+    : `<b>%{location}</b><br>%{z:,.2f}${unit}<extra></extra>`;
+  // For seasonal peak, z stays signed (for color) but hover displays it as
+  // signed for clarity ("+" = winter, "−" = summer in d3 format).
   const data = [
     {
       type: 'choropleth', locationmode: 'USA-states',
-      locations: states, z: values,
+      locations: states, z: values, customdata: customData,
       zmin: zmin, zmax: zmax, colorscale: colorscale,
-      colorbar: {title: cbTitle, thickness: 12, len: 0.8},
+      colorbar: {title: {text: cbTitle, side: 'right'}, thickness: 12, len: 0.8},
       marker: {line: {color: '#fff', width: 0.5}},
-      hovertemplate: `<b>%{location}</b><br>%{z:,.2f}${unit}<extra></extra>`,
+      hovertemplate: hoverTpl,
     },
     {
       // State labels (postal + value) overlay.
@@ -840,31 +903,34 @@ function renderCohort() {
       hovertemplate: `<b>${c.label}</b><br>%{x|%b %d}: %{y:,.0f} GWh<extra></extra>`,
     }));
 
-  // Pick the larger of winter/summer peak from panel3 for the annotation.
-  // Anchor at the stacked daily total ON the peak day (yref='y'), matching
-  // the shape used by the bottom-right peak-week panel. Label still reads
-  // the hourly peak power; position just makes the arrow land at the stack.
+  // Show BOTH winter + summer peak annotations on the daily view (the daily
+  // chart doesn't visualize hourly peaks itself, so two labels mark when
+  // and how big each seasonal peak was). Each annotation anchors at the
+  // stacked daily total on its peak day.
   const wkAll = ((PAYLOAD.panel3[state.scenario] || {})[stockYear()] || {})[wy];
-  let peakAnn = null;
+  const peakAnns = [];
   if (wkAll) {
-    const w = wkAll.winter, s = wkAll.summer;
-    const winner = (s && (!w || s.peak_gw >= w.peak_gw)) ? s : w;
-    if (winner) {
-      const peakDateStr = winner.peak_iso.slice(0, 10);
+    [
+      {key: 'winter', label: 'Winter peak', color: '#1c4f93'},
+      {key: 'summer', label: 'Summer peak', color: '#b25a1a'},
+    ].forEach(({key, label, color}) => {
+      const w = wkAll[key];
+      if (!w) return;
+      const peakDateStr = w.peak_iso.slice(0, 10);
       const peakDayIdx = entry.dates.findIndex(d => d.startsWith(peakDateStr));
       const stackHeight = peakDayIdx >= 0
         ? COHORT_DEF.filter(c => Array.isArray(entry.cohorts[c.key]))
             .reduce((sum, c) => sum + (entry.cohorts[c.key][peakDayIdx] || 0), 0)
         : 0;
-      peakAnn = {
+      peakAnns.push({
         x: peakDateStr, y: stackHeight,
-        text: `peak ${winner.peak_gw.toFixed(1)} GW @ ${winner.peak_iso.slice(5, 13)}h`,
+        text: `${label}<br>${w.peak_gw.toFixed(1)} GW`,
         xref: 'x', yref: 'y', showarrow: true,
         arrowhead: 0, ay: -22, ax: 0,
-        font: {size: 11, color: '#1c4f93'}, bgcolor: 'rgba(255,255,255,0.85)',
-        bordercolor: '#1c4f93', borderwidth: 1, borderpad: 3,
-      };
-    }
+        font: {size: 10, color: color}, bgcolor: 'rgba(255,255,255,0.9)',
+        bordercolor: color, borderwidth: 1, borderpad: 3,
+      });
+    });
   }
 
   const layout = {
@@ -875,7 +941,7 @@ function renderCohort() {
     legend: {orientation: 'h', y: -0.15, font: {size: 10}, traceorder: 'normal'},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
     title: {text: `${state.scenario} · ${state.trajState} · stock ${stockYear()} · amy${wy}`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
-    annotations: peakAnn ? [peakAnn] : [],
+    annotations: peakAnns,
   };
   Plotly.react('plot-cohort', traces, layout, {displayModeBar: false, responsive: true});
 }
@@ -914,9 +980,12 @@ function renderCohortPeakWeek() {
             x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
     annotations: [{
       x: wk.peak_iso, y: wk.peak_gw,
-      text: `peak ${wk.peak_gw.toFixed(1)} GW`,
-      xref: 'x', yref: 'y', showarrow: true, arrowhead: 0, ax: 0, ay: -22,
-      font: {size: 11, color: '#1c4f93'}, bgcolor: 'rgba(255,255,255,0.85)',
+      text: `${state.cohortSeason === 'winter' ? 'Winter' : 'Summer'} peak<br>${wk.peak_gw.toFixed(1)} GW`,
+      xref: 'x', yref: 'y', showarrow: true, arrowhead: 0, ax: 0, ay: -28,
+      font: {size: 11, color: state.cohortSeason === 'winter' ? '#1c4f93' : '#b25a1a'},
+      bgcolor: 'rgba(255,255,255,0.9)',
+      bordercolor: state.cohortSeason === 'winter' ? '#1c4f93' : '#b25a1a',
+      borderwidth: 1, borderpad: 3,
     }],
   };
   Plotly.react('plot-cohort-pk', traces, layout, {displayModeBar: false, responsive: true});

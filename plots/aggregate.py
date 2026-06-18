@@ -533,6 +533,66 @@ def _lbl_one_file_task(path_str: str) -> tuple[str, str, str, int, int, float] |
 
 
 # === Panel builders =======================================================
+def _seasonal_peak_per_state(args: tuple) -> tuple[str, int, dict]:
+    """For one (scenario, year): compute each state's max value within the
+    summer (Jun-Sep) and winter (Dec-Feb) windows per weather year. This
+    powers the choropleth's seasonal-peak diverging colorscale: which states
+    peak in summer vs winter, and by how much.
+
+    Returns: (scenario, year, by_wy) where
+      by_wy[wy][state] = {'summer_peak': float, 'winter_peak': float}
+    """
+    res_inter, com_inter, scenario, year = args
+    total: pd.DataFrame | None = None
+    for paths, file_sector, cohorts in [(res_inter, 'residential', RES_COHORTS),
+                                        (com_inter, 'commercial',  COM_COHORTS)]:
+        for cohort in cohorts:
+            key = (scenario, file_sector, cohort, 'total', year)
+            p = paths.get(key)
+            if p is None:
+                continue
+            df = _read_with_index(p)
+            total = df if total is None else total.add(df, fill_value=0.0)
+    if total is None:
+        return scenario, year, {}
+    by_wy: dict = {}
+    for wy in sorted(set(int(y) for y in total.index.year.unique())):
+        wy_mask = total.index.year == wy
+        wy_total = total[wy_mask]
+        summer = wy_total[wy_total.index.month.isin([6, 7, 8, 9])]
+        winter = wy_total[wy_total.index.month.isin([12, 1, 2])]
+        summer_max = summer.max() if not summer.empty else None
+        winter_max = winter.max() if not winter.empty else None
+        by_wy[wy] = {
+            st: {
+                'summer_peak': float(summer_max[st]) if summer_max is not None else 0.0,
+                'winter_peak': float(winter_max[st]) if winter_max is not None else 0.0,
+            }
+            for st in wy_total.columns
+        }
+    return scenario, year, by_wy
+
+
+def panel_seasonal_peak_by_state(
+    res_inter: dict[tuple[str, str, str, str, int], Path],
+    com_inter: dict[tuple[str, str, str, str, int], Path],
+) -> dict:
+    """Parallel over (scenario, year): per-state seasonal peak (summer max
+    in Jun-Sep, winter max in Dec-Feb) per weather year. Embedded into
+    main.js — small (~400 KB) and enables the seasonal-peak choropleth."""
+    tasks = [(res_inter, com_inter, s, y) for s in SCENARIOS for y in STOCK_YEARS]
+    out: dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
+    _log(f'  seasonal-peak — {len(tasks)} (scenario, year) tasks across {WORKERS} processes')
+    done = 0
+    with ProcessPoolExecutor(max_workers=WORKERS) as pool:
+        for scenario, year, by_wy in pool.map(_seasonal_peak_per_state, tasks):
+            done += 1
+            out[scenario][year] = by_wy
+            if done == 1 or done == len(tasks) or done % 8 == 0:
+                _log(f'    ({done:>2}/{len(tasks)}) {scenario} y{year}')
+    return out
+
+
 def panel3_peak_week(
     res_inter: dict[tuple[str, str, str, str, int], Path],
     com_inter: dict[tuple[str, str, str, str, int], Path],
@@ -784,6 +844,9 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
     _log('D. panel_cohort_daily_all_wys — daily cohort decomp, every wy...')
     cohort_daily_conus, cohort_daily_per_state = panel_cohort_daily_all_wys(res_inter, com_inter)
 
+    _log('D2. panel_seasonal_peak_by_state — for choropleth diverging Peak GW mode...')
+    seasonal_peak_by_state = panel_seasonal_peak_by_state(res_inter, com_inter)
+
     _log('E. panel_intermediate_annual (kept for reconciliation)...')
     intermediate_annual = panel_intermediate_annual(res_inter, com_inter)
 
@@ -850,6 +913,7 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
         'panel3':              panel3_conus,
         'state_by_sector':     state_by_sector,
         'cohort_daily':        cohort_daily_conus,
+        'seasonal_peak_by_state': seasonal_peak_by_state,
         'intermediate_annual': intermediate_annual,
         'lbl_annual':          lbl_annual,
         'meta': {
