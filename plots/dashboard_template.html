@@ -817,22 +817,31 @@ function renderMap() {
     return compact ? `<b>${s}</b><br>${compact}` : `<b>${s}</b>`;
   });
 
-  // In seasonal-peak mode, customdata carries the season name so the hover
-  // tooltip can display "129 GW peak (summer)" rather than a raw negative.
+  // In seasonal-peak mode, z stays signed (so the diverging colorscale
+  // renders correctly) but the hover and colorbar ticks display absolute
+  // magnitudes with a season label. customdata is [season_name, |value|]
+  // so the hovertemplate can pull them by index.
   const customData = isSeasonalPeak
-    ? values.map(v => v === null ? '' : (v >= 0 ? 'winter' : 'summer'))
+    ? values.map(v => v === null ? ['', 0] : (v >= 0 ? ['winter', v] : ['summer', -v]))
     : null;
   const hoverTpl = isSeasonalPeak
-    ? `<b>%{location}</b><br>%{z:.1f} GW (%{customdata} peak)<extra></extra>`
+    ? `<b>%{location}</b><br>%{customdata[1]:.1f} GW (%{customdata[0]} peak)<extra></extra>`
     : `<b>%{location}</b><br>%{z:,.2f}${unit}<extra></extra>`;
-  // For seasonal peak, z stays signed (for color) but hover displays it as
-  // signed for clarity ("+" = winter, "−" = summer in d3 format).
+
+  // Colorbar config: in seasonal mode, override the tick labels so both
+  // halves of the diverging scale read as positive magnitudes.
+  const colorbarCfg = {title: {text: cbTitle, side: 'right'}, thickness: 12, len: 0.8};
+  if (isSeasonalPeak) {
+    colorbarCfg.tickvals = [-zmax, -zmax/2, 0, zmax/2, zmax];
+    colorbarCfg.ticktext = colorbarCfg.tickvals.map(v => Math.abs(v).toFixed(0));
+  }
+
   const data = [
     {
       type: 'choropleth', locationmode: 'USA-states',
       locations: states, z: values, customdata: customData,
       zmin: zmin, zmax: zmax, colorscale: colorscale,
-      colorbar: {title: {text: cbTitle, side: 'right'}, thickness: 12, len: 0.8},
+      colorbar: colorbarCfg,
       marker: {line: {color: '#fff', width: 0.5}},
       hovertemplate: hoverTpl,
     },
