@@ -109,9 +109,34 @@
           background: var(--panel); border: 1px dashed var(--border); border-radius: 10px; }
 
   footer { text-align: right; color: var(--muted); font-size: 11px; padding: 8px 32px 24px; }
+
+  /* Scenario-chip color swatch */
+  .pill .chip-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    margin-right: 4px; vertical-align: middle; transform: translateY(-1px);
+  }
+  .pill.active .chip-dot { box-shadow: 0 0 0 1.5px #fff; }
+
+  /* Stock-year tick labels under the slider, aligned to the track */
+  .tick-labels {
+    display: flex; justify-content: space-between;
+    font-size: 9px; color: var(--muted);
+    margin: 1px 42px 0 88px;
+  }
+
+  /* First-paint splash. Hidden by JS after initial render. */
+  #loading-splash {
+    position: fixed; inset: 0; background: #fff; z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; color: var(--accent); font-weight: 500;
+    transition: opacity 0.25s ease-out;
+  }
+  #loading-splash.hidden { opacity: 0; pointer-events: none; }
 </style>
 </head>
 <body>
+
+<div id="loading-splash">Loading dashboard…</div>
 
 <div class="sticky-top">
   <header class="title">
@@ -308,6 +333,22 @@ function fmt(n, digits=0) {
   return Number(n).toLocaleString(undefined, {maximumFractionDigits: digits, minimumFractionDigits: digits});
 }
 
+// Smart energy formatter: TWh for very large GWh, k GWh for thousands, GWh
+// for small. Used in the map's CONUS annotation and any place big GWh
+// numbers would otherwise read as "3,421,766 GWh".
+function fmtEnergy(v) {
+  if (v === null || v === undefined || Number.isNaN(v)) return '—';
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000) return (v / 1_000_000).toFixed(2) + ' TWh';
+  if (abs >=    10_000) return (v / 1000).toFixed(1) + 'k GWh';
+  if (abs >=     1_000) return (v / 1000).toFixed(2) + 'k GWh';
+  return Number(v).toLocaleString(undefined, {maximumFractionDigits: 1}) + ' GWh';
+}
+function fmtPower(v) {
+  if (v === null || v === undefined || Number.isNaN(v)) return '—';
+  return Number(v).toLocaleString(undefined, {maximumFractionDigits: 1}) + ' GW';
+}
+
 function annualReEDs(sc, y, wy) {
   return ((PAYLOAD.panel1.annual_gwh[sc] || {})[y] || {})[wy];
 }
@@ -327,23 +368,25 @@ function buildControls() {
   document.getElementById('run-dirs').textContent =
       'res: ' + PAYLOAD.meta.res_run_dir + '   ·   com: ' + PAYLOAD.meta.com_run_dir;
 
-  // Scenario chips
+  // Scenario chips — colored dot ties chip to trajectory line color
   const scenarioEl = document.getElementById('ctl-scenario');
   PAYLOAD.scenarios.forEach(s => {
     const b = document.createElement('button');
     b.className = 'pill' + (s === state.scenario ? ' active' : '');
-    b.textContent = s;
+    b.innerHTML = `<span class="chip-dot" style="background:${PAYLOAD.colors[s]}"></span>${s}`;
     b.onclick = () => { state.scenario = s; refresh(); };
     scenarioEl.appendChild(b);
   });
 
-  // Stock year slider
+  // Stock year slider — discrete values; show all 6 as tick labels
   const syEl = document.getElementById('ctl-stockyear');
   syEl.min = 0; syEl.max = PAYLOAD.stock_years.length - 1; syEl.value = state.stockYearIdx;
   syEl.oninput = () => { state.stockYearIdx = +syEl.value; refresh(); };
   document.getElementById('ctl-stockyear-val').textContent = stockYear();
-  document.getElementById('ctl-stockyear-ends').innerHTML =
-      `<span style="margin-left:96px;">${PAYLOAD.stock_years[0]}</span><span>${PAYLOAD.stock_years[PAYLOAD.stock_years.length-1]}</span>`;
+  const syTicks = document.getElementById('ctl-stockyear-ends');
+  syTicks.classList.add('tick-labels');
+  syTicks.classList.remove('endpts');
+  syTicks.innerHTML = PAYLOAD.stock_years.map(y => `<span>${y}</span>`).join('');
 
   // Weather year slider
   const wyEl = document.getElementById('ctl-weatheryear');
@@ -488,9 +531,11 @@ function renderTrajectoryTotal() {
   const layout = {
     margin: {t: 24, r: 8, b: 36, l: 70},
     xaxis: {tickmode: 'array', tickvals: PAYLOAD.stock_years},
-    yaxis: {title: yLabel, gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05]},
+    yaxis: {title: yLabel, gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05],
+            tickformat: metric === 'annual_gwh' ? '.2s' : undefined},
     legend: {orientation: 'h', y: -0.18, font: {size: 11}, groupclick: 'togglegroup'},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    hovermode: 'x unified',           // all visible scenario lines at hovered year
     title: {text: `${stSel} · amy${wySel} highlighted`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
   };
   Plotly.react('plot-trajectory', traces, layout, {displayModeBar: false, responsive: true});
@@ -533,9 +578,11 @@ function renderTrajectoryBreakdown() {
   const layout = {
     margin: {t: 24, r: 8, b: 36, l: 70},
     xaxis: {tickmode: 'array', tickvals: PAYLOAD.stock_years},
-    yaxis: {title: yLabel, gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05]},
+    yaxis: {title: yLabel, gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05],
+            tickformat: metric === 'annual_gwh' ? '.2s' : undefined},
     legend: {orientation: 'h', y: -0.18, font: {size: 11}},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    hovermode: 'x unified',
     title: {text: `${scenario} · ${stSel} · amy${wySel}` + (metric === 'peak_gw' ? '  (Σ at peak hour)' : ''),
             x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
   };
@@ -587,6 +634,12 @@ function renderMap() {
 
   const unit = mode === 'pct_savings' ? ' %'
              : (metric === 'annual_gwh' ? ' GWh' : ' GW');
+  // CONUS annotation gets the human-readable formatter (TWh for big GWh).
+  const fmtConus = v => {
+    if (v === null) return '—';
+    if (mode === 'pct_savings') return (v > 0 ? '+' : '') + v.toFixed(2) + ' %';
+    return metric === 'annual_gwh' ? fmtEnergy(v) : fmtPower(v);
+  };
   const fmtVal = v => v === null ? '—'
                     : (mode === 'pct_savings' ? v.toFixed(1)
                        : Number(v).toLocaleString(undefined, {maximumFractionDigits: 1}));
@@ -634,7 +687,7 @@ function renderMap() {
   const sameAsRef = (mode !== 'absolute' && refSc === state.scenario);
   const annText = sameAsRef
     ? `<b>CONUS</b><br>(${state.scenario} vs ${refSc} = self)`
-    : `<b>CONUS:</b> ${fmtVal(conusVal)}${unit}`;
+    : `<b>CONUS:</b> ${fmtConus(conusVal)}`;
 
   // Title label — same pattern as other panels. For savings/pct_savings,
   // include "vs <ref>" so the comparison is visible at a glance.
@@ -711,7 +764,8 @@ function renderCohort() {
   const layout = {
     margin: {t: 30, r: 8, b: 36, l: 70},
     xaxis: {gridcolor: '#eee', tickformat: '%b %d'},
-    yaxis: {title: 'Daily energy (GWh / day)', gridcolor: '#eee', zeroline: false},
+    yaxis: {title: 'Daily energy (GWh / day)', gridcolor: '#eee', zeroline: false,
+            tickformat: '.2s'},
     legend: {orientation: 'h', y: -0.15, font: {size: 10}, traceorder: 'normal'},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
     title: {text: `${state.scenario} · stock ${stockYear()} · amy${wy}`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
@@ -845,6 +899,29 @@ function refresh() {
 buildControls();
 refresh();
 injectExpandButtons();
+
+// Cross-panel linking: clicking a state on the map drills the trajectory
+// to that state. Clicking the same state again goes back to CONUS.
+const mapDiv = document.getElementById('plot-map');
+if (mapDiv && mapDiv.on) {
+  mapDiv.on('plotly_click', (evt) => {
+    const pt = evt?.points?.[0];
+    if (!pt?.location) return;       // ignore clicks on the text overlay
+    const next = (state.trajState === pt.location) ? 'CONUS' : pt.location;
+    state.trajState = next;
+    document.getElementById('traj-state').value = next;
+    renderTrajectory();
+  });
+}
+
+// First-paint splash off after the initial render finishes.
+requestAnimationFrame(() => {
+  const splash = document.getElementById('loading-splash');
+  if (splash) {
+    splash.classList.add('hidden');
+    setTimeout(() => splash.remove(), 300);
+  }
+});
 </script>
 </body>
 </html>
