@@ -692,10 +692,18 @@ function renderMap() {
     ? `<b>CONUS</b><br>(${state.scenario} vs ${refSc} = self)`
     : `<b>CONUS:</b> ${fmtVal(conusVal)}${unit}`;
 
+  // Title label — same pattern as other panels. For savings/pct_savings,
+  // include "vs <ref>" so the comparison is visible at a glance.
+  const titleText = (mode === 'absolute')
+    ? `${state.scenario} · stock ${y} · amy${wy} · ${sector}`
+    : `${state.scenario} vs ${refSc} · stock ${y} · amy${wy} · ${sector}`;
+
   const layout = {
-    margin: {t: 6, r: 0, b: 0, l: 0},
+    margin: {t: 22, r: 0, b: 0, l: 0},
     geo: {scope: 'usa', projection: {type: 'albers usa'},
           showlakes: true, lakecolor: '#fafafa', bgcolor: '#fff'},
+    title: {text: titleText, x: 0.01, y: 1.0, xanchor: 'left', yanchor: 'top',
+            font: {size: 11, color: '#888'}},
     annotations: [{
       text: annText,
       xref: 'paper', yref: 'paper',
