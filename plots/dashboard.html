@@ -436,6 +436,7 @@ function setSelectedState(postal) {
 const cohortYMaxCache = {};       // 'state:granularity' → max daily/monthly GWh
 const cohortPkYMaxCache = {};     // state → max hourly GW within peak week
 const seasonalChorMaxCache = {};  // sector → max(|state seasonal peak|)
+const savingsChorMaxCache = {};   // 'mode:metric:sector:ref' → max |saved|
 
 function getCohortYMax(stateKey, granularity) {
   const k = `${stateKey}:${granularity}`;
