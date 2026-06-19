@@ -233,11 +233,15 @@
     </div>
 
     <div class="panel">
-      <h2>Cohort decomposition — daily, year-long</h2>
+      <h2>Cohort decomposition — year-long</h2>
       <div class="panel-sub">
-        Daily-aggregated stacked area by cohort (res NC/SA/SNA + com NC/SA/SNA + com gap) for the current (scenario, stock year, weather year). Peak annotation comes from the precomputed hourly peak (the larger of winter/summer).
+        Stacked area by cohort (res NC/SA/SNA + com NC/SA/SNA + com gap) for the current (scenario, stock year, weather year). Toggle daily vs monthly aggregation. Hover anywhere to see the Total alongside each cohort.
       </div>
-      <div id="plot-cohort" class="plot" style="height: 360px;"></div>
+      <div class="local-controls">
+        <button class="pill active" data-cohort-gran="daily">Daily</button>
+        <button class="pill"        data-cohort-gran="monthly">Monthly</button>
+      </div>
+      <div id="plot-cohort" class="plot" style="height: 340px;"></div>
     </div>
 
     <div class="panel">
@@ -352,6 +356,7 @@ const state = {
   mapMode:       'absolute',
   mapReference:  PAYLOAD.scenarios[0],          // Baseline by default
   cohortSeason:  'winter',
+  cohortGranularity: 'daily',          // 'daily' | 'monthly'
   expandedPanel: null,                // null = grid view, else plot DIV id
 };
 
@@ -573,6 +578,14 @@ function buildControls() {
       btn.classList.add('active');
       state.cohortSeason = btn.dataset.cohortSeason;
       renderCohortPeakWeek();
+    };
+  });
+  document.querySelectorAll('[data-cohort-gran]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-cohort-gran]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.cohortGranularity = btn.dataset.cohortGran;
+      renderCohort();
     };
   });
   document.querySelectorAll('[data-map-mode]').forEach(btn => {
@@ -913,6 +926,16 @@ function renderMap() {
   Plotly.react('plot-map', data, layout, {displayModeBar: false, responsive: true});
 }
 
+// Aggregate per-day values into 12 monthly bins (by month from the ISO date).
+function aggregateDailyToMonthly(values, dates) {
+  const monthly = new Array(12).fill(0);
+  for (let i = 0; i < values.length && i < dates.length; i++) {
+    const month = parseInt(dates[i].slice(5, 7), 10) - 1;
+    monthly[month] += values[i] || 0;
+  }
+  return monthly;
+}
+
 function renderCohort() {
   const wy = weatherYear();
   const st = state.trajState;
@@ -927,48 +950,89 @@ function renderCohort() {
     }, {displayModeBar: false, responsive: true});
     return;
   }
+
+  // Choose daily or monthly resolution.
+  const isMonthly = state.cohortGranularity === 'monthly';
+  let xs, cohortValues, yLabel, hoverFmt, tickFmt;
+  if (isMonthly) {
+    // 12 month-center x values within the weather year. Use 'YYYY-MM-15'
+    // so Plotly treats them as dates and tick-formats nicely.
+    const yearPrefix = entry.dates[0]?.slice(0, 4) || '2018';
+    xs = Array.from({length: 12}, (_, i) =>
+      `${yearPrefix}-${String(i + 1).padStart(2, '0')}-15`);
+    cohortValues = {};
+    Object.keys(entry.cohorts).forEach(k => {
+      cohortValues[k] = aggregateDailyToMonthly(entry.cohorts[k], entry.dates);
+    });
+    yLabel = 'Monthly energy (GWh / month)';
+    hoverFmt = '%{x|%b}';
+    tickFmt = '%b';
+  } else {
+    xs = entry.dates;
+    cohortValues = entry.cohorts;
+    yLabel = 'Daily energy (GWh / day)';
+    hoverFmt = '%{x|%b %d}';
+    tickFmt = '%b %d';
+  }
+
   const traces = COHORT_DEF
-    .filter(c => Array.isArray(entry.cohorts[c.key]))
+    .filter(c => Array.isArray(cohortValues[c.key]))
     .map(c => ({
-      x: entry.dates, y: entry.cohorts[c.key],
+      x: xs, y: cohortValues[c.key],
       type: 'scatter', mode: 'none', name: c.label,
       stackgroup: 'one', fillcolor: c.color, line: {width: 0},
-      hovertemplate: `<b>${c.label}</b><br>%{x|%b %d}: %{y:,.0f} GWh<extra></extra>`,
+      hovertemplate: `<b>${c.label}</b><br>${hoverFmt}: %{y:,.0f} GWh<extra></extra>`,
     }));
 
-  // Show BOTH winter + summer peak annotations on the daily view. Use
-  // getPeakWeekEntry — the same state-aware helper the bottom-right uses
-  // — so when a state is selected the annotation shows that state's peak
-  // (within the CONUS peak window) rather than CONUS's.
-  const peakAnns = [];
-  [
-    {key: 'winter', label: 'Winter peak', color: '#1c4f93'},
-    {key: 'summer', label: 'Summer peak', color: '#b25a1a'},
-  ].forEach(({key, label, color}) => {
-    const w = getPeakWeekEntry(state.trajState, state.scenario, stockYear(), wy, key);
-    if (!w) return;
-    const peakDateStr = w.peak_iso.slice(0, 10);
-    const peakDayIdx = entry.dates.findIndex(d => d.startsWith(peakDateStr));
-    const stackHeight = peakDayIdx >= 0
-      ? COHORT_DEF.filter(c => Array.isArray(entry.cohorts[c.key]))
-          .reduce((sum, c) => sum + (entry.cohorts[c.key][peakDayIdx] || 0), 0)
-      : 0;
-    peakAnns.push({
-      x: peakDateStr, y: stackHeight,
-      text: `${label}<br>${w.peak_gw.toFixed(1)} GW`,
-      xref: 'x', yref: 'y', showarrow: true,
-      arrowhead: 0, ay: -22, ax: 0,
-      font: {size: 10, color: color}, bgcolor: 'rgba(255,255,255,0.9)',
-      bordercolor: color, borderwidth: 1, borderpad: 3,
-    });
+  // Total line on top of the stack — enables a Total value in the hover popup
+  // (especially useful with hovermode: 'x unified').
+  const N = xs.length;
+  const total = new Array(N).fill(0);
+  COHORT_DEF.forEach(c => {
+    if (!Array.isArray(cohortValues[c.key])) return;
+    for (let i = 0; i < N; i++) total[i] += cohortValues[c.key][i] || 0;
   });
+  traces.push({
+    x: xs, y: total,
+    type: 'scatter', mode: 'lines', name: 'Total',
+    line: {color: '#111', width: 1.5},
+    hovertemplate: `<b>Total</b><br>${hoverFmt}: %{y:,.0f} GWh<extra></extra>`,
+  });
+
+  // Peak annotations: only in daily mode (monthly bins make day-level
+  // anchoring visually awkward; unified hover gives the magnitude anyway).
+  const peakAnns = [];
+  if (!isMonthly) {
+    [
+      {key: 'winter', label: 'Winter peak', color: '#1c4f93'},
+      {key: 'summer', label: 'Summer peak', color: '#b25a1a'},
+    ].forEach(({key, label, color}) => {
+      const w = getPeakWeekEntry(state.trajState, state.scenario, stockYear(), wy, key);
+      if (!w) return;
+      const peakDateStr = w.peak_iso.slice(0, 10);
+      const peakDayIdx = entry.dates.findIndex(d => d.startsWith(peakDateStr));
+      const stackHeight = peakDayIdx >= 0
+        ? COHORT_DEF.filter(c => Array.isArray(entry.cohorts[c.key]))
+            .reduce((sum, c) => sum + (entry.cohorts[c.key][peakDayIdx] || 0), 0)
+        : 0;
+      peakAnns.push({
+        x: peakDateStr, y: stackHeight,
+        text: `${label}<br>${w.peak_gw.toFixed(1)} GW`,
+        xref: 'x', yref: 'y', showarrow: true,
+        arrowhead: 0, ay: -22, ax: 0,
+        font: {size: 10, color: color}, bgcolor: 'rgba(255,255,255,0.9)',
+        bordercolor: color, borderwidth: 1, borderpad: 3,
+      });
+    });
+  }
 
   const layout = {
     margin: {t: 30, r: 8, b: 36, l: 70},
-    xaxis: {gridcolor: '#eee', tickformat: '%b %d'},
-    yaxis: {title: {text: 'Daily energy (GWh / day)', standoff: 6, font: {size: 12}},
+    xaxis: {gridcolor: '#eee', tickformat: tickFmt},
+    yaxis: {title: {text: yLabel, standoff: 6, font: {size: 12}},
             gridcolor: '#eee', zeroline: false, tickformat: '.2s'},
     legend: {orientation: 'h', y: -0.15, font: {size: 10}, traceorder: 'normal'},
+    hovermode: 'x unified',
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
     title: {text: `${state.scenario} · ${state.trajState} · stock ${stockYear()} · amy${wy}`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
     annotations: peakAnns,
@@ -1000,12 +1064,26 @@ function renderCohortPeakWeek() {
       stackgroup: 'one', fillcolor: c.color, line: {width: 0},
       hovertemplate: `<b>${c.label}</b><br>%{x|%a %b %d %H:%M}: %{y:,.1f} GW<extra></extra>`,
     }));
+  // Total line on top → enables a Total value in the hover popup (with x-unified).
+  const Npk = wk.timestamps.length;
+  const totalPk = new Array(Npk).fill(0);
+  COHORT_DEF.forEach(c => {
+    if (!Array.isArray(wk.cohorts[c.key])) return;
+    for (let i = 0; i < Npk; i++) totalPk[i] += wk.cohorts[c.key][i] || 0;
+  });
+  traces.push({
+    x: wk.timestamps, y: totalPk,
+    type: 'scatter', mode: 'lines', name: 'Total',
+    line: {color: '#111', width: 1.5},
+    hovertemplate: `<b>Total</b><br>%{x|%a %b %d %H:%M}: %{y:,.1f} GW<extra></extra>`,
+  });
   const layout = {
     margin: {t: 30, r: 8, b: 36, l: 70},
     xaxis: {gridcolor: '#eee', tickformat: '%a %b %d'},
     yaxis: {title: {text: 'Power (GW)', standoff: 6, font: {size: 12}},
             gridcolor: '#eee', zeroline: false},
     legend: {orientation: 'h', y: -0.18, font: {size: 10}, traceorder: 'normal'},
+    hovermode: 'x unified',
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
     title: {text: `${state.scenario} · ${state.trajState} · stock ${stockYear()} · amy${wy} · ${state.cohortSeason} peak`,
             x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
