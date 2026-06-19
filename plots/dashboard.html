@@ -513,6 +513,41 @@ function getCohortPkYMax(stateKey) {
   return maxVal;
 }
 
+function getSavingsChorMax(mode, metric, sector, ref) {
+  const k = `${mode}:${metric}:${sector}:${ref}`;
+  if (savingsChorMaxCache[k] !== undefined) return savingsChorMaxCache[k];
+  const scalar = v => (v && typeof v === 'object') ? v.annual : v;
+  const tree = PAYLOAD.state_by_sector[metric];
+  if (!tree) return null;
+  const refTree = tree[ref];
+  if (!refTree) return null;
+  let maxV = 0;
+  for (const scen of Object.keys(tree)) {
+    if (scen === ref) continue;            // skip baseline-vs-baseline (all zeros)
+    for (const year of Object.keys(tree[scen])) {
+      for (const wy of Object.keys(tree[scen][year])) {
+        const curMap = (tree[scen][year][wy] || {})[sector] || {};
+        const refMap = ((refTree[year] || {})[wy] || {})[sector] || {};
+        for (const st of Object.keys(curMap)) {
+          if (st === 'CONUS') continue;    // exclude CONUS so per-state scale isn't washed out
+          const c = scalar(curMap[st]);
+          const r = scalar(refMap[st]);
+          if (c == null || r == null) continue;
+          let v;
+          if (mode === 'savings')          v = r - c;
+          else if (mode === 'pct_savings') v = r ? (r - c) / r * 100 : null;
+          else continue;
+          if (v == null || Number.isNaN(v)) continue;
+          const av = Math.abs(v);
+          if (av > maxV) maxV = av;
+        }
+      }
+    }
+  }
+  savingsChorMaxCache[k] = maxV;
+  return maxV;
+}
+
 function getSeasonalChorMax(sector) {
   if (seasonalChorMaxCache[sector] !== undefined) return seasonalChorMaxCache[sector];
   let maxV = 0;
@@ -889,10 +924,11 @@ function renderMap() {
     cbTitle = metric === 'annual_gwh' ? 'Annual energy (GWh / yr)' : 'Peak power (GW)';
   } else {
     colorscale = SAVINGS_COLORSCALE;     // red=uses more, white=zero, green=saves
-    const numeric = values.filter(v => v !== null && !Number.isNaN(v));
-    const maxAbs = numeric.length
-      ? Math.max(...numeric.map(v => Math.abs(v)))
-      : 1;
+    // Globally pinned scale: max |savings or pct| across all
+    // (scenario, year, wy) for this (mode, metric, sector, ref). Scale
+    // stays stable as the user slides; only the per-state colors change.
+    const pinned = getSavingsChorMax(mode, metric, sector, refSc);
+    const maxAbs = pinned || 1;
     zmin = -maxAbs;
     zmax =  maxAbs;
     cbTitle = mode === 'savings'
