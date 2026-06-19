@@ -1031,7 +1031,9 @@ function renderCohort() {
     xaxis: {gridcolor: '#eee', tickformat: tickFmt},
     yaxis: {title: {text: yLabel, standoff: 6, font: {size: 12}},
             gridcolor: '#eee', zeroline: false, tickformat: '.2s'},
-    legend: {orientation: 'h', y: -0.15, font: {size: 10}, traceorder: 'normal'},
+    // 'reversed' so Total appears first in the unified hover popup and the
+    // cohort order matches the visual stack top-to-bottom (com_gap → res_NC).
+    legend: {orientation: 'h', y: -0.15, font: {size: 10}, traceorder: 'reversed'},
     hovermode: 'x unified',
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
     title: {text: `${state.scenario} · ${state.trajState} · stock ${stockYear()} · amy${wy}`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
@@ -1082,7 +1084,7 @@ function renderCohortPeakWeek() {
     xaxis: {gridcolor: '#eee', tickformat: '%a %b %d'},
     yaxis: {title: {text: 'Power (GW)', standoff: 6, font: {size: 12}},
             gridcolor: '#eee', zeroline: false},
-    legend: {orientation: 'h', y: -0.18, font: {size: 10}, traceorder: 'normal'},
+    legend: {orientation: 'h', y: -0.18, font: {size: 10}, traceorder: 'reversed'},
     hovermode: 'x unified',
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
     title: {text: `${state.scenario} · ${state.trajState} · stock ${stockYear()} · amy${wy} · ${state.cohortSeason} peak`,
