@@ -428,6 +428,113 @@ function setSelectedState(postal) {
 
 // Per-state sidecars drop `dates`/`timestamps`/`peak_iso` to save ~10 MB/file —
 // the dashboard pulls them from the CONUS-equivalent entry in PAYLOAD.
+// === Pinned y-axis / color-scale max caches =============================
+// Computed once-per-(state, granularity) at first access. Population of the
+// per-state cache happens after the state's sidecar lands; CONUS values are
+// available immediately from PAYLOAD. Same pattern for seasonal choropleth.
+
+const cohortYMaxCache = {};       // 'state:granularity' → max daily/monthly GWh
+const cohortPkYMaxCache = {};     // state → max hourly GW within peak week
+const seasonalChorMaxCache = {};  // sector → max(|state seasonal peak|)
+
+function getCohortYMax(stateKey, granularity) {
+  const k = `${stateKey}:${granularity}`;
+  if (cohortYMaxCache[k] !== undefined) return cohortYMaxCache[k];
+  const dataSource = stateKey === 'CONUS'
+    ? PAYLOAD.cohort_daily
+    : window.STATE_DATA[stateKey]?.cohort_daily;
+  if (!dataSource) return null;
+  let maxVal = 0;
+  for (const scen of Object.keys(dataSource)) {
+    const by_y = dataSource[scen];
+    for (const year of Object.keys(by_y)) {
+      const by_wy = by_y[year];
+      for (const wy of Object.keys(by_wy)) {
+        const entry = by_wy[wy];
+        if (!entry?.cohorts) continue;
+        const arrays = COHORT_DEF
+          .filter(c => Array.isArray(entry.cohorts[c.key]))
+          .map(c => entry.cohorts[c.key]);
+        if (!arrays.length) continue;
+        const n = arrays[0].length;
+        if (granularity === 'daily') {
+          for (let i = 0; i < n; i++) {
+            const tot = arrays.reduce((s, a) => s + (a[i] || 0), 0);
+            if (tot > maxVal) maxVal = tot;
+          }
+        } else { // monthly — per-state sidecars don't carry dates; use CONUS dates (same calendar per wy)
+          const dates = entry.dates || PAYLOAD.cohort_daily[scen]?.[year]?.[wy]?.dates;
+          if (!dates) continue;
+          const monthly = new Array(12).fill(0);
+          for (let i = 0; i < n; i++) {
+            const m = parseInt(dates[i].slice(5, 7), 10) - 1;
+            for (const a of arrays) monthly[m] += a[i] || 0;
+          }
+          const mMax = Math.max(...monthly);
+          if (mMax > maxVal) maxVal = mMax;
+        }
+      }
+    }
+  }
+  cohortYMaxCache[k] = maxVal;
+  return maxVal;
+}
+
+function getCohortPkYMax(stateKey) {
+  if (cohortPkYMaxCache[stateKey] !== undefined) return cohortPkYMaxCache[stateKey];
+  const dataSource = stateKey === 'CONUS'
+    ? PAYLOAD.panel3
+    : window.STATE_DATA[stateKey]?.peak_week;
+  if (!dataSource) return null;
+  let maxVal = 0;
+  for (const scen of Object.keys(dataSource)) {
+    const by_y = dataSource[scen];
+    for (const year of Object.keys(by_y)) {
+      const by_wy = by_y[year];
+      for (const wy of Object.keys(by_wy)) {
+        const by_season = by_wy[wy] || {};
+        for (const season of Object.keys(by_season)) {
+          const w = by_season[season];
+          if (!w?.cohorts) continue;
+          const arrays = COHORT_DEF
+            .filter(c => Array.isArray(w.cohorts[c.key]))
+            .map(c => w.cohorts[c.key]);
+          if (!arrays.length) continue;
+          const n = arrays[0].length;
+          for (let i = 0; i < n; i++) {
+            const tot = arrays.reduce((s, a) => s + (a[i] || 0), 0);
+            if (tot > maxVal) maxVal = tot;
+          }
+        }
+      }
+    }
+  }
+  cohortPkYMaxCache[stateKey] = maxVal;
+  return maxVal;
+}
+
+function getSeasonalChorMax(sector) {
+  if (seasonalChorMaxCache[sector] !== undefined) return seasonalChorMaxCache[sector];
+  let maxV = 0;
+  const tree = PAYLOAD.state_by_sector.peak_gw;
+  for (const scen of Object.keys(tree)) {
+    for (const year of Object.keys(tree[scen])) {
+      for (const wy of Object.keys(tree[scen][year])) {
+        const stateMap = (tree[scen][year][wy] || {})[sector] || {};
+        for (const st of Object.keys(stateMap)) {
+          if (st === 'CONUS') continue;
+          const e = stateMap[st];
+          if (!e || typeof e !== 'object') continue;
+          const m = Math.max(e.summer || 0, e.winter || 0);
+          if (m > maxV) maxV = m;
+        }
+      }
+    }
+  }
+  seasonalChorMaxCache[sector] = maxV;
+  return maxV;
+}
+
 function getCohortDailyEntry(postal, scenario, year, wy) {
   if (postal === 'CONUS') {
     return ((PAYLOAD.cohort_daily[scenario] || {})[year] || {})[wy];
@@ -763,10 +870,10 @@ function renderMap() {
       ? (cE.winter >= cE.summer ? +cE.winter : -cE.summer)
       : null;
     colorscale = SEASONAL_PEAK_COLORSCALE;
-    // Use only per-STATE values to set the scale — including CONUS would
-    // wash everything out because CONUS = Σ states is ~10× any state.
-    const stateVals = values.filter(v => v !== null && !Number.isNaN(v));
-    const maxAbs = stateVals.length ? Math.max(...stateVals.map(v => Math.abs(v))) : 1;
+    // Globally pinned scale: max(state seasonal peak) across all
+    // (scenario, year, wy) for this sector. Color scale stays stable as
+    // the user slides — only the color of each state changes.
+    const maxAbs = getSeasonalChorMax(sector) || 1;
     zmin = -maxAbs;
     zmax = +maxAbs;
     cbTitle = 'Peak power (GW)';
@@ -1026,11 +1133,15 @@ function renderCohort() {
     });
   }
 
+  // Pinned y-axis: max across all (scenario, year, wy) for this (state,
+  // granularity). Stays fixed as the user slides through scenarios/years/wys.
+  const yMax = getCohortYMax(state.trajState, state.cohortGranularity);
   const layout = {
     margin: {t: 30, r: 8, b: 36, l: 70},
     xaxis: {gridcolor: '#eee', tickformat: tickFmt},
     yaxis: {title: {text: yLabel, standoff: 6, font: {size: 12}},
-            gridcolor: '#eee', zeroline: false, tickformat: '.2s'},
+            gridcolor: '#eee', zeroline: false, tickformat: '.2s',
+            range: yMax ? [0, yMax * 1.05] : undefined},
     // 'reversed' so Total appears first in the unified hover popup and the
     // cohort order matches the visual stack top-to-bottom (com_gap → res_NC).
     legend: {orientation: 'h', y: -0.15, font: {size: 10}, traceorder: 'reversed'},
@@ -1079,11 +1190,14 @@ function renderCohortPeakWeek() {
     line: {color: '#111', width: 1.5},
     hovertemplate: `<b>Total</b><br>%{x|%a %b %d %H:%M}: %{y:,.1f} GW<extra></extra>`,
   });
+  // Pinned y-axis: max across all (scenario, year, wy, season) for this state.
+  const yMaxPk = getCohortPkYMax(state.trajState);
   const layout = {
     margin: {t: 30, r: 8, b: 36, l: 70},
     xaxis: {gridcolor: '#eee', tickformat: '%a %b %d'},
     yaxis: {title: {text: 'Power (GW)', standoff: 6, font: {size: 12}},
-            gridcolor: '#eee', zeroline: false},
+            gridcolor: '#eee', zeroline: false,
+            range: yMaxPk ? [0, yMaxPk * 1.05] : undefined},
     legend: {orientation: 'h', y: -0.18, font: {size: 10}, traceorder: 'reversed'},
     hovermode: 'x unified',
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
