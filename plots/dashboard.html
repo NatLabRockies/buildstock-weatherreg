@@ -836,14 +836,19 @@ function renderMap() {
   const ref = (((PAYLOAD.state_by_sector[metric][refSc]         || {})[y] || {})[wy] || {})[sector] || {};
   const states = PAYLOAD.states;
 
-  // Per-state value under the chosen mode.
+  // Per-state value under the chosen mode. peak_gw values are now dicts
+  // {annual, summer, winter}; for savings / pct_savings we use .annual
+  // (peak saved at the absolute peak hour). For seasonal Peak GW mode the
+  // dict is unpacked separately further down.
+  const scalar = v => (v && typeof v === 'object') ? v.annual : v;
   const computeValue = (curV, refV) => {
-    if (curV === undefined || curV === null) return null;
-    if (mode === 'absolute') return curV;
-    if (refV === undefined || refV === null) return null;
-    if (mode === 'savings') return refV - curV;             // positive = current saves
-    if (mode === 'pct_savings') return refV ? (refV - curV) / refV * 100 : null;
-    return curV;
+    const c = scalar(curV), r = scalar(refV);
+    if (c === undefined || c === null) return null;
+    if (mode === 'absolute') return c;
+    if (r === undefined || r === null) return null;
+    if (mode === 'savings') return r - c;                   // positive = current saves
+    if (mode === 'pct_savings') return r ? (r - c) / r * 100 : null;
+    return c;
   };
   let values = states.map(s => computeValue(cur[s], ref[s]));
   let conusVal = computeValue(cur['CONUS'], ref['CONUS']);
