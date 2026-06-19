@@ -47,6 +47,7 @@ buildstock-query = { git = "https://github.com/NatLabRockies/buildstock-query.gi
 dev = [
     "ipykernel>=7.2.0",
     "ipython>=9.13.0",
+    "pytest>=8",
 ]
 
 [tool.ty.environment]

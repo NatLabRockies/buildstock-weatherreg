@@ -42,3 +42,10 @@ echo
 uv run python -u plots/aggregate.py \
     --res-run-dir "$res_run_dir" \
     --com-run-dir "$com_run_dir"
+
+# After bake: run dashboard payload tests. Catches schema regressions
+# (e.g. peak_gw shape change) + cross-source disagreements before they
+# reach the user. Tests load plots/data/main.js + a few state sidecars.
+echo
+echo "=== running dashboard payload tests ==="
+uv run pytest plots/tests/ -v
