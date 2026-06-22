@@ -105,6 +105,37 @@ def test_panel3_peak_iso_inside_timestamps(payload):
             )
 
 
+def test_2018_baseline_is_present_in_state_by_sector(payload):
+    """REGRESSION GATE for Phase A.26: stock year 2018 must appear in
+    state_by_sector + panel1 (derived from agg_*_b2018 county files rolled
+    to state). cohort_daily and panel3 can legitimately omit 2018 (no
+    cohort split available at the baseline year)."""
+    assert 2018 in payload["stock_years"], "2018 missing from STOCK_YEARS"
+    # panel1 — at least Baseline scenario must have 2018
+    p1_ann_baseline = payload["panel1"]["annual_gwh"].get("Baseline", {}).get("2018", {})
+    p1_peak_baseline = payload["panel1"]["peak_gw"].get("Baseline", {}).get("2018", {})
+    assert p1_ann_baseline, "panel1.annual_gwh[Baseline][2018] missing"
+    assert p1_peak_baseline, "panel1.peak_gw[Baseline][2018] missing"
+    # state_by_sector — at least one scenario must have 2018 with full sector dims
+    found_2018 = False
+    for scen, by_y in payload["state_by_sector"]["annual_gwh"].items():
+        if "2018" not in by_y:
+            continue
+        for wy, by_sec in by_y["2018"].items():
+            assert {"residential", "commercial", "gap", "total"} <= set(by_sec.keys()), (
+                f"state_by_sector[{scen}][2018][{wy}] missing sectors: "
+                f"{set(by_sec.keys())}"
+            )
+            assert "CONUS" in by_sec["total"], (
+                f"state_by_sector[{scen}][2018][{wy}].total missing CONUS"
+            )
+            found_2018 = True
+            break
+        if found_2018:
+            break
+    assert found_2018, "state_by_sector has no 2018 cells"
+
+
 def test_savings_path_does_not_yield_nan(payload):
     """REGRESSION for the Saved/% Saved breakage after peak_gw → dict.
     Simulates the JS computeValue helper: pulls scalar via .annual unwrap,

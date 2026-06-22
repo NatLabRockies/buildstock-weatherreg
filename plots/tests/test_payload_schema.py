@@ -78,7 +78,9 @@ def test_peak_gw_state_values_are_seasonal_dicts(payload):
 # === cohort_daily: bottom-left panel ========================================
 
 def test_cohort_daily_dates_and_values_align(payload):
-    """Date array length must equal each cohort series length."""
+    """Date array length must equal each cohort series length. cohort_daily
+    is absent for 2018 (no cohort split in county-level baseline files);
+    the dashboard handles missing cells via the existing 'No data' fallback."""
     for path, entry in _walk(payload["cohort_daily"], 3):
         dates = entry["dates"]
         cohorts = entry["cohorts"]

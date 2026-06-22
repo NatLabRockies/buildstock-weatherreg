@@ -108,6 +108,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing as mp
 import os
 import re
 import sys
@@ -133,11 +134,56 @@ def _log(msg: str) -> None:
 
 # === Constants ============================================================
 SCENARIOS: list[str] = ['Baseline', 'ASHP', 'GHP', 'GHP+Envelope']
-STOCK_YEARS: list[int] = [2027, 2030, 2035, 2040, 2045, 2050]
+BASELINE_YEAR: int = 2018                          # unprojected calibration year
+PROJECTION_YEARS: list[int] = [2027, 2030, 2035, 2040, 2045, 2050]
+STOCK_YEARS: list[int] = [BASELINE_YEAR] + PROJECTION_YEARS
 RES_COHORTS: list[str] = ['NC', 'SA', 'SNA']
 COM_COHORTS: list[str] = ['NC', 'SA', 'SNA', 'gap']
 LBL_COHORTS: list[str] = ['NC', 'SA', 'SNA']  # LBL excludes gap by spec
 LBL_WEATHER_YEARS: list[int] = [2012, 2018]   # LBL ships only these two AMYs
+
+# For year=2018 there is no projection. Source data is the county-level
+# agg_*_eulp_total_GWh_upgrade<spec>_reg_b2018.csv files. Each dashboard
+# scenario maps to a list of upgrade specs whose hourly load series we
+# *sum* to reconstruct that scenario's 2018 view: Baseline = All-Baseline;
+# ASHP/GHP/GHP+Envelope = (specific upgrade applied to eligible stock) +
+# (non-eligible stock at baseline). Residential and commercial use distinct
+# upgrade IDs per inputs/switches_agg.json's `scenario_names` mapping.
+BASELINE_2018_SPECS: dict[str, dict[str, list[str]]] = {
+    'Baseline':     {'res': ['All-Baseline'],
+                     'com': ['All-Baseline']},
+    'ASHP':         {'res': ['Upgraded-Upgrade4',     'Non-Upgraded-Baseline'],
+                     'com': ['Upgraded-Upgrade1-14',  'Non-Upgraded-Baseline']},
+    'GHP':          {'res': ['Upgraded-Upgrade8',     'Non-Upgraded-Baseline'],
+                     'com': ['Upgraded-Upgrade55',    'Non-Upgraded-Baseline']},
+    'GHP+Envelope': {'res': ['Upgraded-Upgrade32',    'Non-Upgraded-Baseline'],
+                     'com': ['Upgraded-Upgrade59',    'Non-Upgraded-Baseline']},
+}
+
+# FIPS state code → 2-letter postal. AK + HI absent from this dataset.
+# DC (FIPS 11) maps to MD per the same convention used elsewhere in this
+# pipeline (ReEDs merges DC into MD).
+_STATE_FIPS_TO_POSTAL: dict[int, str] = {
+    1: 'AL',  4: 'AZ',  5: 'AR',  6: 'CA',  8: 'CO',  9: 'CT', 10: 'DE',
+    11: 'MD',  # DC → MD
+    12: 'FL', 13: 'GA', 16: 'ID', 17: 'IL', 18: 'IN', 19: 'IA', 20: 'KS',
+    21: 'KY', 22: 'LA', 23: 'ME', 24: 'MD', 25: 'MA', 26: 'MI', 27: 'MN',
+    28: 'MS', 29: 'MO', 30: 'MT', 31: 'NE', 32: 'NV', 33: 'NH', 34: 'NJ',
+    35: 'NM', 36: 'NY', 37: 'NC', 38: 'ND', 39: 'OH', 40: 'OK', 41: 'OR',
+    42: 'PA', 44: 'RI', 45: 'SC', 46: 'SD', 47: 'TN', 48: 'TX', 49: 'UT',
+    50: 'VT', 51: 'VA', 53: 'WA', 54: 'WV', 55: 'WI', 56: 'WY',
+}
+
+
+def _county_fips_to_state(col: str) -> str | None:
+    """Map a county FIPS column header (4 or 5 digit, no leading zero) to its
+    state postal. The agg files strip leading zeros — '1001' = state 1
+    (Alabama) county 001; '11001' = state 11 (DC, → MD) county 001."""
+    try:
+        fips = int(col)
+    except ValueError:
+        return None
+    return _STATE_FIPS_TO_POSTAL.get(fips // 1000)
 
 # ReEDs CSVs spell out state names in lowercase ("alabama, …"). Plotly's
 # USA-states choropleth wants 2-letter postals. DC is intentionally absent
@@ -459,28 +505,46 @@ def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict, dict | N
     if total is None:
         return scenario, year, sector, {}, {}, None
 
-    # Per-state per-wy: peak is intra-state coincident.
+    ann_dict, peak_dict, coincident = _compute_state_xt_stats(
+        total=total,
+        res_df=res_df if sector == 'total' else None,
+        com_df=com_df if sector == 'total' else None,
+        gap_df=gap_df if sector == 'total' else None,
+        compute_coincident=(sector == 'total'),
+    )
+    return scenario, year, sector, ann_dict, peak_dict, coincident
+
+
+def _compute_state_xt_stats(
+    total: pd.DataFrame,
+    res_df: pd.DataFrame | None = None,
+    com_df: pd.DataFrame | None = None,
+    gap_df: pd.DataFrame | None = None,
+    compute_coincident: bool = False,
+) -> tuple[dict, dict, dict | None]:
+    """Shared math: given an hourly state-x-time matrix in GWh, return the
+    per-wy per-state {annual_gwh, peak_gw} dicts plus the optional coincident
+    decomposition. Reused by both the projection-year path
+    (_state_sector_task) and the 2018 baseline path (_baseline2018_task) so
+    the output shape — and the peak semantics — stay identical."""
+    summer_months = [6, 7, 8, 9]
+    winter_months = [12, 1, 2]
+
     ann = total.groupby(total.index.year).sum()
     peak = total.groupby(total.index.year).max()
-    # CONUS: build joint hourly first, then aggregate. This is the *correct*
-    # coincident peak — summing per-state peaks would over-count.
+    # CONUS = joint hourly sum, then aggregate. Correct coincident peak —
+    # summing per-state peaks would over-count.
     conus_hourly = total.sum(axis=1)
     conus_ann = conus_hourly.groupby(conus_hourly.index.year).sum()
     conus_peak = conus_hourly.groupby(conus_hourly.index.year).max()
-
-    summer_months = [6, 7, 8, 9]
-    winter_months = [12, 1, 2]
 
     ann_dict: dict = {}
     peak_dict: dict = {}
     for wy in ann.index:
         wy_int = int(wy)
-        # Annual energy stays a scalar — only peak gets a {annual/summer/winter}
-        # split, since annual energy is by definition not season-decomposable.
         ann_dict[wy_int] = {st: float(v) for st, v in ann.loc[wy].items()}
         ann_dict[wy_int]['CONUS'] = float(conus_ann.loc[wy])
 
-        # Seasonal masks within this wy's data.
         wy_mask = total.index.year == wy
         wy_data = total[wy_mask]
         summer = wy_data[wy_data.index.month.isin(summer_months)]
@@ -488,7 +552,6 @@ def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict, dict | N
         summer_max = summer.max() if not summer.empty else None
         winter_max = winter.max() if not winter.empty else None
 
-        # CONUS coincident seasonal peaks.
         wy_conus = conus_hourly[wy_mask]
         s_conus = wy_conus[wy_conus.index.month.isin(summer_months)]
         w_conus = wy_conus[wy_conus.index.month.isin(winter_months)]
@@ -507,11 +570,8 @@ def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict, dict | N
             'winter': float(w_conus.max()) if not w_conus.empty else 0.0,
         }
 
-    # Coincident decomposition: per (wy, state) → {res, com, gap} at the hour
-    # of that state's total peak. CONUS uses the hour of CONUS total peak.
-    # Summing the three sub-sectors at the chosen hour yields the total peak.
     coincident: dict | None = None
-    if sector == 'total':
+    if compute_coincident:
         coincident = {}
         for wy in ann.index:
             wy_int = int(wy)
@@ -528,16 +588,54 @@ def _state_sector_task(args: tuple) -> tuple[str, int, str, dict, dict, dict | N
                     'commercial':  float(wy_com.loc[t, st]) if wy_com is not None else 0.0,
                     'gap':         float(wy_gap.loc[t, st]) if wy_gap is not None else 0.0,
                 }
-            # CONUS: at the hour of CONUS-summed total peak, sum each sub-sector
-            # across states.
             t = wy_total.sum(axis=1).idxmax()
             coincident[wy_int]['CONUS'] = {
                 'residential': float(wy_res.loc[t].sum()) if wy_res is not None else 0.0,
                 'commercial':  float(wy_com.loc[t].sum()) if wy_com is not None else 0.0,
                 'gap':         float(wy_gap.loc[t].sum()) if wy_gap is not None else 0.0,
             }
+    return ann_dict, peak_dict, coincident
 
-    return scenario, year, sector, ann_dict, peak_dict, coincident
+
+def _roll_agg_b2018_to_state_xt(
+    run_dir: Path, stock: str, specs: list[str]
+) -> pd.DataFrame | None:
+    """Read each `agg_<stock>_eulp_total_GWh_upgrade<spec>_reg_b2018.csv` in
+    the run_dir, roll columns county→state via FIPS prefix, sum across specs.
+    Uses polars for the CSV scan — these files are 157K rows × ~3100 county
+    columns, pandas takes ~60s each; polars takes ~3s. Returns an hourly
+    state-x-time DataFrame in GWh, or None if no file matched. CONUS column
+    is NOT added here — _compute_state_xt_stats does."""
+    total: pd.DataFrame | None = None
+    for spec in specs:
+        p = run_dir / f'agg_{stock}_eulp_total_GWh_upgrade{spec}_reg_b2018.csv'
+        if not p.exists():
+            continue
+        # In-memory read: one file at a time consumes ~4 GB peak (157K rows ×
+        # 3107 county columns × 8 bytes). The sequential caller in
+        # panel_state_by_sector reads one at a time, so total peak stays under
+        # ~5 GB — well within the 64 GB SLURM budget. Streaming engine was
+        # ~30× slower for this workload than collect().
+        df_pl = pl.read_csv(p)
+        groups: dict[str, list[str]] = {}
+        for col in df_pl.columns:
+            if col == 'timestamp_EST':
+                continue
+            st = _county_fips_to_state(col)
+            if st is not None:
+                groups.setdefault(st, []).append(col)
+        if not groups:
+            continue
+        agg_exprs = [pl.col('timestamp_EST')]
+        for st in sorted(groups):
+            agg_exprs.append(
+                pl.sum_horizontal([pl.col(c) for c in groups[st]]).alias(st))
+        rolled_pl = df_pl.select(agg_exprs)
+        del df_pl  # release the wide DataFrame before we touch pandas
+        rolled = rolled_pl.to_pandas().set_index('timestamp_EST')
+        rolled.index = pd.to_datetime(rolled.index)
+        total = rolled if total is None else total.add(rolled, fill_value=0.0)
+    return total
 
 
 def _cohort_daily_allwys_task(args: tuple) -> tuple[str, int, str, str, dict]:
@@ -572,9 +670,10 @@ def _cohort_daily_allwys_task(args: tuple) -> tuple[str, int, str, str, dict]:
 
 def _lbl_worker_init() -> None:
     """ProcessPool initializer: keep each worker's polars on a single thread.
-    Without this, 15 workers × polars' default ~104-thread pool grossly
-    over-subscribes the node and creates memory pressure from polars' chunk
-    buffers."""
+    Effective only with the 'spawn' start method — see panel_lbl. With
+    fork(), polars is already imported in the parent (we use it for the 2018
+    baseline path) and the thread pool is fixed at fork time; the env var
+    set here would no-op."""
     os.environ['POLARS_MAX_THREADS'] = '1'
 
 
@@ -609,7 +708,10 @@ def panel3_peak_week(
       per_state[state][scenario][year][wy][season] =
         {timestamps, cohorts, peak_iso, peak_gw}        ← lazy sidecars
     """
-    tasks = [(res_inter, com_inter, s, y) for s in SCENARIOS for y in STOCK_YEARS]
+    # 2018 baseline has no cohort breakdown (county-level agg files aren't
+    # split by NC/SA/SNA) — peak-week panel skips 2018 and the dashboard
+    # shows its existing "No data" placeholder for that cell.
+    tasks = [(res_inter, com_inter, s, y) for s in SCENARIOS for y in PROJECTION_YEARS]
     conus_only: dict = {s: {} for s in SCENARIOS}
     per_state: dict = {}
     _log(f'  peak-week — {len(tasks)} (scenario, year) tasks across {WORKERS} processes')
@@ -641,36 +743,103 @@ def panel3_peak_week(
 def panel_state_by_sector(
     res_inter: dict[tuple[str, str, str, str, int], Path],
     com_inter: dict[tuple[str, str, str, str, int], Path],
+    res_run_dir: Path,
+    com_run_dir: Path,
 ) -> dict:
     """Per-state annual + peak per (scenario, year, wy, sector).
 
-    Tasks: 4 scenarios × 6 years × 4 sectors = 96. Each task computes its own
-    'CONUS' pseudo-state from the joint hourly series (the coincident peak),
-    so there's no parent-side combining that could over-count.
+    Projection years (2027–2050) read from intermediate/state via
+    _state_sector_task. Baseline year (2018) reads from the county-level
+    agg_*_b2018.csv files via _baseline2018_task and is rolled to state by
+    FIPS prefix. Both paths return identical output shapes, so the merge
+    logic below doesn't branch on year.
     """
-    tasks = [(res_inter, com_inter, s, y, sec)
-             for s in SCENARIOS for y in STOCK_YEARS
-             for sec in ('residential', 'commercial', 'gap', 'total')]
+    proj_tasks = [(res_inter, com_inter, s, y, sec)
+                  for s in SCENARIOS for y in PROJECTION_YEARS
+                  for sec in ('residential', 'commercial', 'gap', 'total')]
+    b2018_tasks = [(res_run_dir, com_run_dir, s, sec)
+                   for s in SCENARIOS
+                   for sec in ('residential', 'commercial', 'gap', 'total')]
 
     annual: dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
     peak:   dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
     coincident_decomp: dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
 
-    _log(f'  state-by-sector — {len(tasks)} (scenario, year, sector) tasks across {WORKERS} processes')
+    def _absorb(scenario, year, sector, ann_d, peak_d, coinc):
+        for wy, by_state in ann_d.items():
+            annual[scenario][year].setdefault(wy, {})[sector] = by_state
+        for wy, by_state in peak_d.items():
+            peak[scenario][year].setdefault(wy, {})[sector] = by_state
+        if coinc is not None:
+            for wy, by_state in coinc.items():
+                coincident_decomp[scenario][year][wy] = by_state
+
+    _log(f'  state-by-sector projection — {len(proj_tasks)} tasks across {WORKERS} processes')
     done = 0
     with ProcessPoolExecutor(max_workers=WORKERS) as pool:
-        for scenario, year, sector, ann_d, peak_d, coinc in pool.map(_state_sector_task, tasks):
+        for scenario, year, sector, ann_d, peak_d, coinc in pool.map(_state_sector_task, proj_tasks):
             done += 1
-            for wy, by_state in ann_d.items():
-                annual[scenario][year].setdefault(wy, {})[sector] = by_state
-            for wy, by_state in peak_d.items():
-                peak[scenario][year].setdefault(wy, {})[sector] = by_state
-            if coinc is not None:
-                for wy, by_state in coinc.items():
-                    coincident_decomp[scenario][year][wy] = by_state
-            if done == 1 or done == len(tasks) or done % 16 == 0:
-                _log(f'    ({done:>2}/{len(tasks)}) {scenario}/{year}/{sector}  '
+            _absorb(scenario, year, sector, ann_d, peak_d, coinc)
+            if done == 1 or done == len(proj_tasks) or done % 16 == 0:
+                _log(f'    ({done:>2}/{len(proj_tasks)}) {scenario}/{year}/{sector}  '
                      f'states={len(next(iter(ann_d.values()), {}))}')
+
+    # 2018 path runs sequentially. Each county-level agg file is ~4 GB in
+    # memory after pl.read_csv, so parallel workers OOM-killed the SLURM job
+    # (15 × 4 GB > 64 GB). Sequential lets one polars scan use all 16 cores
+    # for the wide column reduction, and we read each unique spec exactly
+    # once instead of once per (scenario, sector) consumer.
+    _log('  state-by-sector baseline 2018 — sequential pre-load + combine')
+    unique_res_specs = {s for d in BASELINE_2018_SPECS.values() for s in d['res']}
+    unique_com_specs = {s for d in BASELINE_2018_SPECS.values() for s in d['com']}
+
+    res_by_spec: dict[str, pd.DataFrame] = {}
+    com_by_spec: dict[str, pd.DataFrame] = {}
+    for spec in sorted(unique_res_specs):
+        df = _roll_agg_b2018_to_state_xt(res_run_dir, 'res', [spec])
+        if df is not None:
+            res_by_spec[spec] = df
+            _log(f'    res spec={spec:<28} shape={df.shape}')
+    for spec in sorted(unique_com_specs):
+        df = _roll_agg_b2018_to_state_xt(com_run_dir, 'com', [spec])
+        if df is not None:
+            com_by_spec[spec] = df
+            _log(f'    com spec={spec:<28} shape={df.shape}')
+
+    def _sum_dfs(dfs: list[pd.DataFrame | None]) -> pd.DataFrame | None:
+        kept = [d for d in dfs if d is not None]
+        if not kept:
+            return None
+        out = kept[0].copy()
+        for d in kept[1:]:
+            out = out.add(d, fill_value=0.0)
+        return out
+
+    for scen in SCENARIOS:
+        sp = BASELINE_2018_SPECS[scen]
+        res_total = _sum_dfs([res_by_spec.get(s) for s in sp['res']])
+        com_total = _sum_dfs([com_by_spec.get(s) for s in sp['com']])
+        ref = res_total if res_total is not None else com_total
+        if ref is None:
+            _log(f'    {scen}: no 2018 data — skipping'); continue
+        gap_total = pd.DataFrame(0.0, index=ref.index, columns=ref.columns)
+        for sec in ('residential', 'commercial', 'gap', 'total'):
+            if sec == 'residential':       total_df = res_total
+            elif sec == 'commercial':      total_df = com_total
+            elif sec == 'gap':             total_df = gap_total
+            else:  # 'total'
+                total_df = _sum_dfs([res_total, com_total, gap_total])
+            if total_df is None:
+                continue
+            ann_d, peak_d, coinc = _compute_state_xt_stats(
+                total=total_df,
+                res_df=res_total if sec == 'total' else None,
+                com_df=com_total if sec == 'total' else None,
+                gap_df=gap_total if sec == 'total' else None,
+                compute_coincident=(sec == 'total'),
+            )
+            _absorb(scen, BASELINE_YEAR, sec, ann_d, peak_d, coinc)
+            _log(f'    {scen}/{BASELINE_YEAR}/{sec}  states={len(next(iter(ann_d.values()), {}))}')
 
     return {
         'annual_gwh': annual,
@@ -695,14 +864,17 @@ def panel_cohort_daily_all_wys(
     """
     sector_cohorts = ([('residential', c) for c in RES_COHORTS]
                       + [('commercial',  c) for c in COM_COHORTS])
+    # 2018 baseline has no cohort split (NC/SA/SNA come from intermediate
+    # files; the 2018 agg files don't carry that dimension). Skip the
+    # baseline year — the dashboard shows "No data" for those cells.
     tasks = []
     for s in SCENARIOS:
-        for y in STOCK_YEARS:
+        for y in PROJECTION_YEARS:
             for sec, coh in sector_cohorts:
                 paths = res_inter if sec == 'residential' else com_inter
                 tasks.append((paths, s, y, sec, coh))
 
-    conus_only: dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
+    conus_only: dict = {s: {y: {} for y in PROJECTION_YEARS} for s in SCENARIOS}
     per_state: dict = {}
     _log(f'  cohort_daily_all_wys — {len(tasks)} (scenario, year, sector, cohort) tasks across {WORKERS} processes')
     done = 0
@@ -778,7 +950,13 @@ def panel_lbl(res_lbl_dir: Path, com_lbl_dir: Path) -> dict:
         return out
     _log(f'  LBL — {len(all_paths)} CSVs across {WORKERS} processes (polars 1-thread per worker)')
     done = 0
-    with ProcessPoolExecutor(max_workers=WORKERS, initializer=_lbl_worker_init) as pool:
+    # Spawn (not fork) so workers don't inherit the parent's polars thread
+    # pool. The 2018 baseline path runs polars in the parent before this
+    # stage, and fork()-inherited polars threads deadlock when workers try
+    # to spin up their own scan_csv reads.
+    spawn_ctx = mp.get_context('spawn')
+    with ProcessPoolExecutor(max_workers=WORKERS, mp_context=spawn_ctx,
+                              initializer=_lbl_worker_init) as pool:
         for result in pool.map(_lbl_one_file_task, all_paths):
             done += 1
             if result is None:
@@ -837,7 +1015,27 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
     panel3_conus, panel3_per_state = panel3_peak_week(res_inter, com_inter)
 
     _log('C. panel_state_by_sector — per-state annual+peak per sector...')
-    state_by_sector = panel_state_by_sector(res_inter, com_inter)
+    state_by_sector = panel_state_by_sector(res_inter, com_inter, res_run_dir, com_run_dir)
+
+    # panel1 (CONUS trajectory) at the 2018 baseline: ReEDs has no 2018, so
+    # derive it from state_by_sector.total.CONUS. The test suite verifies
+    # this identity holds for the projection years — same source of truth,
+    # one year earlier.
+    for scen in SCENARIOS:
+        ann_2018  = state_by_sector['annual_gwh'].get(scen, {}).get(BASELINE_YEAR, {})
+        peak_2018 = state_by_sector['peak_gw']   .get(scen, {}).get(BASELINE_YEAR, {})
+        if not ann_2018 or not peak_2018:
+            continue
+        series_annual.setdefault(scen, {})[BASELINE_YEAR] = {
+            int(wy): float(by_sec['total']['CONUS'])
+            for wy, by_sec in ann_2018.items()
+        }
+        series_peak.setdefault(scen, {})[BASELINE_YEAR] = {
+            int(wy): float(by_sec['total']['CONUS']['annual'])
+            for wy, by_sec in peak_2018.items()
+        }
+        wy_seen.update(int(w) for w in peak_2018.keys())
+    panel1['weather_years'] = sorted(int(w) for w in wy_seen)
 
     _log('D. panel_cohort_daily_all_wys — daily cohort decomp, every wy...')
     cohort_daily_conus, cohort_daily_per_state = panel_cohort_daily_all_wys(res_inter, com_inter)
