@@ -983,54 +983,54 @@ def panel_intermediate_annual(
 
 
 def panel_stock_counts(res_run_dir: Path, com_run_dir: Path) -> dict:
-    """Per-state stock-count trajectories: residential households (millions
-    of occupied HH) and commercial floor area (billions of sq ft) at every
-    stock year.
+    """Per-state, per-cohort stock-count trajectories on the ResStock-modeled
+    basis (not the raw AEO total), at every stock year.
 
-    Stock counts are scenario-invariant and weather-year-invariant — they're
-    determined entirely by the AEO Reference Case totals and the per-state
-    share derived from aux_coverage_All-Baseline_reg_b2018.
+    The displayed counts reflect the stock that's actually represented in the
+    projected energy data: the ResStock 2018 baseline (occupied households /
+    modeled floor space) scaled by AEO cohort growth factors, NOT AEO totals
+    directly. The two differ because the ResStock sampling frame's modeled
+    units / sqft don't exactly equal AEO 2018 — residential matches within
+    ~4 %, commercial undermodels by ~30 % (the gap sector).
 
-    Source:
-        AEO 2018 vintage (`AEO 2025/<>_2018.csv`) for the 2018 cell — the
-        only file that carries 2018 data.
-        AEO 2025 (via projections.growth_factors) for 2027-2050.
-        Per-state share from aux_coverage_All-Baseline_reg_b2018 (state
-        column already provides 2-letter postals; AK/HI/DC dropped to match
-        the existing dashboard geography; DC's count folded into MD per the
-        ReEDs convention).
+    Cohort breakdown matches the energy cohorts in the intermediate files:
+        residential: NC, SA, SNA
+        commercial:  NC, SA, SNA, gap
+
+    Calendar logic:
+        Before ANCHOR_YEAR (2027), no adoption has begun and no new
+        construction has accumulated — every modeled unit lives in the
+        SNA cohort. The 2018 cell falls in this regime.
+        From ANCHOR_YEAR onward, growth_factors' cohort_split functions
+        define the per-cohort AEO fractions; we scale those by the
+        ResStock-to-AEO ratio at the anchor year to land on the modeled
+        basis (modeled_2018 / AEO_anchor).
+
+    Per-state share comes from aux_coverage at 2018 (DC folded into MD,
+    AK/HI dropped). The share is applied per cohort identically — this
+    assumes state-level cohort proportions track the CONUS proportions.
 
     Output:
         {
-          'residential_units': {year: {state: M occupied HH}},
-          'commercial_sqft':   {year: {state: B sqft}},
+          'residential_units': {year: {cohort: {state: M occupied HH}}},
+          'commercial_sqft':   {year: {cohort: {state: B sqft}}},
         }
-        Each year-dict includes a 'CONUS' key equal to the AEO total.
     """
     from projections.growth_factors import (
-        residential_total_households, commercial_total_floorspace,
+        residential_cohort_split, commercial_cohort_split,
+        commercial_total_floorspace, ANCHOR_YEAR, GAP_FRACTION,
     )
+    from projections.common import RES_OCCUPANCY_FRACTION
 
     aeo_dir = Path(__file__).resolve().parent.parent / 'AEO 2025'
-    res_aeo18 = pd.read_csv(
-        aeo_dir / 'Residential_Sector_Key_Indicators_and_Consumption_2018.csv',
-        skiprows=4)
     com_aeo18 = pd.read_csv(
         aeo_dir / 'Commercial_Sector_Key_Indicators_and_Consumption_2018.csv',
         skiprows=4)
-    name_res = res_aeo18.columns[1]
     name_com = com_aeo18.columns[1]
-    aeo_res_2018 = float(res_aeo18.loc[res_aeo18[name_res] ==
-        'Residential: Key Indicators: Households: Total: Reference case', '2018'].iloc[0])
     aeo_com_2018 = float(com_aeo18.loc[com_aeo18[name_com] ==
         'Commercial: Total Floorspace: Total: Reference case', '2018'].iloc[0])
 
-    # Per-state share from aux_coverage. The 'state' column is a 2-letter
-    # postal; AK/HI sit outside the dashboard's CONUS+DC geography; DC folds
-    # into MD per the existing convention. Note that occupancy correction is
-    # applied at the CONUS-total layer (AEO is already on the occupied basis),
-    # so per-state shares come straight from raw counts — the multiplicative
-    # 0.878 cancels in the share ratio.
+    # Per-state share + 2018 modeled basis from aux_coverage.
     drop_states = {'AK', 'HI'}
     res_aux = pd.read_csv(res_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
     com_aux = pd.read_csv(com_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
@@ -1038,31 +1038,76 @@ def panel_stock_counts(res_run_dir: Path, com_run_dir: Path) -> dict:
     com_aux = com_aux[~com_aux['state'].isin(drop_states)].copy()
     res_aux['state'] = res_aux['state'].replace({'DC': 'MD'})
     com_aux['state'] = com_aux['state'].replace({'DC': 'MD'})
-    res_by_state = res_aux.groupby('state')['units_count'].sum()
-    com_by_state = com_aux.groupby('state')['sqft'].sum()
-    res_state_share = (res_by_state / res_by_state.sum()).to_dict()
-    com_state_share = (com_by_state / com_by_state.sum()).to_dict()
+    res_state_share = (res_aux.groupby('state')['units_count'].sum()
+                       / res_aux['units_count'].sum()).to_dict()
+    com_state_share = (com_aux.groupby('state')['sqft'].sum()
+                       / com_aux['sqft'].sum()).to_dict()
+    modeled_res_2018 = res_aux['units_count'].sum() * RES_OCCUPANCY_FRACTION / 1e6
+    modeled_com_non_gap_2018 = com_aux['sqft'].sum() / 1e9
+    gap_ratio_com_2018 = (aeo_com_2018 - modeled_com_non_gap_2018) / modeled_com_non_gap_2018
+
+    # Scale factors: modeled / AEO at the anchor year (used to map AEO
+    # cohort_split values onto the ResStock-modeled basis).
+    anchor_res_total       = residential_cohort_split(ANCHOR_YEAR)['total_households']
+    anchor_com_non_gap     = commercial_cohort_split(ANCHOR_YEAR)['total_floorspace'] * (1 - GAP_FRACTION)
+    ratio_res              = modeled_res_2018 / anchor_res_total
+    ratio_com_non_gap      = modeled_com_non_gap_2018 / anchor_com_non_gap
+
+    def _per_state(value: float, share: dict[str, float]) -> dict[str, float]:
+        out = {st: float(value * s) for st, s in share.items()}
+        out['CONUS'] = float(value)
+        return out
 
     residential_units: dict = {}
     commercial_sqft:   dict = {}
     for year in STOCK_YEARS:
-        if year == BASELINE_YEAR:
-            res_total = aeo_res_2018
-            com_total = aeo_com_2018
+        if year < ANCHOR_YEAR:
+            # 2018 calibration year. No adoption, no new construction —
+            # every modeled unit/sqft lives in SNA. Gap (commercial only) is
+            # the unmodeled portion at 2018.
+            res_NC, res_SA = 0.0, 0.0
+            res_SNA = modeled_res_2018
+            com_NC, com_SA = 0.0, 0.0
+            com_SNA = modeled_com_non_gap_2018
+            com_gap = modeled_com_non_gap_2018 * gap_ratio_com_2018
         else:
-            res_total = residential_total_households(year)
-            com_total = commercial_total_floorspace(year)
-        residential_units[year] = {st: float(res_total * share)
-                                    for st, share in res_state_share.items()}
-        residential_units[year]['CONUS'] = float(res_total)
-        commercial_sqft[year]   = {st: float(com_total * share)
-                                    for st, share in com_state_share.items()}
-        commercial_sqft[year]['CONUS'] = float(com_total)
+            res = residential_cohort_split(year)
+            com = commercial_cohort_split(year)
+            res_NC  = res['cumulative_new_households']                 * ratio_res
+            res_SA  = res['adopted_existing_households']               * ratio_res
+            res_SNA = (res['eligible_not_adopted_existing_households']
+                       + res['ineligible_existing_households'])         * ratio_res
+            # Commercial non-gap cohorts on the modeled basis. The cohort
+            # values from growth_factors are already non-gap-scoped for the
+            # adopted/eligible/ineligible terms; only cumulative_new needs
+            # the (1 - GAP_FRACTION) factor (the dict mixes scopes).
+            com_NC  = com['cumulative_new_floorspace'] * (1 - GAP_FRACTION) * ratio_com_non_gap
+            com_SA  = com['adopted_existing_floorspace']                    * ratio_com_non_gap
+            com_SNA = (com['eligible_not_adopted_existing_floorspace']
+                       + com['ineligible_existing_floorspace'])             * ratio_com_non_gap
+            # Commercial gap: scale 2018 gap by AEO total commercial growth.
+            # This keeps the gap proportional to the non-gap on the modeled
+            # basis as time advances, matching the energy panel's gap logic.
+            com_gap = (modeled_com_non_gap_2018 * gap_ratio_com_2018
+                       * commercial_total_floorspace(year) / aeo_com_2018)
 
-    _log(f'  stock_counts: 2018 res={aeo_res_2018:.1f} M HH, '
-         f'com={aeo_com_2018:.1f} B sqft; '
-         f'2050 res={residential_units[2050]["CONUS"]:.1f} M HH, '
-         f'com={commercial_sqft[2050]["CONUS"]:.1f} B sqft')
+        residential_units[year] = {
+            'NC':  _per_state(res_NC,  res_state_share),
+            'SA':  _per_state(res_SA,  res_state_share),
+            'SNA': _per_state(res_SNA, res_state_share),
+        }
+        commercial_sqft[year] = {
+            'NC':  _per_state(com_NC,  com_state_share),
+            'SA':  _per_state(com_SA,  com_state_share),
+            'SNA': _per_state(com_SNA, com_state_share),
+            'gap': _per_state(com_gap, com_state_share),
+        }
+
+    _log(f'  stock_counts (modeled basis): '
+         f'2018 res={modeled_res_2018:.1f}M HH all-SNA, '
+         f'com_non_gap={modeled_com_non_gap_2018:.1f}B sqft + gap={modeled_com_non_gap_2018*gap_ratio_com_2018:.1f}B; '
+         f'2050 res_total={sum(residential_units[2050][c]["CONUS"] for c in ("NC","SA","SNA")):.1f}M HH, '
+         f'com_total={sum(commercial_sqft[2050][c]["CONUS"] for c in ("NC","SA","SNA","gap")):.1f}B sqft')
     return {
         'residential_units': residential_units,
         'commercial_sqft':   commercial_sqft,

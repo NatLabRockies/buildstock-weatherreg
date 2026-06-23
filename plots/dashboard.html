@@ -615,17 +615,33 @@ function peakReEDs(sc, y, wy) {
 function stateMetricLookup(metric, sc, y, wy, sector, stOrConus) {
   // metric: 'annual_gwh' | 'peak_gw' | 'households' | 'floor_area';
   // stOrConus: 'CONUS' | postal
+  // For stock metrics the value is summed across the cohort dim; per-cohort
+  // values are accessed via stockCohortLookup() below.
   if (metric === 'households') {
-    return (PAYLOAD.stock_counts?.residential_units?.[y] || {})[stOrConus];
+    const cd = PAYLOAD.stock_counts?.residential_units?.[y] || {};
+    return ['NC', 'SA', 'SNA'].reduce(
+      (acc, k) => acc + ((cd[k] || {})[stOrConus] || 0), 0);
   }
   if (metric === 'floor_area') {
-    return (PAYLOAD.stock_counts?.commercial_sqft?.[y] || {})[stOrConus];
+    const cd = PAYLOAD.stock_counts?.commercial_sqft?.[y] || {};
+    return ['NC', 'SA', 'SNA', 'gap'].reduce(
+      (acc, k) => acc + ((cd[k] || {})[stOrConus] || 0), 0);
   }
   const tree = (PAYLOAD.state_by_sector[metric][sc] || {})[y] || {};
   const sec_d = (tree[wy] || {})[sector] || {};
   const v = sec_d[stOrConus];
   // peak_gw stores {annual, summer, winter}; non-seasonal callers want annual.
   return (v && typeof v === 'object') ? v.annual : v;
+}
+
+// Stock-metric per-cohort lookup. Returns the value for one cohort at one
+// (year, state). Used by the breakdown subtab to stack NC / SA / SNA (+ gap
+// for commercial).
+function stockCohortLookup(metric, cohort, y, stOrConus) {
+  const tree = metric === 'households'
+    ? PAYLOAD.stock_counts?.residential_units
+    : PAYLOAD.stock_counts?.commercial_sqft;
+  return ((tree?.[y] || {})[cohort] || {})[stOrConus] || 0;
 }
 
 // === Build controls ======================================================
@@ -709,23 +725,11 @@ function buildControls() {
     tabsEl.appendChild(b);
   });
 
-  // Trajectory sub-tabs
-  function syncTrajSubtabForMetric() {
-    // Stock metrics (households / floor_area) have no meaningful sector
-    // breakdown — disable that subtab and snap to Total.
-    const isStock = state.trajMetric === 'households' || state.trajMetric === 'floor_area';
-    document.querySelectorAll('#traj-subtabs button').forEach(b => {
-      const isBreakdown = b.dataset.subtab === 'breakdown';
-      b.disabled = isStock && isBreakdown;
-      b.style.opacity = b.disabled ? '0.35' : '';
-      b.style.cursor = b.disabled ? 'not-allowed' : '';
-    });
-    if (isStock && state.trajSubtab !== 'total') {
-      state.trajSubtab = 'total';
-      document.querySelectorAll('#traj-subtabs button').forEach(b =>
-        b.classList.toggle('active', b.dataset.subtab === 'total'));
-    }
-  }
+  // Trajectory sub-tabs.  Stock metrics use the same Total / Breakdown
+  // split as the energy metrics — Total shows the sum across cohorts,
+  // Breakdown stacks NC / SA / SNA (+ gap for floor area). Both subtabs
+  // stay enabled for all metrics.
+  function syncTrajSubtabForMetric() { /* both subtabs are always available */ }
   document.querySelectorAll('#traj-subtabs button').forEach(btn => {
     btn.onclick = () => {
       if (btn.disabled) return;
@@ -901,38 +905,66 @@ function renderTrajectoryTotal() {
 
 function renderTrajectoryBreakdown() {
   const metric = state.trajMetric;
+  const isStock = metric === 'households' || metric === 'floor_area';
   const wySel = weatherYear();
   const stSel = state.trajState;
   const scenario = state.scenario;
 
-  // For Annual: stack the three sector annual values (sums commute).
-  // For Peak: use coincident decomposition — each sector's value AT the
-  // total-peak hour. Summing res+com+gap at that hour equals the total
-  // peak, so the stack adds up correctly. Without this, the stack would
-  // overshoot the total peak (sum of per-sector peaks > peak of sum).
-  let dataLookup;
-  if (metric === 'annual_gwh') {
-    dataLookup = (sec, y) => stateMetricLookup('annual_gwh', scenario, y, wySel, sec, stSel) || 0;
+  let traces, yLabel, yMax, titleText;
+  if (isStock) {
+    // Stock metrics stack cohorts NC / SA / SNA — plus gap when the metric
+    // is floor area (commercial). Before the projection anchor year (2027)
+    // every modeled unit lives in SNA, so the stack at 2018 is one solid
+    // band; cohorts split out from the anchor year onward.
+    const COHORT_DEF = metric === 'households'
+      ? [{key: 'SNA', label: 'Existing — not adopted', color: '#7e8a96'},
+         {key: 'SA',  label: 'Existing — adopted',     color: '#4a90e2'},
+         {key: 'NC',  label: 'New construction',       color: '#1f4e79'}]
+      : [{key: 'gap', label: 'Gap (unmodeled)',        color: '#999999'},
+         {key: 'SNA', label: 'Existing — not adopted', color: '#7e8a96'},
+         {key: 'SA',  label: 'Existing — adopted',     color: '#f6b26b'},
+         {key: 'NC',  label: 'New construction',       color: '#b25a1a'}];
+    const unitTag = metric === 'households' ? 'M HH' : 'B sqft';
+    traces = COHORT_DEF.map(c => ({
+      x: PAYLOAD.stock_years,
+      y: PAYLOAD.stock_years.map(y => stockCohortLookup(metric, c.key, y, stSel)),
+      type: 'scatter', mode: 'none', name: c.label,
+      stackgroup: 'one', fillcolor: c.color, line: {width: 0},
+      hovertemplate: `<b>${c.label}</b><br>%{x}: %{y:,.2f} ${unitTag}<extra></extra>`,
+    }));
+    yLabel = metric === 'households'
+      ? 'Residential households (millions, occupied)'
+      : 'Commercial floor area (billions sq ft)';
+    // Sum-of-cohorts at 2050 as the y-axis ceiling (matches the Total view).
+    yMax = stateMetricLookup(metric, null, 2050, null, null, stSel) || 1;
+    titleText = `${stSel} · stock count by cohort (scenario / amy independent)`;
   } else {
-    dataLookup = (sec, y) => {
-      const decomp = (((PAYLOAD.state_by_sector.peak_contributions[scenario] || {})[y] || {})[wySel] || {})[stSel] || {};
-      return decomp[sec] || 0;
-    };
+    // Energy breakdown: stack the three sector values. For Annual: sums of
+    // sector annual values commute. For Peak: use coincident decomposition.
+    let dataLookup;
+    if (metric === 'annual_gwh') {
+      dataLookup = (sec, y) => stateMetricLookup('annual_gwh', scenario, y, wySel, sec, stSel) || 0;
+    } else {
+      dataLookup = (sec, y) => {
+        const decomp = (((PAYLOAD.state_by_sector.peak_contributions[scenario] || {})[y] || {})[wySel] || {})[stSel] || {};
+        return decomp[sec] || 0;
+      };
+    }
+    const SECTOR_DEF = [
+      {key: 'residential', label: 'Residential', color: '#1f4e79'},
+      {key: 'commercial',  label: 'Commercial',  color: '#f6b26b'},
+      {key: 'gap',         label: 'Gap',         color: '#999999'},
+    ];
+    traces = SECTOR_DEF.map(sec => ({
+      x: PAYLOAD.stock_years,
+      y: PAYLOAD.stock_years.map(y => dataLookup(sec.key, y)),
+      type: 'scatter', mode: 'none', name: sec.label,
+      stackgroup: 'one', fillcolor: sec.color, line: {width: 0},
+    }));
+    yLabel = metric === 'annual_gwh' ? 'Annual energy (GWh / yr)' : 'Annual peak power — coincident decomposition (GW)';
+    yMax = (PAYLOAD.axis.trajectory_max[stSel] || {})['total']?.[metric] || 1;
+    titleText = `${scenario} · ${stSel} · amy${wySel}` + (metric === 'peak_gw' ? '  (Σ at peak hour)' : '');
   }
-
-  const SECTOR_DEF = [
-    {key: 'residential', label: 'Residential', color: '#1f4e79'},
-    {key: 'commercial',  label: 'Commercial',  color: '#f6b26b'},
-    {key: 'gap',         label: 'Gap',         color: '#999999'},
-  ];
-  const traces = SECTOR_DEF.map(sec => ({
-    x: PAYLOAD.stock_years,
-    y: PAYLOAD.stock_years.map(y => dataLookup(sec.key, y)),
-    type: 'scatter', mode: 'none', name: sec.label,
-    stackgroup: 'one', fillcolor: sec.color, line: {width: 0},
-  }));
-  const yLabel = metric === 'annual_gwh' ? 'Annual energy (GWh / yr)' : 'Annual peak power — coincident decomposition (GW)';
-  const yMax = (PAYLOAD.axis.trajectory_max[stSel] || {})['total']?.[metric] || 1;
   const layout = {
     margin: {t: 24, r: 8, b: 36, l: 70},
     xaxis: {tickmode: 'array', tickvals: PAYLOAD.stock_years},
@@ -941,8 +973,7 @@ function renderTrajectoryBreakdown() {
             tickformat: metric === 'annual_gwh' ? '.2s' : undefined},
     legend: {orientation: 'h', y: -0.18, font: {size: 11}},
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
-    title: {text: `${scenario} · ${stSel} · amy${wySel}` + (metric === 'peak_gw' ? '  (Σ at peak hour)' : ''),
-            x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+    title: {text: titleText, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
   };
   Plotly.react('plot-trajectory', traces, layout, {displayModeBar: false, responsive: true});
 }
