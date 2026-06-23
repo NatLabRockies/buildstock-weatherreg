@@ -1023,10 +1023,16 @@ def panel_stock_counts(res_run_dir: Path, com_run_dir: Path) -> dict:
     from projections.common import RES_OCCUPANCY_FRACTION
 
     aeo_dir = Path(__file__).resolve().parent.parent / 'AEO 2025'
+    res_aeo18 = pd.read_csv(
+        aeo_dir / 'Residential_Sector_Key_Indicators_and_Consumption_2018.csv',
+        skiprows=4)
     com_aeo18 = pd.read_csv(
         aeo_dir / 'Commercial_Sector_Key_Indicators_and_Consumption_2018.csv',
         skiprows=4)
+    name_res = res_aeo18.columns[1]
     name_com = com_aeo18.columns[1]
+    aeo_res_2018 = float(res_aeo18.loc[res_aeo18[name_res] ==
+        'Residential: Key Indicators: Households: Total: Reference case', '2018'].iloc[0])
     aeo_com_2018 = float(com_aeo18.loc[com_aeo18[name_com] ==
         'Commercial: Total Floorspace: Total: Reference case', '2018'].iloc[0])
 
@@ -1069,11 +1075,16 @@ def panel_stock_counts(res_run_dir: Path, com_run_dir: Path) -> dict:
     commercial_sqft:   dict = {}
     for year in STOCK_YEARS:
         if year < ANCHOR_YEAR:
-            # 2018 calibration year. No adoption, no new construction —
-            # every modeled unit/sqft lives in SNA. Gap (commercial only) is
-            # the unmodeled portion at 2018.
+            # 2018 calibration year. No adoption, no new construction — every
+            # unit lives in SNA. Residential goes through the same projection-
+            # flow formula as 2027+ (AEO_Y_occupied / RES_OCCUPANCY_FRACTION),
+            # using AEO 2018 vintage data; this gives a value smaller than
+            # raw aux because ResStock models more occupied units than AEO
+            # 2018 reports actually exist. Commercial uses the AEO 2018 total
+            # so the gap = total - non_gap_modeled stays consistent with the
+            # energy panel.
             res_NC, res_SA = 0.0, 0.0
-            res_SNA = modeled_res_2018
+            res_SNA = aeo_res_2018 / RES_OCCUPANCY_FRACTION
             com_NC, com_SA = 0.0, 0.0
             com_SNA = modeled_com_non_gap_2018
             com_gap = modeled_com_non_gap_2018 * gap_ratio_com_2018
