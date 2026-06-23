@@ -1042,16 +1042,23 @@ def panel_stock_counts(res_run_dir: Path, com_run_dir: Path) -> dict:
                        / res_aux['units_count'].sum()).to_dict()
     com_state_share = (com_aux.groupby('state')['sqft'].sum()
                        / com_aux['sqft'].sum()).to_dict()
-    modeled_res_2018 = res_aux['units_count'].sum() * RES_OCCUPANCY_FRACTION / 1e6
+    # Residential basis: the raw ResStock dwelling units count (including
+    # vacancies) — the "dwelling units modeled" by the projection. Each cohort
+    # at year Y then equals AEO_cohort(Y) × (aux_raw / aux_occupied_at_anchor)
+    # = AEO_cohort(Y) / RES_OCCUPANCY_FRACTION, which expresses the projection's
+    # implicit-count formulation: ResStock baseline × growth factor where the
+    # growth factor is AEO_Y_occupied / modeled_2018_occupied.
+    modeled_res_2018 = res_aux['units_count'].sum() / 1e6  # raw, NOT × occupancy
     modeled_com_non_gap_2018 = com_aux['sqft'].sum() / 1e9
     gap_ratio_com_2018 = (aeo_com_2018 - modeled_com_non_gap_2018) / modeled_com_non_gap_2018
 
-    # Scale factors: modeled / AEO at the anchor year (used to map AEO
-    # cohort_split values onto the ResStock-modeled basis).
-    anchor_res_total       = residential_cohort_split(ANCHOR_YEAR)['total_households']
-    anchor_com_non_gap     = commercial_cohort_split(ANCHOR_YEAR)['total_floorspace'] * (1 - GAP_FRACTION)
-    ratio_res              = modeled_res_2018 / anchor_res_total
-    ratio_com_non_gap      = modeled_com_non_gap_2018 / anchor_com_non_gap
+    # Residential scaling: 1/occupancy_fraction folds together
+    #   aux_raw / aux_occupied_at_anchor — yields ~1.09 at the 2027 anchor.
+    # Commercial scaling: modeled / AEO at the anchor year — no occupancy
+    # correction (sqft is not occupancy-dependent).
+    anchor_com_non_gap = commercial_cohort_split(ANCHOR_YEAR)['total_floorspace'] * (1 - GAP_FRACTION)
+    ratio_res          = 1.0 / RES_OCCUPANCY_FRACTION
+    ratio_com_non_gap  = modeled_com_non_gap_2018 / anchor_com_non_gap
 
     def _per_state(value: float, share: dict[str, float]) -> dict[str, float]:
         out = {st: float(value * s) for st, s in share.items()}

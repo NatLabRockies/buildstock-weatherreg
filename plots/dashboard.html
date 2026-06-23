@@ -910,7 +910,7 @@ function renderTrajectoryBreakdown() {
   const stSel = state.trajState;
   const scenario = state.scenario;
 
-  let traces, yLabel, yMax, titleText;
+  let traces, yLabel, yMax, titleText, hoverFmt;
   if (isStock) {
     // Stock metrics stack cohorts NC / SA / SNA — plus gap when the metric
     // is floor area (commercial). Before the projection anchor year (2027)
@@ -925,18 +925,29 @@ function renderTrajectoryBreakdown() {
          {key: 'SA',  label: 'Existing — adopted',     color: '#f6b26b'},
          {key: 'NC',  label: 'New construction',       color: '#b25a1a'}];
     const unitTag = metric === 'households' ? 'M HH' : 'B sqft';
+    hoverFmt = `%{x}: %{y:,.2f} ${unitTag}`;
     traces = COHORT_DEF.map(c => ({
       x: PAYLOAD.stock_years,
       y: PAYLOAD.stock_years.map(y => stockCohortLookup(metric, c.key, y, stSel)),
       type: 'scatter', mode: 'none', name: c.label,
       stackgroup: 'one', fillcolor: c.color, line: {width: 0},
-      hovertemplate: `<b>${c.label}</b><br>%{x}: %{y:,.2f} ${unitTag}<extra></extra>`,
+      hovertemplate: `<b>${c.label}</b><br>${hoverFmt}<extra></extra>`,
     }));
+    // Sum-of-cohorts (Total) line drawn on top of the stack. Enables reading
+    // the total off the hover popup (with hovermode: 'x unified') without
+    // having to mentally sum the band heights.
+    const totals = PAYLOAD.stock_years.map(y =>
+      stateMetricLookup(metric, null, y, null, null, stSel));
+    traces.push({
+      x: PAYLOAD.stock_years, y: totals,
+      type: 'scatter', mode: 'lines', name: 'Total',
+      line: {color: '#111', width: 1.5},
+      hovertemplate: `<b>Total</b><br>${hoverFmt}<extra></extra>`,
+    });
     yLabel = metric === 'households'
       ? 'Residential households (millions, occupied)'
       : 'Commercial floor area (billions sq ft)';
-    // Sum-of-cohorts at 2050 as the y-axis ceiling (matches the Total view).
-    yMax = stateMetricLookup(metric, null, 2050, null, null, stSel) || 1;
+    yMax = Math.max(...totals) || 1;
     titleText = `${stSel} · stock count by cohort (scenario / amy independent)`;
   } else {
     // Energy breakdown: stack the three sector values. For Annual: sums of
@@ -955,12 +966,24 @@ function renderTrajectoryBreakdown() {
       {key: 'commercial',  label: 'Commercial',  color: '#f6b26b'},
       {key: 'gap',         label: 'Gap',         color: '#999999'},
     ];
+    const unitTag = metric === 'annual_gwh' ? 'GWh / yr' : 'GW';
+    hoverFmt = `%{x}: %{y:,.0f} ${unitTag}`;
     traces = SECTOR_DEF.map(sec => ({
       x: PAYLOAD.stock_years,
       y: PAYLOAD.stock_years.map(y => dataLookup(sec.key, y)),
       type: 'scatter', mode: 'none', name: sec.label,
       stackgroup: 'one', fillcolor: sec.color, line: {width: 0},
+      hovertemplate: `<b>${sec.label}</b><br>${hoverFmt}<extra></extra>`,
     }));
+    // Total line on top of the stack.
+    const totals = PAYLOAD.stock_years.map(y =>
+      SECTOR_DEF.reduce((acc, sec) => acc + dataLookup(sec.key, y), 0));
+    traces.push({
+      x: PAYLOAD.stock_years, y: totals,
+      type: 'scatter', mode: 'lines', name: 'Total',
+      line: {color: '#111', width: 1.5},
+      hovertemplate: `<b>Total</b><br>${hoverFmt}<extra></extra>`,
+    });
     yLabel = metric === 'annual_gwh' ? 'Annual energy (GWh / yr)' : 'Annual peak power — coincident decomposition (GW)';
     yMax = (PAYLOAD.axis.trajectory_max[stSel] || {})['total']?.[metric] || 1;
     titleText = `${scenario} · ${stSel} · amy${wySel}` + (metric === 'peak_gw' ? '  (Σ at peak hour)' : '');
@@ -971,7 +994,11 @@ function renderTrajectoryBreakdown() {
     yaxis: {title: {text: yLabel, standoff: 6, font: {size: 12}},
             gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05],
             tickformat: metric === 'annual_gwh' ? '.2s' : undefined},
-    legend: {orientation: 'h', y: -0.18, font: {size: 11}},
+    // 'reversed' so Total appears first in the unified hover popup and
+    // legend; cohorts / sectors then read top-down matching the visual
+    // stack — same convention used in the cohort_daily panel.
+    legend: {orientation: 'h', y: -0.18, font: {size: 11}, traceorder: 'reversed'},
+    hovermode: 'x unified',
     paper_bgcolor: '#fff', plot_bgcolor: '#fff',
     title: {text: titleText, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
   };
