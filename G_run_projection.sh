@@ -3,7 +3,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --qos=high
 #SBATCH --partition=standard
-#SBATCH --mem=200G
+#SBATCH --mem=0
 #SBATCH --cpus-per-task=30
 
 # Wall budget: parallelizes (spec, year, group) tasks across `cpus-per-task`
@@ -11,10 +11,17 @@
 # diagrams, each writing that box's 4 enduse files (gap writes 1). ~90
 # tasks/stock (com) / ~66 (res). The defaults below assume state resolution.
 #
+# --mem=0 requests the FULL node memory (standard = ~246 GB; cluster
+# has MaxMemPerNode=UNLIMITED so 0 = whole node). Without `--exclusive`
+# SLURM still hands you the whole node when you ask for all the memory
+# on it, so no other job lands on the same hardware to compete for the
+# polars/pandas working set. Per-resolution worker counts below assume
+# this 246 GB ceiling.
+#
 # Per-worker peak memory (input-frame size dominates):
 #   state         → reads county-level agg (~4 GB) + state intermediate.
-#                   ~4 GB/worker peak; 30 workers × 4 GB = 120 GB safe in 200 GB.
-#   county_group  → ~6-12 GB/worker peak; cap at --cpus-per-task=20 → ~200 GB.
+#                   ~4 GB/worker peak; 30 workers × 4 GB = 120 GB safe in 246 GB.
+#   county_group  → ~6-12 GB/worker peak; cap at --cpus-per-task=20.
 #   county        → ~20-40 GB/worker peak; --cpus-per-task=6, plus array fan-out.
 #
 # Multi-node fan-out via SLURM array. With `-a 0-N%K` sbatch flag, the same
@@ -37,7 +44,7 @@
 #   sbatch G_run_projection.sh <run_dir> res                   # res, state res
 #   sbatch --cpus-per-task=20 -a 0-2 G_run_projection.sh \
 #       <run_dir> com county_group                              # com, county_group, 3-node fan
-#   sbatch --cpus-per-task=6 --mem=240G -a 0-7 G_run_projection.sh \
+#   sbatch --cpus-per-task=6 -a 0-7 G_run_projection.sh \
 #       <run_dir> com county                                    # com, county, 8-node fan
 #
 # Output:
