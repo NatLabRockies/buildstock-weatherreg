@@ -33,6 +33,21 @@ export PATH="$HOME/.local/bin:$PATH"
 # Tell aggregate.py how many processes it can use.
 export BAKE_WORKERS="${SLURM_CPUS_PER_TASK:-16}"
 
+# Pin polars to one thread per process. Without this, the parent's polars
+# (used by the 2018-baseline path) spawns ~104 threads on a typical node,
+# and forked LBL workers inherit pieces of that thread state — combined
+# with each worker's own polars threading, this has historically caused
+# severe thread-pool oversubscription and contention-induced slowness in
+# the LBL stage (single-file polars scans going from ~0.2 s to many
+# minutes). One thread per process, parallelism from the ProcessPool.
+export POLARS_MAX_THREADS=1
+# Same logic for the BLAS family — keep each worker's numpy/scipy on a
+# single core so the ProcessPool isn't competing with thread pools.
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
 echo "res:        $res_run_dir"
 echo "com:        $com_run_dir"
 echo "workers:    $BAKE_WORKERS"
