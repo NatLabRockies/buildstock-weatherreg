@@ -121,26 +121,49 @@ def test_2018_baseline_only_and_scaled(payload):
         assert "2018" not in payload["panel1"]["annual_gwh"].get(scen, {}), (
             f"panel1.annual_gwh[{scen}] should NOT have 2018 — only Baseline does")
 
-    # state_by_sector: Baseline must have all 4 sectors + CONUS; gap=0.
+    # state_by_sector: Baseline must have all 4 sectors + CONUS.
     b18 = payload["state_by_sector"]["annual_gwh"].get("Baseline", {}).get("2018", {})
     assert b18, "state_by_sector[Baseline][2018] missing"
     sample_wy = next(iter(b18))
     by_sec = b18[sample_wy]
     assert {"residential", "commercial", "gap", "total"} <= set(by_sec.keys())
     assert "CONUS" in by_sec["total"]
-    # gap = 0 for 2018 (no projection mismatch; AEO scale absorbs coverage).
-    assert all(abs(v) < 0.01 for v in by_sec["gap"].values()), (
-        f"state_by_sector[Baseline][2018][{sample_wy}].gap should be all zero "
-        f"(no projection mismatch at calibration year): "
-        f"{[(s, v) for s, v in by_sec['gap'].items() if abs(v) > 0.01][:3]}")
 
-    # Sanity: the AEO scaling should bring CONUS within physically reasonable range.
-    # Baseline at 2018 has ~120-130 M households + ~91 B sqft of commercial —
-    # CONUS annual energy should fall between 2 and 5 million GWh.
+    # gap > 0 at 2018: synthesized from commercial × gap_ratio_com (the
+    # unmodeled-sqft / modeled-sqft ratio from aux_coverage vs AEO 2018).
+    # Should match the magnitude of projection-year gaps.
+    gap_conus = by_sec["gap"]["CONUS"]
+    com_conus = by_sec["commercial"]["CONUS"]
+    assert gap_conus > 0, (
+        f"state_by_sector[Baseline][2018][{sample_wy}].gap.CONUS = {gap_conus} "
+        f"— should be > 0 (synthesized from commercial coverage gap)")
+    gap_ratio = gap_conus / com_conus
+    # Expect ratio in [0.35, 0.50]; projection years span 0.377→0.427.
+    assert 0.35 < gap_ratio < 0.50, (
+        f"gap/commercial ratio at 2018 = {gap_ratio:.3f} — outside expected "
+        f"0.35-0.50 range (projection years span 0.377 at 2027 → 0.427 at 2050)")
+
+    # 2018 commercial must NOT exceed any projection-year commercial (stock
+    # grows over time, so commercial energy is monotonically non-decreasing).
+    # This is exactly the bug that previously slipped: pre-fix 2018 commercial
+    # was 1.33 MGWh, larger than every projection year (~0.92-1.08 MGWh).
+    com_by_year = {
+        int(y): payload["state_by_sector"]["annual_gwh"]["Baseline"][y][sample_wy]
+                       ["commercial"]["CONUS"]
+        for y in payload["state_by_sector"]["annual_gwh"]["Baseline"]
+    }
+    com_2018 = com_by_year[2018]
+    for y in (2027, 2030, 2050):
+        if y in com_by_year:
+            assert com_2018 < com_by_year[y] * 1.05, (
+                f"commercial at 2018 = {com_2018:,.0f} GWh exceeds {y} = "
+                f"{com_by_year[y]:,.0f} GWh — building stock can't shrink")
+
+    # CONUS annual total must be in EIA-realistic range (~2.6-2.7 MGWh).
     conus_ann = by_sec["total"]["CONUS"]
     assert 2_000_000 < conus_ann < 5_000_000, (
         f"state_by_sector[Baseline][2018][{sample_wy}].total.CONUS = "
-        f"{conus_ann:,.0f} GWh — outside the expected 2-5 MGWh range")
+        f"{conus_ann:,.0f} GWh — outside the expected 2-5 MGWh EIA range")
 
 
 def test_savings_path_does_not_yield_nan(payload):

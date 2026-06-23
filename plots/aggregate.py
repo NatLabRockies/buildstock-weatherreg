@@ -184,18 +184,31 @@ def _county_fips_to_state(col: str) -> str | None:
 def _baseline2018_scale_factors(
     res_run_dir: Path, com_run_dir: Path
 ) -> tuple[float, float]:
-    """Return (scale_res, scale_com) — the multipliers applied to the 2018
-    baseline state-x-time data so totals match AEO 2018 actuals rather than
-    the ResStock/ComStock modeled stock count.
+    """Return (scale_res, gap_ratio_com) — two *different* multiplicative
+    corrections needed to map the raw ResStock/ComStock 2018 output onto
+    AEO 2018 actuals.
 
-    scale = (AEO 2018 actual at 2018) / (sum of units_count or sqft in the
-    All-Baseline aux_coverage file).
+    scale_res — household occupancy correction.
+        aux_coverage.units_count sums ALL housing units in the ResStock
+        sampling frame (~140 M, includes vacant). AEO's residential
+        total is OCCUPIED households (~118 M). Multiply the modeled
+        residential load by AEO/modeled so the result reflects load from
+        occupied households only.
 
-    AEO 2025 doesn't carry 2018 data — its year range starts at 2023 — so
-    we use the AEO 2018 vintage CSVs in `AEO 2025/` (named
-    `<Residential|Commercial>_Sector_Key_Indicators_and_Consumption_2018.csv`)
-    for the 2018 calibration year only. AEO 2018 vs AEO 2025 differs by
-    5–30% on future years, so it must NOT be used for 2027–2050.
+    gap_ratio_com — coverage-gap ratio for the unmodeled commercial.
+        ComStock covers ~70 % of total US commercial floor space
+        (modeled = 64 B sqft, AEO total = 92 B sqft). The remaining
+        ~30 % is the dashboard's `gap` sector. By construction:
+              gap_load = modeled_load × gap_ratio_com
+        where gap_ratio_com = (AEO_sqft − modeled_sqft) / modeled_sqft.
+        The commercial sector itself stays unscaled — only the gap is
+        synthesized — so the modeled commercial value remains directly
+        comparable to projection-year commercial values, while
+        commercial+gap matches AEO actuals.
+
+    AEO 2025 carries no 2018 data, so the 2018 vintage CSVs in `AEO 2025/`
+    are the source for both AEO totals. AEO 2018 vs AEO 2025 diverges
+    5–30 % for future years, so it must NOT be used for 2027–2050.
     """
     repo_dir = Path(__file__).resolve().parent.parent
     aeo_dir = repo_dir / 'AEO 2025'
@@ -209,22 +222,21 @@ def _baseline2018_scale_factors(
         'Residential: Key Indicators: Households: Total: Reference case', '2018'].iloc[0])
     aeo_com_total = float(com_aeo.loc[com_aeo[name_col_com] ==
         'Commercial: Total Floorspace: Total: Reference case', '2018'].iloc[0])
-    # AEO units: millions of households / billions of sqft. Convert to raw
-    # counts to match aux_coverage's units_count (households) and sqft.
-    aeo_res_raw = aeo_res_total * 1e6
-    aeo_com_raw = aeo_com_total * 1e9
+    aeo_res_raw = aeo_res_total * 1e6   # millions HH → raw HH
+    aeo_com_raw = aeo_com_total * 1e9   # billions sqft → raw sqft
 
     res_aux = pd.read_csv(res_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
     com_aux = pd.read_csv(com_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
     modeled_res = float(res_aux['units_count'].sum())
     modeled_com = float(com_aux['sqft'].sum())
     scale_res = aeo_res_raw / modeled_res
-    scale_com = aeo_com_raw / modeled_com
-    _log(f'  2018 calibration scale: res={scale_res:.4f} '
-         f'(modeled {modeled_res/1e6:.2f}M HH vs AEO {aeo_res_total:.2f}M); '
-         f'com={scale_com:.4f} '
-         f'(modeled {modeled_com/1e9:.2f}B sqft vs AEO {aeo_com_total:.2f}B)')
-    return scale_res, scale_com
+    gap_ratio_com = (aeo_com_raw - modeled_com) / modeled_com
+    _log(f'  2018 calibration: scale_res={scale_res:.4f} '
+         f'(modeled {modeled_res/1e6:.2f}M HH → AEO {aeo_res_total:.2f}M); '
+         f'gap_ratio_com={gap_ratio_com:.4f} '
+         f'(modeled {modeled_com/1e9:.2f}B sqft, AEO {aeo_com_total:.2f}B → '
+         f'unmodeled fraction = {gap_ratio_com / (1 + gap_ratio_com):.3f})')
+    return scale_res, gap_ratio_com
 
 # ReEDs CSVs spell out state names in lowercase ("alabama, …"). Plotly's
 # USA-states choropleth wants 2-letter postals. DC is intentionally absent
@@ -828,24 +840,26 @@ def panel_state_by_sector(
                      f'states={len(next(iter(ann_d.values()), {}))}')
 
     # 2018 path: only Baseline scenario (adoption begins at 2027 per
-    # projections/growth_factors.py, so ASHP/GHP/GHP+Envelope at 2018 would
-    # be identical-by-construction to Baseline; we drop them rather than
-    # render four overlapping curves). Sequential pre-load to keep memory
-    # bounded (each agg file is ~4 GB in pandas; parallel × 4 files OOMs).
-    scale_res, scale_com = _baseline2018_scale_factors(res_run_dir, com_run_dir)
-    _log('  state-by-sector baseline 2018 — Baseline only, scaled to AEO 2018 totals')
+    # projections/growth_factors.py, so ASHP/GHP/+Env at 2018 would be
+    # identical-by-construction to Baseline; we drop them rather than render
+    # four overlapping curves). Sequential pre-load to keep memory bounded
+    # (each agg file is ~4 GB in pandas; parallel × 4 files OOMs).
+    scale_res, gap_ratio_com = _baseline2018_scale_factors(res_run_dir, com_run_dir)
+    _log('  state-by-sector baseline 2018 — Baseline only')
+    # Residential: scaled to occupied households (× ~0.84).
+    # Commercial: unscaled — leave modeled commercial directly comparable to
+    # projection-year commercial values.
+    # Gap: synthesized from commercial × gap_ratio_com (= unmodeled-sqft /
+    # modeled-sqft from aux_coverage vs AEO 2018), so commercial + gap = AEO
+    # total commercial. Same gap semantic as projection years.
     res_total = _roll_agg_b2018_to_state_xt(
         res_run_dir, 'res', [BASELINE_2018_SPEC['res']], scale=scale_res)
     com_total = _roll_agg_b2018_to_state_xt(
-        com_run_dir, 'com', [BASELINE_2018_SPEC['com']], scale=scale_com)
+        com_run_dir, 'com', [BASELINE_2018_SPEC['com']], scale=1.0)
     if res_total is None and com_total is None:
         _log('    no 2018 data found — skipping')
     else:
-        ref = res_total if res_total is not None else com_total
-        # gap = 0 for 2018: the AEO scale factor already maps modeled stock
-        # to AEO-reported totals, so there's no "unmodeled commercial gap"
-        # left to represent. Different semantic from projection years.
-        gap_total = pd.DataFrame(0.0, index=ref.index, columns=ref.columns)
+        gap_total = (com_total * gap_ratio_com) if com_total is not None else None
         parts = [d for d in (res_total, com_total, gap_total) if d is not None]
         total_sum = parts[0].copy()
         for d in parts[1:]:
