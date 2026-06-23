@@ -90,6 +90,17 @@ ENDUSES: tuple[Enduse, ...] = ('cooling_elec', 'heating_elec', 'non_hvac_elec', 
 REPO_DIR: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+# Fraction of ResStock-modeled housing units that are occupied. AEO residential
+# numbers report only OCCUPIED households; aux['units_count'] sums every unit in
+# the ResStock sampling frame (occupied + vacant). When a cohort amount taken
+# from AEO is divided by units_count, the resulting per-building factor is too
+# small by this fraction. Multiplying the units_count denominator by 0.878
+# brings the basis onto AEO's "occupied" footing — see load_aux_cohort_size.
+#
+# Source: ResStock options saturation for Vacancy.
+RES_OCCUPANCY_FRACTION: float = 0.878
+
+
 # CONUS+DC only (AK/HI are filtered out upstream).
 STATE_FIPS_TO_POSTAL: dict[int, StatePostal] = {
     1: 'AL',   4: 'AZ',   5: 'AR',   6: 'CA',   8: 'CO',   9: 'CT',
@@ -179,8 +190,20 @@ def load_agg_gwh(run_dir: str, stock: Stock, spec_tag: SpecTag, enduse: Enduse) 
 
 
 def load_aux_cohort_size(run_dir: str, stock: Stock, spec_tag: SpecTag) -> float:
-    """Cohort size in AEO units: billion sqft (com) or million households (res)."""
+    """Cohort size on the AEO-comparable basis: billion sqft (com) or million
+    OCCUPIED households (res).
+
+    For residential we multiply units_count by RES_OCCUPANCY_FRACTION so the
+    denominator matches AEO's occupied-household convention. Without this
+    correction, every AEO-cohort / units_count ratio (in factors.py's
+    upgrade_factors / baseline_scenario_factors) silently under-counts by
+    (1 - occupancy) ≈ 12 %, which propagates into 14 % under-projection of
+    residential load.
+
+    Commercial sqft is already on the same basis as AEO total floorspace, so
+    no occupancy correction applies there.
+    """
     aux = pd.read_csv(aux_path(run_dir, spec_tag))
     if stock == 'com':
         return float(aux['sqft'].sum()) / 1e9
-    return float(aux['units_count'].sum()) / 1e6
+    return float(aux['units_count'].sum()) * RES_OCCUPANCY_FRACTION / 1e6
