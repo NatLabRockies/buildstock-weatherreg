@@ -2,32 +2,43 @@
 #SBATCH --account=geohc
 #SBATCH --time=02:00:00
 #SBATCH --qos=high
-#SBATCH --partition=bigmem
-#SBATCH --mem=1024000
-#SBATCH --cpus-per-task=40
+#SBATCH --partition=standard
+#SBATCH --mem=200G
+#SBATCH --cpus-per-task=30
 
-# Wall budget: parallelizes (spec, year, group) tasks across 40 workers via
-# ProcessPoolExecutor — one task per green box of the projection diagrams,
-# each writing that box's 4 enduse files (gap writes 1). ~90 tasks/stock (com)
-# / ~66 (res). 40-way parallelism brings the wall to ~10-20 minutes per stock;
-# 2h provides ample headroom.
+# Wall budget: parallelizes (spec, year, group) tasks across `cpus-per-task`
+# workers via ProcessPoolExecutor — one task per green box of the projection
+# diagrams, each writing that box's 4 enduse files (gap writes 1). ~90
+# tasks/stock (com) / ~66 (res). The defaults below assume state resolution.
 #
-# Memory is resolution-dependent:
-#   state         → ~49 cols (tiny); memory is a non-issue at 40 workers.
-#   county_group  → ~1,038 cols (~1.4 GB/frame); ~6-12 GB peak per worker.
-#   county        → ~3,100 cols (~4 GB/frame); ~20-40 GB peak. At 40 workers
-#                   that can exceed the 1 TB node — drop to --cpus-per-task=24.
+# Per-worker peak memory (input-frame size dominates):
+#   state         → reads county-level agg (~4 GB) + state intermediate.
+#                   ~4 GB/worker peak; 30 workers × 4 GB = 120 GB safe in 200 GB.
+#   county_group  → ~6-12 GB/worker peak; cap at --cpus-per-task=20 → ~200 GB.
+#   county        → ~20-40 GB/worker peak; --cpus-per-task=6, plus array fan-out.
 #
-# Partition rationale: `bigmem` over `standard` for the memory; over `debug`
-# because debug+qos=high enforces 1-job-per-user, preventing res/com parallel.
-# The projection is idempotent — re-submitting after a TIMEOUT skips
-# already-written projection files.
+# Multi-node fan-out via SLURM array. With `-a 0-N%K` sbatch flag, the same
+# command is dispatched as N+1 array tasks and projection.py partitions the
+# work-list by SLURM_ARRAY_TASK_ID across SLURM_ARRAY_TASK_COUNT — no shared
+# state needed, idempotency is the back-stop. Each array task gets one
+# standard node; standard has 2,176 nodes so scheduling is much faster than
+# bigmem's ~10 nodes. Recommended array sizes:
+#   state         → -a 0    (single node; 30 workers comfortably fits)
+#   county_group  → -a 0-2  (3 nodes × 20 workers = 60 workers across tasks)
+#   county        → -a 0-7  (8 nodes × 6 workers = 48 workers across tasks)
+#
+# The projection is idempotent — re-submitting after a TIMEOUT or with a
+# different array-size skips already-written files. Workers across different
+# array tasks process disjoint slices (`tasks[task_id::task_count]`) so
+# there's no race even before idempotency kicks in.
 #
 # Usage:
 #   sbatch G_run_projection.sh <run_dir>                       # auto stock, state res
 #   sbatch G_run_projection.sh <run_dir> res                   # res, state res
-#   sbatch G_run_projection.sh <run_dir> com county            # com, county res
-#   sbatch G_run_projection.sh <run_dir> "" county_group       # auto stock, county_group
+#   sbatch --cpus-per-task=20 -a 0-2 G_run_projection.sh \
+#       <run_dir> com county_group                              # com, county_group, 3-node fan
+#   sbatch --cpus-per-task=6 --mem=240G -a 0-7 G_run_projection.sh \
+#       <run_dir> com county                                    # com, county, 8-node fan
 #
 # Output:
 #   <run_dir>/projections_state/         (49 state cols, gap included)

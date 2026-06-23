@@ -379,10 +379,23 @@ def project_run_dir(run_dir: str, stock: Stock, n_workers: int | None = None) ->
 
     if n_workers is None:
         n_workers = int(os.environ.get('SLURM_CPUS_PER_TASK') or os.cpu_count() or 8)
-    print(f'  dispatching {len(tasks)} projection tasks across {n_workers} workers')
+
+    # SLURM job array support — partition tasks across array indices so a
+    # county or county_group run can fan out across many standard-partition
+    # nodes (each node = one array task with `n_workers` ProcessPool slots).
+    # No SLURM_ARRAY_TASK_COUNT → behaves as a single non-array job.
+    array_id    = int(os.environ.get('SLURM_ARRAY_TASK_ID')    or 0)
+    array_count = int(os.environ.get('SLURM_ARRAY_TASK_COUNT') or 1)
+    if array_count > 1:
+        my_tasks = tasks[array_id::array_count]
+        print(f'  array task {array_id}/{array_count}: handling '
+              f'{len(my_tasks)}/{len(tasks)} tasks across {n_workers} workers')
+    else:
+        my_tasks = tasks
+        print(f'  dispatching {len(my_tasks)} projection tasks across {n_workers} workers')
 
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
-        futures = [pool.submit(_project_one_group, t) for t in tasks]
+        futures = [pool.submit(_project_one_group, t) for t in my_tasks]
         for fut in as_completed(futures):
             print(fut.result(), flush=True)
 
