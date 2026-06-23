@@ -276,6 +276,8 @@ WORKERS: int = max(1, min(16, int(os.environ.get('BAKE_WORKERS', os.cpu_count() 
 # === File-system catalogers ===============================================
 def _parse_reeds_files(reeds_dir: Path) -> dict[tuple[str, int], Path]:
     out: dict[tuple[str, int], Path] = {}
+    if not reeds_dir.is_dir():
+        return out                                # tolerate missing dir (handoff may have bundled into the sibling run_dir)
     for p in sorted(reeds_dir.iterdir()):
         m = _REEDS_FILE_RE.match(p.name)
         if not m:
@@ -286,6 +288,8 @@ def _parse_reeds_files(reeds_dir: Path) -> dict[tuple[str, int], Path]:
 
 def _parse_intermediate_files(intermediate_state_dir: Path) -> dict[tuple[str, str, str, str, int], Path]:
     out: dict[tuple[str, str, str, str, int], Path] = {}
+    if not intermediate_state_dir.is_dir():
+        return out
     for p in sorted(intermediate_state_dir.iterdir()):
         m = _INTERMEDIATE_FILE_RE.match(p.name)
         if not m:
