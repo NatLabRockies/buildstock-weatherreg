@@ -105,35 +105,42 @@ def test_panel3_peak_iso_inside_timestamps(payload):
             )
 
 
-def test_2018_baseline_is_present_in_state_by_sector(payload):
-    """REGRESSION GATE for Phase A.26: stock year 2018 must appear in
-    state_by_sector + panel1 (derived from agg_*_b2018 county files rolled
-    to state). cohort_daily and panel3 can legitimately omit 2018 (no
-    cohort split available at the baseline year)."""
-    assert 2018 in payload["stock_years"], "2018 missing from STOCK_YEARS"
-    # panel1 — at least Baseline scenario must have 2018
-    p1_ann_baseline = payload["panel1"]["annual_gwh"].get("Baseline", {}).get("2018", {})
-    p1_peak_baseline = payload["panel1"]["peak_gw"].get("Baseline", {}).get("2018", {})
-    assert p1_ann_baseline, "panel1.annual_gwh[Baseline][2018] missing"
-    assert p1_peak_baseline, "panel1.peak_gw[Baseline][2018] missing"
-    # state_by_sector — at least one scenario must have 2018 with full sector dims
-    found_2018 = False
-    for scen, by_y in payload["state_by_sector"]["annual_gwh"].items():
-        if "2018" not in by_y:
-            continue
-        for wy, by_sec in by_y["2018"].items():
-            assert {"residential", "commercial", "gap", "total"} <= set(by_sec.keys()), (
-                f"state_by_sector[{scen}][2018][{wy}] missing sectors: "
-                f"{set(by_sec.keys())}"
-            )
-            assert "CONUS" in by_sec["total"], (
-                f"state_by_sector[{scen}][2018][{wy}].total missing CONUS"
-            )
-            found_2018 = True
-            break
-        if found_2018:
-            break
-    assert found_2018, "state_by_sector has no 2018 cells"
+def test_2018_baseline_only_and_scaled(payload):
+    """REGRESSION GATE for the 2018 unprojected calibration anchor.
+    Adoption begins at the 2027 projection anchor year (per
+    projections/growth_factors.py), so at 2018 the ASHP/GHP/+Env scenarios
+    are identical-by-construction to Baseline; we ship only Baseline and
+    the dashboard disables the other chips. Cohort/peak-week panels
+    legitimately omit 2018 (no cohort split at the calibration year)."""
+    assert 2018 in payload["stock_years"], "2018 missing from stock_years"
+
+    # panel1: Baseline must have 2018; non-Baseline must NOT.
+    assert payload["panel1"]["annual_gwh"].get("Baseline", {}).get("2018"), (
+        "panel1.annual_gwh[Baseline][2018] missing")
+    for scen in ("ASHP", "GHP", "GHP+Envelope"):
+        assert "2018" not in payload["panel1"]["annual_gwh"].get(scen, {}), (
+            f"panel1.annual_gwh[{scen}] should NOT have 2018 — only Baseline does")
+
+    # state_by_sector: Baseline must have all 4 sectors + CONUS; gap=0.
+    b18 = payload["state_by_sector"]["annual_gwh"].get("Baseline", {}).get("2018", {})
+    assert b18, "state_by_sector[Baseline][2018] missing"
+    sample_wy = next(iter(b18))
+    by_sec = b18[sample_wy]
+    assert {"residential", "commercial", "gap", "total"} <= set(by_sec.keys())
+    assert "CONUS" in by_sec["total"]
+    # gap = 0 for 2018 (no projection mismatch; AEO scale absorbs coverage).
+    assert all(abs(v) < 0.01 for v in by_sec["gap"].values()), (
+        f"state_by_sector[Baseline][2018][{sample_wy}].gap should be all zero "
+        f"(no projection mismatch at calibration year): "
+        f"{[(s, v) for s, v in by_sec['gap'].items() if abs(v) > 0.01][:3]}")
+
+    # Sanity: the AEO scaling should bring CONUS within physically reasonable range.
+    # Baseline at 2018 has ~120-130 M households + ~91 B sqft of commercial —
+    # CONUS annual energy should fall between 2 and 5 million GWh.
+    conus_ann = by_sec["total"]["CONUS"]
+    assert 2_000_000 < conus_ann < 5_000_000, (
+        f"state_by_sector[Baseline][2018][{sample_wy}].total.CONUS = "
+        f"{conus_ann:,.0f} GWh — outside the expected 2-5 MGWh range")
 
 
 def test_savings_path_does_not_yield_nan(payload):

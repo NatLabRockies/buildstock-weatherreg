@@ -621,21 +621,48 @@ function buildControls() {
   document.getElementById('run-dirs').textContent =
       'res: ' + PAYLOAD.meta.res_run_dir + '   ·   com: ' + PAYLOAD.meta.com_run_dir;
 
-  // Scenario chips — colored dot ties chip to trajectory line color
+  // Scenario chips — colored dot ties chip to trajectory line color.
+  // At the unprojected baseline year (2018) only Baseline is meaningful
+  // — adoption begins at the projection anchor year (2027) so all four
+  // scenarios are identical-by-construction at 2018. Non-Baseline chips
+  // get visibly disabled when stockYear=2018 and re-enabled otherwise.
   const scenarioEl = document.getElementById('ctl-scenario');
   PAYLOAD.scenarios.forEach(s => {
     const b = document.createElement('button');
     b.className = 'pill' + (s === state.scenario ? ' active' : '');
+    b.dataset.scenario = s;
     b.innerHTML = `<span class="chip-dot" style="background:${PAYLOAD.colors[s]}"></span>${s}`;
-    b.onclick = () => { state.scenario = s; refresh(); };
+    b.onclick = () => {
+      if (b.disabled) return;
+      state.scenario = s; refresh();
+    };
     scenarioEl.appendChild(b);
   });
 
-  // Stock year slider — discrete values; show all 6 as tick labels
+  function syncScenarioChipsForStockYear() {
+    const at2018 = stockYear() === 2018;
+    if (at2018 && state.scenario !== 'Baseline') {
+      state.scenario = 'Baseline';
+    }
+    document.querySelectorAll('[data-scenario]').forEach(btn => {
+      const isBaseline = btn.dataset.scenario === 'Baseline';
+      btn.disabled = at2018 && !isBaseline;
+      btn.style.opacity = btn.disabled ? '0.35' : '';
+      btn.style.cursor = btn.disabled ? 'not-allowed' : '';
+      btn.classList.toggle('active', btn.dataset.scenario === state.scenario);
+    });
+  }
+
+  // Stock year slider — discrete values; show all stock years as tick labels.
   const syEl = document.getElementById('ctl-stockyear');
   syEl.min = 0; syEl.max = PAYLOAD.stock_years.length - 1; syEl.value = state.stockYearIdx;
-  syEl.oninput = () => { state.stockYearIdx = +syEl.value; refresh(); };
+  syEl.oninput = () => {
+    state.stockYearIdx = +syEl.value;
+    syncScenarioChipsForStockYear();
+    refresh();
+  };
   document.getElementById('ctl-stockyear-val').textContent = stockYear();
+  syncScenarioChipsForStockYear();
   const syTicks = document.getElementById('ctl-stockyear-ends');
   syTicks.classList.add('tick-labels');
   syTicks.classList.remove('endpts');

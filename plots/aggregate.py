@@ -142,23 +142,18 @@ COM_COHORTS: list[str] = ['NC', 'SA', 'SNA', 'gap']
 LBL_COHORTS: list[str] = ['NC', 'SA', 'SNA']  # LBL excludes gap by spec
 LBL_WEATHER_YEARS: list[int] = [2012, 2018]   # LBL ships only these two AMYs
 
-# For year=2018 there is no projection. Source data is the county-level
-# agg_*_eulp_total_GWh_upgrade<spec>_reg_b2018.csv files. Each dashboard
-# scenario maps to a list of upgrade specs whose hourly load series we
-# *sum* to reconstruct that scenario's 2018 view: Baseline = All-Baseline;
-# ASHP/GHP/GHP+Envelope = (specific upgrade applied to eligible stock) +
-# (non-eligible stock at baseline). Residential and commercial use distinct
-# upgrade IDs per inputs/switches_agg.json's `scenario_names` mapping.
-BASELINE_2018_SPECS: dict[str, dict[str, list[str]]] = {
-    'Baseline':     {'res': ['All-Baseline'],
-                     'com': ['All-Baseline']},
-    'ASHP':         {'res': ['Upgraded-Upgrade4',     'Non-Upgraded-Baseline'],
-                     'com': ['Upgraded-Upgrade1-14',  'Non-Upgraded-Baseline']},
-    'GHP':          {'res': ['Upgraded-Upgrade8',     'Non-Upgraded-Baseline'],
-                     'com': ['Upgraded-Upgrade55',    'Non-Upgraded-Baseline']},
-    'GHP+Envelope': {'res': ['Upgraded-Upgrade32',    'Non-Upgraded-Baseline'],
-                     'com': ['Upgraded-Upgrade59',    'Non-Upgraded-Baseline']},
-}
+# 2018 is the unprojected calibration anchor — only Baseline is meaningful
+# here. Adoption (ASHP/GHP/GHP+Envelope) begins at the projection anchor
+# year (2027) per projections/growth_factors.py, so for any year before
+# that the scenario chips would be identical-by-construction. The dashboard
+# disables non-Baseline chips when the slider sits at 2018.
+#
+# Source data: county-level agg_<res|com>_eulp_total_GWh_upgradeAll-Baseline_
+# reg_b2018.csv at the run_dir root. The series gets *scaled* (see
+# _baseline2018_scale_factors) to map ResStock/ComStock-modeled stock onto
+# AEO 2018 actual totals — without it the totals are off by 16% (res) /
+# 44% (com) and don't reconcile against EIA.
+BASELINE_2018_SPEC = {'res': 'All-Baseline', 'com': 'All-Baseline'}
 
 # FIPS state code → 2-letter postal. AK + HI absent from this dataset.
 # DC (FIPS 11) maps to MD per the same convention used elsewhere in this
@@ -184,6 +179,52 @@ def _county_fips_to_state(col: str) -> str | None:
     except ValueError:
         return None
     return _STATE_FIPS_TO_POSTAL.get(fips // 1000)
+
+
+def _baseline2018_scale_factors(
+    res_run_dir: Path, com_run_dir: Path
+) -> tuple[float, float]:
+    """Return (scale_res, scale_com) — the multipliers applied to the 2018
+    baseline state-x-time data so totals match AEO 2018 actuals rather than
+    the ResStock/ComStock modeled stock count.
+
+    scale = (AEO 2018 actual at 2018) / (sum of units_count or sqft in the
+    All-Baseline aux_coverage file).
+
+    AEO 2025 doesn't carry 2018 data — its year range starts at 2023 — so
+    we use the AEO 2018 vintage CSVs in `AEO 2025/` (named
+    `<Residential|Commercial>_Sector_Key_Indicators_and_Consumption_2018.csv`)
+    for the 2018 calibration year only. AEO 2018 vs AEO 2025 differs by
+    5–30% on future years, so it must NOT be used for 2027–2050.
+    """
+    repo_dir = Path(__file__).resolve().parent.parent
+    aeo_dir = repo_dir / 'AEO 2025'
+    res_aeo = pd.read_csv(aeo_dir /
+        'Residential_Sector_Key_Indicators_and_Consumption_2018.csv', skiprows=4)
+    com_aeo = pd.read_csv(aeo_dir /
+        'Commercial_Sector_Key_Indicators_and_Consumption_2018.csv', skiprows=4)
+    name_col_res = res_aeo.columns[1]
+    name_col_com = com_aeo.columns[1]
+    aeo_res_total = float(res_aeo.loc[res_aeo[name_col_res] ==
+        'Residential: Key Indicators: Households: Total: Reference case', '2018'].iloc[0])
+    aeo_com_total = float(com_aeo.loc[com_aeo[name_col_com] ==
+        'Commercial: Total Floorspace: Total: Reference case', '2018'].iloc[0])
+    # AEO units: millions of households / billions of sqft. Convert to raw
+    # counts to match aux_coverage's units_count (households) and sqft.
+    aeo_res_raw = aeo_res_total * 1e6
+    aeo_com_raw = aeo_com_total * 1e9
+
+    res_aux = pd.read_csv(res_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
+    com_aux = pd.read_csv(com_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
+    modeled_res = float(res_aux['units_count'].sum())
+    modeled_com = float(com_aux['sqft'].sum())
+    scale_res = aeo_res_raw / modeled_res
+    scale_com = aeo_com_raw / modeled_com
+    _log(f'  2018 calibration scale: res={scale_res:.4f} '
+         f'(modeled {modeled_res/1e6:.2f}M HH vs AEO {aeo_res_total:.2f}M); '
+         f'com={scale_com:.4f} '
+         f'(modeled {modeled_com/1e9:.2f}B sqft vs AEO {aeo_com_total:.2f}B)')
+    return scale_res, scale_com
 
 # ReEDs CSVs spell out state names in lowercase ("alabama, …"). Plotly's
 # USA-states choropleth wants 2-letter postals. DC is intentionally absent
@@ -598,14 +639,14 @@ def _compute_state_xt_stats(
 
 
 def _roll_agg_b2018_to_state_xt(
-    run_dir: Path, stock: str, specs: list[str]
+    run_dir: Path, stock: str, specs: list[str], scale: float = 1.0,
 ) -> pd.DataFrame | None:
     """Read each `agg_<stock>_eulp_total_GWh_upgrade<spec>_reg_b2018.csv` in
-    the run_dir, roll columns county→state via FIPS prefix, sum across specs.
-    Uses polars for the CSV scan — these files are 157K rows × ~3100 county
-    columns, pandas takes ~60s each; polars takes ~3s. Returns an hourly
-    state-x-time DataFrame in GWh, or None if no file matched. CONUS column
-    is NOT added here — _compute_state_xt_stats does."""
+    the run_dir, roll columns county→state via FIPS prefix, sum across specs,
+    and multiply by `scale`. Uses polars for the CSV scan (~3 s vs pandas'
+    60 s on this 157K × 3100 county shape). Returns an hourly state-x-time
+    DataFrame in GWh, or None if no file matched. CONUS column is NOT added
+    here — _compute_state_xt_stats does."""
     total: pd.DataFrame | None = None
     for spec in specs:
         p = run_dir / f'agg_{stock}_eulp_total_GWh_upgrade{spec}_reg_b2018.csv'
@@ -635,6 +676,8 @@ def _roll_agg_b2018_to_state_xt(
         rolled = rolled_pl.to_pandas().set_index('timestamp_EST')
         rolled.index = pd.to_datetime(rolled.index)
         total = rolled if total is None else total.add(rolled, fill_value=0.0)
+    if total is not None and scale != 1.0:
+        total = total * scale
     return total
 
 
@@ -784,51 +827,36 @@ def panel_state_by_sector(
                 _log(f'    ({done:>2}/{len(proj_tasks)}) {scenario}/{year}/{sector}  '
                      f'states={len(next(iter(ann_d.values()), {}))}')
 
-    # 2018 path runs sequentially. Each county-level agg file is ~4 GB in
-    # memory after pl.read_csv, so parallel workers OOM-killed the SLURM job
-    # (15 × 4 GB > 64 GB). Sequential lets one polars scan use all 16 cores
-    # for the wide column reduction, and we read each unique spec exactly
-    # once instead of once per (scenario, sector) consumer.
-    _log('  state-by-sector baseline 2018 — sequential pre-load + combine')
-    unique_res_specs = {s for d in BASELINE_2018_SPECS.values() for s in d['res']}
-    unique_com_specs = {s for d in BASELINE_2018_SPECS.values() for s in d['com']}
-
-    res_by_spec: dict[str, pd.DataFrame] = {}
-    com_by_spec: dict[str, pd.DataFrame] = {}
-    for spec in sorted(unique_res_specs):
-        df = _roll_agg_b2018_to_state_xt(res_run_dir, 'res', [spec])
-        if df is not None:
-            res_by_spec[spec] = df
-            _log(f'    res spec={spec:<28} shape={df.shape}')
-    for spec in sorted(unique_com_specs):
-        df = _roll_agg_b2018_to_state_xt(com_run_dir, 'com', [spec])
-        if df is not None:
-            com_by_spec[spec] = df
-            _log(f'    com spec={spec:<28} shape={df.shape}')
-
-    def _sum_dfs(dfs: list[pd.DataFrame | None]) -> pd.DataFrame | None:
-        kept = [d for d in dfs if d is not None]
-        if not kept:
-            return None
-        out = kept[0].copy()
-        for d in kept[1:]:
-            out = out.add(d, fill_value=0.0)
-        return out
-
-    for scen in SCENARIOS:
-        sp = BASELINE_2018_SPECS[scen]
-        res_total = _sum_dfs([res_by_spec.get(s) for s in sp['res']])
-        com_total = _sum_dfs([com_by_spec.get(s) for s in sp['com']])
+    # 2018 path: only Baseline scenario (adoption begins at 2027 per
+    # projections/growth_factors.py, so ASHP/GHP/GHP+Envelope at 2018 would
+    # be identical-by-construction to Baseline; we drop them rather than
+    # render four overlapping curves). Sequential pre-load to keep memory
+    # bounded (each agg file is ~4 GB in pandas; parallel × 4 files OOMs).
+    scale_res, scale_com = _baseline2018_scale_factors(res_run_dir, com_run_dir)
+    _log('  state-by-sector baseline 2018 — Baseline only, scaled to AEO 2018 totals')
+    res_total = _roll_agg_b2018_to_state_xt(
+        res_run_dir, 'res', [BASELINE_2018_SPEC['res']], scale=scale_res)
+    com_total = _roll_agg_b2018_to_state_xt(
+        com_run_dir, 'com', [BASELINE_2018_SPEC['com']], scale=scale_com)
+    if res_total is None and com_total is None:
+        _log('    no 2018 data found — skipping')
+    else:
         ref = res_total if res_total is not None else com_total
-        if ref is None:
-            _log(f'    {scen}: no 2018 data — skipping'); continue
+        # gap = 0 for 2018: the AEO scale factor already maps modeled stock
+        # to AEO-reported totals, so there's no "unmodeled commercial gap"
+        # left to represent. Different semantic from projection years.
         gap_total = pd.DataFrame(0.0, index=ref.index, columns=ref.columns)
-        for sec in ('residential', 'commercial', 'gap', 'total'):
-            if sec == 'residential':       total_df = res_total
-            elif sec == 'commercial':      total_df = com_total
-            elif sec == 'gap':             total_df = gap_total
-            else:  # 'total'
-                total_df = _sum_dfs([res_total, com_total, gap_total])
+        parts = [d for d in (res_total, com_total, gap_total) if d is not None]
+        total_sum = parts[0].copy()
+        for d in parts[1:]:
+            total_sum = total_sum.add(d, fill_value=0.0)
+        sector_to_df = {
+            'residential': res_total,
+            'commercial':  com_total,
+            'gap':         gap_total,
+            'total':       total_sum,
+        }
+        for sec, total_df in sector_to_df.items():
             if total_df is None:
                 continue
             ann_d, peak_d, coinc = _compute_state_xt_stats(
@@ -838,8 +866,9 @@ def panel_state_by_sector(
                 gap_df=gap_total if sec == 'total' else None,
                 compute_coincident=(sec == 'total'),
             )
-            _absorb(scen, BASELINE_YEAR, sec, ann_d, peak_d, coinc)
-            _log(f'    {scen}/{BASELINE_YEAR}/{sec}  states={len(next(iter(ann_d.values()), {}))}')
+            _absorb('Baseline', BASELINE_YEAR, sec, ann_d, peak_d, coinc)
+            _log(f'    Baseline/{BASELINE_YEAR}/{sec}  '
+                 f'states={len(next(iter(ann_d.values()), {}))}')
 
     return {
         'annual_gwh': annual,
