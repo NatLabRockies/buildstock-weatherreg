@@ -120,6 +120,12 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
+# Repo root on sys.path so we can `from projections.X import Y`. The dashboard
+# bake is launched as `python plots/aggregate.py`, which puts plots/ (not the
+# repo root) first on sys.path — without this prepend the projections package
+# imports below fail with ModuleNotFoundError.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 
 _T0: float = time.time()
 
@@ -976,6 +982,93 @@ def panel_intermediate_annual(
     return out
 
 
+def panel_stock_counts(res_run_dir: Path, com_run_dir: Path) -> dict:
+    """Per-state stock-count trajectories: residential households (millions
+    of occupied HH) and commercial floor area (billions of sq ft) at every
+    stock year.
+
+    Stock counts are scenario-invariant and weather-year-invariant — they're
+    determined entirely by the AEO Reference Case totals and the per-state
+    share derived from aux_coverage_All-Baseline_reg_b2018.
+
+    Source:
+        AEO 2018 vintage (`AEO 2025/<>_2018.csv`) for the 2018 cell — the
+        only file that carries 2018 data.
+        AEO 2025 (via projections.growth_factors) for 2027-2050.
+        Per-state share from aux_coverage_All-Baseline_reg_b2018 (state
+        column already provides 2-letter postals; AK/HI/DC dropped to match
+        the existing dashboard geography; DC's count folded into MD per the
+        ReEDs convention).
+
+    Output:
+        {
+          'residential_units': {year: {state: M occupied HH}},
+          'commercial_sqft':   {year: {state: B sqft}},
+        }
+        Each year-dict includes a 'CONUS' key equal to the AEO total.
+    """
+    from projections.growth_factors import (
+        residential_total_households, commercial_total_floorspace,
+    )
+
+    aeo_dir = Path(__file__).resolve().parent.parent / 'AEO 2025'
+    res_aeo18 = pd.read_csv(
+        aeo_dir / 'Residential_Sector_Key_Indicators_and_Consumption_2018.csv',
+        skiprows=4)
+    com_aeo18 = pd.read_csv(
+        aeo_dir / 'Commercial_Sector_Key_Indicators_and_Consumption_2018.csv',
+        skiprows=4)
+    name_res = res_aeo18.columns[1]
+    name_com = com_aeo18.columns[1]
+    aeo_res_2018 = float(res_aeo18.loc[res_aeo18[name_res] ==
+        'Residential: Key Indicators: Households: Total: Reference case', '2018'].iloc[0])
+    aeo_com_2018 = float(com_aeo18.loc[com_aeo18[name_com] ==
+        'Commercial: Total Floorspace: Total: Reference case', '2018'].iloc[0])
+
+    # Per-state share from aux_coverage. The 'state' column is a 2-letter
+    # postal; AK/HI sit outside the dashboard's CONUS+DC geography; DC folds
+    # into MD per the existing convention. Note that occupancy correction is
+    # applied at the CONUS-total layer (AEO is already on the occupied basis),
+    # so per-state shares come straight from raw counts — the multiplicative
+    # 0.878 cancels in the share ratio.
+    drop_states = {'AK', 'HI'}
+    res_aux = pd.read_csv(res_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
+    com_aux = pd.read_csv(com_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
+    res_aux = res_aux[~res_aux['state'].isin(drop_states)].copy()
+    com_aux = com_aux[~com_aux['state'].isin(drop_states)].copy()
+    res_aux['state'] = res_aux['state'].replace({'DC': 'MD'})
+    com_aux['state'] = com_aux['state'].replace({'DC': 'MD'})
+    res_by_state = res_aux.groupby('state')['units_count'].sum()
+    com_by_state = com_aux.groupby('state')['sqft'].sum()
+    res_state_share = (res_by_state / res_by_state.sum()).to_dict()
+    com_state_share = (com_by_state / com_by_state.sum()).to_dict()
+
+    residential_units: dict = {}
+    commercial_sqft:   dict = {}
+    for year in STOCK_YEARS:
+        if year == BASELINE_YEAR:
+            res_total = aeo_res_2018
+            com_total = aeo_com_2018
+        else:
+            res_total = residential_total_households(year)
+            com_total = commercial_total_floorspace(year)
+        residential_units[year] = {st: float(res_total * share)
+                                    for st, share in res_state_share.items()}
+        residential_units[year]['CONUS'] = float(res_total)
+        commercial_sqft[year]   = {st: float(com_total * share)
+                                    for st, share in com_state_share.items()}
+        commercial_sqft[year]['CONUS'] = float(com_total)
+
+    _log(f'  stock_counts: 2018 res={aeo_res_2018:.1f} M HH, '
+         f'com={aeo_com_2018:.1f} B sqft; '
+         f'2050 res={residential_units[2050]["CONUS"]:.1f} M HH, '
+         f'com={commercial_sqft[2050]["CONUS"]:.1f} B sqft')
+    return {
+        'residential_units': residential_units,
+        'commercial_sqft':   commercial_sqft,
+    }
+
+
 def panel_lbl(res_lbl_dir: Path, com_lbl_dir: Path) -> dict:
     """Per-file ProcessPool: each worker polars-scans one LBL CSV and returns
     its annual GWh scalar. Avoids the all-files-in-one-scan memory blow-up
@@ -1094,6 +1187,9 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
     lbl_annual = panel_lbl(res_run_dir / 'LBL', com_run_dir / 'LBL')
     _log(f'   LBL cells populated: {sum(1 for s in lbl_annual.values() for y in s.values() for w in y.values())}')
 
+    _log('F.1 panel_stock_counts (per-state HH + sqft per stock year)...')
+    stock_counts = panel_stock_counts(res_run_dir, com_run_dir)
+
     _log('G. axis pin maxes (per-state + per-sector)...')
     def _ceil_to_step(v: float, step: float) -> float:
         return float(np.ceil(v / step) * step)
@@ -1158,6 +1254,7 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
         'cohort_daily':        cohort_daily_conus,
         'intermediate_annual': intermediate_annual,
         'lbl_annual':          lbl_annual,
+        'stock_counts':        stock_counts,
         'meta': {
             'res_run_dir': str(res_run_dir),
             'com_run_dir': str(com_run_dir),
