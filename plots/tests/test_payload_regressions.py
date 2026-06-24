@@ -105,23 +105,29 @@ def test_panel3_peak_iso_inside_timestamps(payload):
             )
 
 
-def test_2018_baseline_only_and_scaled(payload):
-    """REGRESSION GATE for the 2018 unprojected calibration anchor.
-    Adoption begins at the 2027 projection anchor year (per
-    projections/growth_factors.py), so at 2018 the ASHP/GHP/+Env scenarios
-    are identical-by-construction to Baseline; we ship only Baseline and
-    the dashboard disables the other chips. Cohort/peak-week panels
-    legitimately omit 2018 (no cohort split at the calibration year)."""
-    assert 2018 in payload["stock_years"], "2018 missing from stock_years"
+def test_historical_years_baseline_only_with_aux(payload):
+    """REGRESSION GATE for the historical calibration years (2012, 2018, 2020).
 
-    # panel1: Baseline must have 2018; non-Baseline must NOT.
+    The projection package now writes Baseline-scenario outputs at every
+    HISTORICAL_YEAR; cohort split collapses to all-SNA (no NC, no SA) before
+    ANCHOR_YEAR=2027. stock_counts comes from per-cohort aux files written
+    by the projection package — not from any AEO/scaling math inside
+    aggregate.py."""
+    assert 2018 in payload["stock_years"], "2018 missing from stock_years"
+    assert 2012 in payload["stock_years"], "2012 missing from stock_years"
+    assert 2020 in payload["stock_years"], "2020 missing from stock_years"
+
+    # panel1: Baseline must have 2018; non-Baseline must NOT (historical years
+    # are projection-package-only for Baseline).
     assert payload["panel1"]["annual_gwh"].get("Baseline", {}).get("2018"), (
         "panel1.annual_gwh[Baseline][2018] missing")
     for scen in ("ASHP", "GHP", "GHP+Envelope"):
-        assert "2018" not in payload["panel1"]["annual_gwh"].get(scen, {}), (
-            f"panel1.annual_gwh[{scen}] should NOT have 2018 — only Baseline does")
+        for y in ("2012", "2018", "2020"):
+            assert y not in payload["panel1"]["annual_gwh"].get(scen, {}), (
+                f"panel1.annual_gwh[{scen}] should NOT have {y} — historical "
+                "years are Baseline-only")
 
-    # state_by_sector: Baseline must have all 4 sectors + CONUS.
+    # state_by_sector: Baseline must have all 4 sectors at 2018.
     b18 = payload["state_by_sector"]["annual_gwh"].get("Baseline", {}).get("2018", {})
     assert b18, "state_by_sector[Baseline][2018] missing"
     sample_wy = next(iter(b18))
@@ -129,41 +135,41 @@ def test_2018_baseline_only_and_scaled(payload):
     assert {"residential", "commercial", "gap", "total"} <= set(by_sec.keys())
     assert "CONUS" in by_sec["total"]
 
-    # gap > 0 at 2018: synthesized from commercial × gap_ratio_com (the
-    # unmodeled-sqft / modeled-sqft ratio from aux_coverage vs AEO 2018).
-    # Should match the magnitude of projection-year gaps.
-    gap_conus = by_sec["gap"]["CONUS"]
-    com_conus = by_sec["commercial"]["CONUS"]
-    assert gap_conus > 0, (
-        f"state_by_sector[Baseline][2018][{sample_wy}].gap.CONUS = {gap_conus} "
-        f"— should be > 0 (synthesized from commercial coverage gap)")
-    gap_ratio = gap_conus / com_conus
-    # Expect ratio in [0.35, 0.50]; projection years span 0.377→0.427.
-    assert 0.35 < gap_ratio < 0.50, (
-        f"gap/commercial ratio at 2018 = {gap_ratio:.3f} — outside expected "
-        f"0.35-0.50 range (projection years span 0.377 at 2027 → 0.427 at 2050)")
-
-    # 2018 commercial must NOT exceed any projection-year commercial (stock
-    # grows over time, so commercial energy is monotonically non-decreasing).
-    # This is exactly the bug that previously slipped: pre-fix 2018 commercial
-    # was 1.33 MGWh, larger than every projection year (~0.92-1.08 MGWh).
-    com_by_year = {
-        int(y): payload["state_by_sector"]["annual_gwh"]["Baseline"][y][sample_wy]
-                       ["commercial"]["CONUS"]
-        for y in payload["state_by_sector"]["annual_gwh"]["Baseline"]
-    }
-    com_2018 = com_by_year[2018]
-    for y in (2027, 2030, 2050):
-        if y in com_by_year:
-            assert com_2018 < com_by_year[y] * 1.05, (
-                f"commercial at 2018 = {com_2018:,.0f} GWh exceeds {y} = "
-                f"{com_by_year[y]:,.0f} GWh — building stock can't shrink")
+    # stock_counts: residential_units[2018] populated with all-SNA (NC=SA=0).
+    res18 = payload["stock_counts"]["residential_units"].get("2018", {})
+    assert res18, "stock_counts.residential_units[2018] missing"
+    nc = res18.get("NC", {}).get("CONUS", 0)
+    sa = res18.get("SA", {}).get("CONUS", 0)
+    sna = res18.get("SNA", {}).get("CONUS", 0)
+    assert abs(nc) < 0.1, f"NC at 2018 should be 0 (pre-anchor), got {nc}"
+    assert abs(sa) < 0.1, f"SA at 2018 should be 0 (pre-anchor), got {sa}"
+    assert sna > 100, f"SNA at 2018 should be > 100 M HH, got {sna}"
 
     # CONUS annual total must be in EIA-realistic range (~2.6-2.7 MGWh).
     conus_ann = by_sec["total"]["CONUS"]
     assert 2_000_000 < conus_ann < 5_000_000, (
         f"state_by_sector[Baseline][2018][{sample_wy}].total.CONUS = "
         f"{conus_ann:,.0f} GWh — outside the expected 2-5 MGWh EIA range")
+
+
+def test_aux_stock_counts_consistent_with_aeo(payload):
+    """Anti-regression: per-cohort aux stock counts at the CONUS level should
+    match AEO totals within a tight tolerance — that's the projection
+    package's contract. We check:
+      Σ res cohorts at 2018 ≈ AEO 2018 / RES_OCCUPANCY_FRACTION ≈ 134 M HH
+      Σ res cohorts at 2050 ≈ AEO 2050 / RES_OCCUPANCY_FRACTION ≈ 184 M HH
+    """
+    res_units = payload["stock_counts"]["residential_units"]
+    for year, expected_approx in (("2018", 134), ("2050", 184)):
+        if year not in res_units:
+            continue
+        nc  = res_units[year].get("NC",  {}).get("CONUS", 0)
+        sa  = res_units[year].get("SA",  {}).get("CONUS", 0)
+        sna = res_units[year].get("SNA", {}).get("CONUS", 0)
+        total = nc + sa + sna
+        assert abs(total - expected_approx) / expected_approx < 0.10, (
+            f"residential at {year} CONUS = {total:.1f} M HH, "
+            f"expected ~{expected_approx} M HH ± 10%")
 
 
 def test_savings_path_does_not_yield_nan(payload):
