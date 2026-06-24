@@ -218,12 +218,17 @@ def _cohort_weights_for_scenario(run_dir: str, stock: Stock, year: int,
     aux_samples only once per cohort)."""
     out: dict[str, pd.DataFrame] = {}
     if kind == 'baseline':
-        fac = factors.baseline_scenario_factors(stock, year)
-        base = _load_aux_samples(run_dir, ALL_BASELINE_TAG)
-        for cohort, key in (('NC', 'new_construction'), ('SNA', 'surviving')):
-            df = base.copy()
-            df['weight'] = df['base_weight'] * fac[key]
-            out[cohort] = df[['county_group', 'bldg_id', 'weight']]
+        fac = factors.baseline_scenario_factors(run_dir, stock, year)
+        # Baseline NC sources from the eligible cohort (Upgraded-Baseline) —
+        # same as the energy projection now does. SNA stays on All-Baseline.
+        nc_base = _load_aux_samples(run_dir, ELIGIBLE_TAG)
+        nc_df = nc_base.copy()
+        nc_df['weight'] = nc_df['base_weight'] * fac['new_construction']
+        out['NC'] = nc_df[['county_group', 'bldg_id', 'weight']]
+        sna_base = _load_aux_samples(run_dir, ALL_BASELINE_TAG)
+        sna_df = sna_base.copy()
+        sna_df['weight'] = sna_df['base_weight'] * fac['surviving']
+        out['SNA'] = sna_df[['county_group', 'bldg_id', 'weight']]
         return out
 
     fac = factors.upgrade_factors(run_dir, stock, year)
