@@ -60,10 +60,15 @@ def new_construction_efficiency_factor(stock: Stock, enduse: Enduse, year: int,
     """Efficiency of newly-built stock relative to the base year, per state.
 
     1.0 for non_hvac_elec and total (the table covers only HVAC enduses; new
-    construction is assumed unchanged for non-HVAC). Raises KeyError on a
-    missing (stock, enduse, year, state) rather than silently scaling by 1.
+    construction is assumed unchanged for non-HVAC). 1.0 for year < ANCHOR_YEAR
+    too — pre-anchor years carry no NC cohort (baseline_scenario_factors
+    returns new_construction = 0 for historical years), so the eventual
+    multiplication zeros out anyway and we'd rather avoid the shell_factors
+    KeyError. Raises KeyError on a missing entry at projection years.
     """
     if enduse in ('non_hvac_elec', 'total'):
+        return 1.0
+    if year < ANCHOR_YEAR:
         return 1.0
     return _SHELL_FACTORS[(stock, enduse, year, STATE_POSTAL_TO_NAME[state_postal])]
 
