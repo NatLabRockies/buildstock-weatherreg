@@ -807,66 +807,65 @@ _AUX_FILE_RE = re.compile(
 
 def panel_stock_counts(res_inter_dir: Path, com_inter_dir: Path) -> dict:
     """Per-state, per-cohort stock counts read directly from the projection
-    package's per-cohort aux files (`aux_<scenario>_<sector>_<cohort>_y<year>.csv`
-    in intermediate/state/). Each aux file has 49 rows (one per state) with
-    `sqft` and `units_count` columns — projected by the same factors that
-    scale the energy outputs, so the dashboard stock-count display reads
-    out exactly what's implicit in the energy data.
+    package's per-cohort aux files. Each aux file has 49 rows (one per state)
+    with `sqft`, `units_count`, and `n_samples` columns.
 
-    Output:
+    Output (each value is per-state with a CONUS key):
         {
-          'residential_units': {year: {cohort: {state: M HH}}},
-          'commercial_sqft':   {year: {cohort: {state: B sqft}}},
+          'residential_units':   {year: {cohort: {state: M HH}}},     # = units_count / 1e6
+          'commercial_sqft':     {year: {cohort: {state: B sqft}}},   # = sqft / 1e9
+          'residential_samples': {year: {cohort: {state: int}}},      # = n_samples
+          'commercial_samples':  {year: {cohort: {state: int}}},
         }
 
     Cohort breakdown:
         residential: NC, SA, SNA
-        commercial:  NC, SA, SNA   (no aux for the gap cohort by design;
-                                    gap is the unmodeled commercial floor
-                                    space and has no per-building proxy)
-
-    Per-state aggregation:
-        units_count column (M HH) divided by 1e6 → M HH
-        sqft column         divided by 1e9 → B sqft
+        commercial:  NC, SA, SNA  (no aux for the gap cohort by design;
+                                   gap is unmodeled commercial floor space)
     """
     res_aux_files = _gather_aux_files(res_inter_dir, 'residential')
     com_aux_files = _gather_aux_files(com_inter_dir, 'commercial')
 
-    residential_units: dict = {}
-    commercial_sqft:   dict = {}
+    residential_units:   dict = {}
+    commercial_sqft:     dict = {}
+    residential_samples: dict = {}
+    commercial_samples:  dict = {}
+
     for (scenario, year, cohort), path in res_aux_files.items():
         if scenario != 'Baseline':
-            # Stock counts are scenario-invariant at the projection level
-            # (every scenario shares the same aux file content scaled by the
-            # same factors). We only need Baseline aux to populate the
-            # display — non-Baseline aux files are skipped to avoid double-
-            # counting the dashboard's single trajectory line.
             continue
         df = pd.read_csv(path)
-        per_state = {row['state']: float(row['units_count']) / 1e6
-                     for _, row in df.iterrows()}
-        per_state['CONUS'] = sum(per_state.values())
-        residential_units.setdefault(year, {})[cohort] = per_state
+        per_state_units   = {row['state']: float(row['units_count']) / 1e6 for _, row in df.iterrows()}
+        per_state_samples = {row['state']: int(row['n_samples'])           for _, row in df.iterrows()}
+        per_state_units['CONUS']   = sum(per_state_units.values())
+        per_state_samples['CONUS'] = sum(per_state_samples.values())
+        residential_units  .setdefault(year, {})[cohort] = per_state_units
+        residential_samples.setdefault(year, {})[cohort] = per_state_samples
     for (scenario, year, cohort), path in com_aux_files.items():
         if scenario != 'Baseline':
             continue
         df = pd.read_csv(path)
-        per_state = {row['state']: float(row['sqft']) / 1e9 for _, row in df.iterrows()}
-        per_state['CONUS'] = sum(per_state.values())
-        commercial_sqft.setdefault(year, {})[cohort] = per_state
+        per_state_sqft    = {row['state']: float(row['sqft']) / 1e9 for _, row in df.iterrows()}
+        per_state_samples = {row['state']: int(row['n_samples'])    for _, row in df.iterrows()}
+        per_state_sqft['CONUS']    = sum(per_state_sqft.values())
+        per_state_samples['CONUS'] = sum(per_state_samples.values())
+        commercial_sqft   .setdefault(year, {})[cohort] = per_state_sqft
+        commercial_samples.setdefault(year, {})[cohort] = per_state_samples
 
     if 2050 in residential_units:
-        res2050 = sum(residential_units[2050].get(c, {}).get('CONUS', 0)
-                      for c in ('NC', 'SA', 'SNA'))
-        com2050 = sum(commercial_sqft.get(2050, {}).get(c, {}).get('CONUS', 0)
-                      for c in ('NC', 'SA', 'SNA'))
-        _log(f'  stock_counts (aux): 2050 Baseline CONUS res={res2050:.1f} M HH, '
-             f'com_modeled={com2050:.1f} B sqft '
+        res2050 = sum(residential_units[2050].get(c, {}).get('CONUS', 0) for c in ('NC','SA','SNA'))
+        com2050 = sum(commercial_sqft.get(2050, {}).get(c, {}).get('CONUS', 0) for c in ('NC','SA','SNA'))
+        res_n50 = sum(residential_samples[2050].get(c, {}).get('CONUS', 0) for c in ('NC','SA','SNA'))
+        com_n50 = sum(commercial_samples.get(2050, {}).get(c, {}).get('CONUS', 0) for c in ('NC','SA','SNA'))
+        _log(f'  stock_counts (aux): 2050 Baseline CONUS res={res2050:.1f}M HH '
+             f'({res_n50} samples), com={com2050:.1f}B sqft ({com_n50} samples) '
              f'(years present: {sorted(residential_units.keys())})')
 
     return {
-        'residential_units': residential_units,
-        'commercial_sqft':   commercial_sqft,
+        'residential_units':   residential_units,
+        'commercial_sqft':     commercial_sqft,
+        'residential_samples': residential_samples,
+        'commercial_samples':  commercial_samples,
     }
 
 

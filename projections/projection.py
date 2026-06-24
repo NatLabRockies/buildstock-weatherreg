@@ -261,12 +261,30 @@ def get_surviving_baseline(run_dir: str, stock: Stock, year: int) -> EnduseFrame
 # summing weights across cohorts.
 # =========================================================================
 
+def _aux_samples_path(run_dir: str, spec_tag: SpecTag) -> str:
+    """Sample-level aux file for one spec — one row per (county, bldg_id)
+    with characteristic sqft and sampling weight."""
+    return os.path.join(run_dir, f'aux_samples_upgrade{spec_tag}.csv')
+
+
 def _load_aux_for_spec(run_dir: str, stock: Stock, spec_tag: SpecTag) -> pd.DataFrame:
-    """Load source aux_coverage_<spec_tag>.csv — per-county aux from BSQ."""
-    return pd.read_csv(common.aux_path(run_dir, spec_tag))
+    """Load aux for one spec — per-county aux from BSQ, with an n_samples
+    column tacked on (distinct bldg_id count from aux_samples_<spec>.csv).
+    n_samples is a structural count: it doesn't scale with the projection
+    factor (a simulation sample stays a simulation sample regardless of
+    how many real-world units it represents at year Y)."""
+    coverage = pd.read_csv(common.aux_path(run_dir, spec_tag))
+    samples = pd.read_csv(_aux_samples_path(run_dir, spec_tag))
+    county_col = coverage.columns[0]
+    n_samples = (samples.groupby(county_col)['bldg_id']
+                        .nunique()
+                        .reset_index(name='n_samples'))
+    return coverage.merge(n_samples, on=county_col, how='left').fillna({'n_samples': 0})
 
 
 def _scale_aux(aux: pd.DataFrame, factor: float) -> pd.DataFrame:
+    """Scale the projected-quantity columns (sqft, units_count) by `factor`.
+    n_samples is left alone — sample count is structural, not projected."""
     out = aux.copy()
     out['sqft'] = out['sqft'] * factor
     out['units_count'] = out['units_count'] * factor
@@ -276,13 +294,15 @@ def _scale_aux(aux: pd.DataFrame, factor: float) -> pd.DataFrame:
 def _sum_aux(*dfs: pd.DataFrame) -> pd.DataFrame:
     """Sum per-county aux frames row-wise. Frames must share row identity
     (same county FIPS / nhgis_county_gisjoin in column 0). Non-numeric
-    columns (county_name, state) come from the first frame."""
+    columns (county_name, state) come from the first frame. n_samples sums
+    because eligible/ineligible cohorts are disjoint sets of bldg_ids."""
     key = dfs[0].columns[0]
     base = dfs[0].set_index(key)
-    summed = base[['sqft', 'units_count']].copy()
+    cols = ['sqft', 'units_count', 'n_samples']
+    summed = base[cols].copy()
     for d in dfs[1:]:
-        summed = summed.add(d.set_index(key)[['sqft', 'units_count']], fill_value=0.0)
-    meta_cols = [c for c in base.columns if c not in ('sqft', 'units_count')]
+        summed = summed.add(d.set_index(key)[cols], fill_value=0.0)
+    meta_cols = [c for c in base.columns if c not in cols]
     return base[meta_cols].join(summed).reset_index()
 
 
@@ -293,15 +313,15 @@ def _aggregate_aux(aux: pd.DataFrame, resolution: Resolution) -> pd.DataFrame:
         county_group  → ~1,038 rows keyed by BuildStock county_group
         county        → original ~3,100 rows unchanged
     """
+    cols = ['sqft', 'units_count', 'n_samples']
     if resolution == 'state':
-        return aux.groupby('state', as_index=False)[['sqft', 'units_count']].sum()
+        return aux.groupby('state', as_index=False)[cols].sum()
     if resolution == 'county_group':
         county_col = aux.columns[0]
         a = aux.copy()
         a['county_group'] = a[county_col].map(COUNTY_TO_COUNTY_GROUP)
         a = a.dropna(subset=['county_group'])
-        return a.groupby(['county_group', 'state'],
-                         as_index=False)[['sqft', 'units_count']].sum()
+        return a.groupby(['county_group', 'state'], as_index=False)[cols].sum()
     return aux  # county resolution: as-is
 
 

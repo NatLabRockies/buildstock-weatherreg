@@ -203,6 +203,8 @@
         <button class="pill"        data-traj-metric="peak_gw">Peak GW</button>
         <button class="pill"        data-traj-metric="households">Households (M)</button>
         <button class="pill"        data-traj-metric="floor_area">Floor area (B sqft)</button>
+        <button class="pill"        data-traj-metric="res_samples">Res samples</button>
+        <button class="pill"        data-traj-metric="com_samples">Com samples</button>
         <span class="label" style="margin-left: 8px;">State</span>
         <select class="pill" id="traj-state"></select>
       </div>
@@ -612,19 +614,23 @@ function peakReEDs(sc, y, wy) {
 // For the stock-count metrics (households / floor_area) the lookup routes to
 // PAYLOAD.stock_counts — these are scenario- and weather-year-invariant, so
 // `sc`, `wy`, and `sector` are ignored on that branch.
+// Map a stock-metric to (a) which payload subtree to read, and (b) which
+// cohorts to include in the sum. Samples metrics don't carry a 'gap' cohort
+// (no per-building proxy for unmodeled commercial) — same as households.
+const STOCK_METRIC_DEF = {
+  households:  {tree: 'residential_units',   cohorts: ['NC', 'SA', 'SNA']},
+  floor_area:  {tree: 'commercial_sqft',     cohorts: ['NC', 'SA', 'SNA', 'gap']},
+  res_samples: {tree: 'residential_samples', cohorts: ['NC', 'SA', 'SNA']},
+  com_samples: {tree: 'commercial_samples',  cohorts: ['NC', 'SA', 'SNA']},
+};
+
 function stateMetricLookup(metric, sc, y, wy, sector, stOrConus) {
-  // metric: 'annual_gwh' | 'peak_gw' | 'households' | 'floor_area';
-  // stOrConus: 'CONUS' | postal
   // For stock metrics the value is summed across the cohort dim; per-cohort
   // values are accessed via stockCohortLookup() below.
-  if (metric === 'households') {
-    const cd = PAYLOAD.stock_counts?.residential_units?.[y] || {};
-    return ['NC', 'SA', 'SNA'].reduce(
-      (acc, k) => acc + ((cd[k] || {})[stOrConus] || 0), 0);
-  }
-  if (metric === 'floor_area') {
-    const cd = PAYLOAD.stock_counts?.commercial_sqft?.[y] || {};
-    return ['NC', 'SA', 'SNA', 'gap'].reduce(
+  const def = STOCK_METRIC_DEF[metric];
+  if (def) {
+    const cd = PAYLOAD.stock_counts?.[def.tree]?.[y] || {};
+    return def.cohorts.reduce(
       (acc, k) => acc + ((cd[k] || {})[stOrConus] || 0), 0);
   }
   const tree = (PAYLOAD.state_by_sector[metric][sc] || {})[y] || {};
@@ -634,14 +640,12 @@ function stateMetricLookup(metric, sc, y, wy, sector, stOrConus) {
   return (v && typeof v === 'object') ? v.annual : v;
 }
 
-// Stock-metric per-cohort lookup. Returns the value for one cohort at one
-// (year, state). Used by the breakdown subtab to stack NC / SA / SNA (+ gap
-// for commercial).
+// Per-cohort lookup for stock metrics. Used by the Breakdown subtab to
+// stack NC / SA / SNA (+ gap for commercial floor area).
 function stockCohortLookup(metric, cohort, y, stOrConus) {
-  const tree = metric === 'households'
-    ? PAYLOAD.stock_counts?.residential_units
-    : PAYLOAD.stock_counts?.commercial_sqft;
-  return ((tree?.[y] || {})[cohort] || {})[stOrConus] || 0;
+  const def = STOCK_METRIC_DEF[metric];
+  if (!def) return 0;
+  return ((PAYLOAD.stock_counts?.[def.tree]?.[y] || {})[cohort] || {})[stOrConus] || 0;
 }
 
 // === Build controls ======================================================
@@ -833,9 +837,22 @@ function renderTrajectory() {
   return renderTrajectoryBreakdown();
 }
 
+// Per-metric display config used by both renderTrajectoryTotal and
+// renderTrajectoryBreakdown to label axes + format hover.
+const STOCK_METRIC_DISPLAY = {
+  households:  {unitTag: 'M HH',   yLabel: 'Residential households (millions, occupied)', hoverDigits: 2},
+  floor_area:  {unitTag: 'B sqft', yLabel: 'Commercial floor area (billions sq ft)',      hoverDigits: 2},
+  res_samples: {unitTag: 'samples',
+                yLabel: 'Distinct ResStock simulation samples (count)',
+                hoverDigits: 0},
+  com_samples: {unitTag: 'samples',
+                yLabel: 'Distinct ComStock simulation samples (count)',
+                hoverDigits: 0},
+};
+
 function renderTrajectoryTotal() {
   const metric = state.trajMetric;
-  const isStock = metric === 'households' || metric === 'floor_area';
+  const isStock = metric in STOCK_METRIC_DISPLAY;
   const sectorForState = 'total';
   const wySel = weatherYear();
   const stSel = state.trajState;
@@ -847,13 +864,13 @@ function renderTrajectoryTotal() {
     // ASHP/GHP/+Env have a different building count than Baseline.
     const ys = PAYLOAD.stock_years.map(y =>
       stateMetricLookup(metric, null, y, null, null, stSel));
-    const unitTag = metric === 'households' ? 'M HH' : 'B sqft';
+    const {unitTag, hoverDigits} = STOCK_METRIC_DISPLAY[metric];
     traces.push({
       x: PAYLOAD.stock_years, y: ys,
       mode: 'lines+markers', name: 'Stock',
       line: {color: '#444', width: 3},
       marker: {size: 6},
-      hovertemplate: `Stock<br>%{x}: %{y:,.2f} ${unitTag}<extra></extra>`,
+      hovertemplate: `Stock<br>%{x}: %{y:,.${hoverDigits}f} ${unitTag}<extra></extra>`,
     });
   } else {
     PAYLOAD.scenarios.forEach(scenario => {
@@ -877,12 +894,9 @@ function renderTrajectoryTotal() {
 
   let yLabel;
   let yMax;
-  if (metric === 'households') {
-    yLabel = 'Residential households (millions, occupied)';
-    yMax = stateMetricLookup('households', null, 2050, null, null, stSel) || 1;
-  } else if (metric === 'floor_area') {
-    yLabel = 'Commercial floor area (billions sq ft)';
-    yMax = stateMetricLookup('floor_area', null, 2050, null, null, stSel) || 1;
+  if (isStock) {
+    yLabel = STOCK_METRIC_DISPLAY[metric].yLabel;
+    yMax = stateMetricLookup(metric, null, 2050, null, null, stSel) || 1;
   } else {
     yLabel = metric === 'annual_gwh' ? 'Annual energy (GWh / yr)' : 'Annual peak power (GW)';
     yMax = (PAYLOAD.axis.trajectory_max[stSel] || {})[sectorForState]?.[metric] || 1;
@@ -905,7 +919,7 @@ function renderTrajectoryTotal() {
 
 function renderTrajectoryBreakdown() {
   const metric = state.trajMetric;
-  const isStock = metric === 'households' || metric === 'floor_area';
+  const isStock = metric in STOCK_METRIC_DISPLAY;
   const wySel = weatherYear();
   const stSel = state.trajState;
   const scenario = state.scenario;
@@ -913,19 +927,23 @@ function renderTrajectoryBreakdown() {
   let traces, yLabel, yMax, titleText, hoverFmt;
   if (isStock) {
     // Stock metrics stack cohorts NC / SA / SNA — plus gap when the metric
-    // is floor area (commercial). Before the projection anchor year (2027)
-    // every modeled unit lives in SNA, so the stack at 2018 is one solid
-    // band; cohorts split out from the anchor year onward.
-    const COHORT_DEF = metric === 'households'
+    // is floor area (commercial). Sample metrics (res_samples / com_samples)
+    // skip the gap cohort: distinct bldg_id has no meaning for the unmodeled
+    // commercial floor space. Before the projection anchor year (2027) every
+    // modeled unit lives in SNA, so the stack at 2018 is one solid band.
+    const includeGap = metric === 'floor_area';
+    const baseDef = metric === 'households' || metric === 'res_samples'
       ? [{key: 'SNA', label: 'Existing — not adopted', color: '#7e8a96'},
          {key: 'SA',  label: 'Existing — adopted',     color: '#4a90e2'},
          {key: 'NC',  label: 'New construction',       color: '#1f4e79'}]
-      : [{key: 'gap', label: 'Gap (unmodeled)',        color: '#999999'},
-         {key: 'SNA', label: 'Existing — not adopted', color: '#7e8a96'},
+      : [{key: 'SNA', label: 'Existing — not adopted', color: '#7e8a96'},
          {key: 'SA',  label: 'Existing — adopted',     color: '#f6b26b'},
          {key: 'NC',  label: 'New construction',       color: '#b25a1a'}];
-    const unitTag = metric === 'households' ? 'M HH' : 'B sqft';
-    hoverFmt = `%{x}: %{y:,.2f} ${unitTag}`;
+    const COHORT_DEF = includeGap
+      ? [{key: 'gap', label: 'Gap (unmodeled)', color: '#999999'}, ...baseDef]
+      : baseDef;
+    const {unitTag, hoverDigits} = STOCK_METRIC_DISPLAY[metric];
+    hoverFmt = `%{x}: %{y:,.${hoverDigits}f} ${unitTag}`;
     traces = COHORT_DEF.map(c => ({
       x: PAYLOAD.stock_years,
       y: PAYLOAD.stock_years.map(y => stockCohortLookup(metric, c.key, y, stSel)),
@@ -944,11 +962,10 @@ function renderTrajectoryBreakdown() {
       line: {color: '#111', width: 1.5},
       hovertemplate: `<b>Total</b><br>${hoverFmt}<extra></extra>`,
     });
-    yLabel = metric === 'households'
-      ? 'Residential households (millions, occupied)'
-      : 'Commercial floor area (billions sq ft)';
+    yLabel = STOCK_METRIC_DISPLAY[metric].yLabel;
     yMax = Math.max(...totals) || 1;
-    titleText = `${stSel} · stock count by cohort (scenario / amy independent)`;
+    titleText = `${stSel} · ${metric.includes('samples') ? 'samples' : 'stock count'} `
+              + `by cohort (scenario / amy independent)`;
   } else {
     // Energy breakdown: stack the three sector values. For Annual: sums of
     // sector annual values commute. For Peak: use coincident decomposition.
