@@ -140,109 +140,13 @@ def _log(msg: str) -> None:
 
 # === Constants ============================================================
 SCENARIOS: list[str] = ['Baseline', 'ASHP', 'GHP', 'GHP+Envelope']
-BASELINE_YEAR: int = 2018                          # unprojected calibration year
+HISTORICAL_YEARS: list[int] = [2012, 2018, 2020]   # Baseline-only calibration years
 PROJECTION_YEARS: list[int] = [2027, 2030, 2035, 2040, 2045, 2050]
-STOCK_YEARS: list[int] = [BASELINE_YEAR] + PROJECTION_YEARS
+STOCK_YEARS: list[int] = HISTORICAL_YEARS + PROJECTION_YEARS
 RES_COHORTS: list[str] = ['NC', 'SA', 'SNA']
 COM_COHORTS: list[str] = ['NC', 'SA', 'SNA', 'gap']
 LBL_COHORTS: list[str] = ['NC', 'SA', 'SNA']  # LBL excludes gap by spec
 LBL_WEATHER_YEARS: list[int] = [2012, 2018]   # LBL ships only these two AMYs
-
-# 2018 is the unprojected calibration anchor — only Baseline is meaningful
-# here. Adoption (ASHP/GHP/GHP+Envelope) begins at the projection anchor
-# year (2027) per projections/growth_factors.py, so for any year before
-# that the scenario chips would be identical-by-construction. The dashboard
-# disables non-Baseline chips when the slider sits at 2018.
-#
-# Source data: county-level agg_<res|com>_eulp_total_GWh_upgradeAll-Baseline_
-# reg_b2018.csv at the run_dir root. The series gets *scaled* (see
-# _baseline2018_scale_factors) to map ResStock/ComStock-modeled stock onto
-# AEO 2018 actual totals — without it the totals are off by 16% (res) /
-# 44% (com) and don't reconcile against EIA.
-BASELINE_2018_SPEC = {'res': 'All-Baseline', 'com': 'All-Baseline'}
-
-# FIPS state code → 2-letter postal. AK + HI absent from this dataset.
-# DC (FIPS 11) maps to MD per the same convention used elsewhere in this
-# pipeline (ReEDs merges DC into MD).
-_STATE_FIPS_TO_POSTAL: dict[int, str] = {
-    1: 'AL',  4: 'AZ',  5: 'AR',  6: 'CA',  8: 'CO',  9: 'CT', 10: 'DE',
-    11: 'MD',  # DC → MD
-    12: 'FL', 13: 'GA', 16: 'ID', 17: 'IL', 18: 'IN', 19: 'IA', 20: 'KS',
-    21: 'KY', 22: 'LA', 23: 'ME', 24: 'MD', 25: 'MA', 26: 'MI', 27: 'MN',
-    28: 'MS', 29: 'MO', 30: 'MT', 31: 'NE', 32: 'NV', 33: 'NH', 34: 'NJ',
-    35: 'NM', 36: 'NY', 37: 'NC', 38: 'ND', 39: 'OH', 40: 'OK', 41: 'OR',
-    42: 'PA', 44: 'RI', 45: 'SC', 46: 'SD', 47: 'TN', 48: 'TX', 49: 'UT',
-    50: 'VT', 51: 'VA', 53: 'WA', 54: 'WV', 55: 'WI', 56: 'WY',
-}
-
-
-def _county_fips_to_state(col: str) -> str | None:
-    """Map a county FIPS column header (4 or 5 digit, no leading zero) to its
-    state postal. The agg files strip leading zeros — '1001' = state 1
-    (Alabama) county 001; '11001' = state 11 (DC, → MD) county 001."""
-    try:
-        fips = int(col)
-    except ValueError:
-        return None
-    return _STATE_FIPS_TO_POSTAL.get(fips // 1000)
-
-
-def _baseline2018_scale_factors(
-    res_run_dir: Path, com_run_dir: Path
-) -> tuple[float, float]:
-    """Return (scale_res, gap_ratio_com) — two *different* multiplicative
-    corrections needed to map the raw ResStock/ComStock 2018 output onto
-    AEO 2018 actuals.
-
-    scale_res — household occupancy correction.
-        aux_coverage.units_count sums ALL housing units in the ResStock
-        sampling frame (~140 M, includes vacant). AEO's residential
-        total is OCCUPIED households (~118 M). Multiply the modeled
-        residential load by AEO/modeled so the result reflects load from
-        occupied households only.
-
-    gap_ratio_com — coverage-gap ratio for the unmodeled commercial.
-        ComStock covers ~70 % of total US commercial floor space
-        (modeled = 64 B sqft, AEO total = 92 B sqft). The remaining
-        ~30 % is the dashboard's `gap` sector. By construction:
-              gap_load = modeled_load × gap_ratio_com
-        where gap_ratio_com = (AEO_sqft − modeled_sqft) / modeled_sqft.
-        The commercial sector itself stays unscaled — only the gap is
-        synthesized — so the modeled commercial value remains directly
-        comparable to projection-year commercial values, while
-        commercial+gap matches AEO actuals.
-
-    AEO 2025 carries no 2018 data, so the 2018 vintage CSVs in `AEO 2025/`
-    are the source for both AEO totals. AEO 2018 vs AEO 2025 diverges
-    5–30 % for future years, so it must NOT be used for 2027–2050.
-    """
-    repo_dir = Path(__file__).resolve().parent.parent
-    aeo_dir = repo_dir / 'AEO 2025'
-    res_aeo = pd.read_csv(aeo_dir /
-        'Residential_Sector_Key_Indicators_and_Consumption_2018.csv', skiprows=4)
-    com_aeo = pd.read_csv(aeo_dir /
-        'Commercial_Sector_Key_Indicators_and_Consumption_2018.csv', skiprows=4)
-    name_col_res = res_aeo.columns[1]
-    name_col_com = com_aeo.columns[1]
-    aeo_res_total = float(res_aeo.loc[res_aeo[name_col_res] ==
-        'Residential: Key Indicators: Households: Total: Reference case', '2018'].iloc[0])
-    aeo_com_total = float(com_aeo.loc[com_aeo[name_col_com] ==
-        'Commercial: Total Floorspace: Total: Reference case', '2018'].iloc[0])
-    aeo_res_raw = aeo_res_total * 1e6   # millions HH → raw HH
-    aeo_com_raw = aeo_com_total * 1e9   # billions sqft → raw sqft
-
-    res_aux = pd.read_csv(res_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
-    com_aux = pd.read_csv(com_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
-    modeled_res = float(res_aux['units_count'].sum())
-    modeled_com = float(com_aux['sqft'].sum())
-    scale_res = aeo_res_raw / modeled_res
-    gap_ratio_com = (aeo_com_raw - modeled_com) / modeled_com
-    _log(f'  2018 calibration: scale_res={scale_res:.4f} '
-         f'(modeled {modeled_res/1e6:.2f}M HH → AEO {aeo_res_total:.2f}M); '
-         f'gap_ratio_com={gap_ratio_com:.4f} '
-         f'(modeled {modeled_com/1e9:.2f}B sqft, AEO {aeo_com_total:.2f}B → '
-         f'unmodeled fraction = {gap_ratio_com / (1 + gap_ratio_com):.3f})')
-    return scale_res, gap_ratio_com
 
 # ReEDs CSVs spell out state names in lowercase ("alabama, …"). Plotly's
 # USA-states choropleth wants 2-letter postals. DC is intentionally absent
@@ -660,49 +564,6 @@ def _compute_state_xt_stats(
     return ann_dict, peak_dict, coincident
 
 
-def _roll_agg_b2018_to_state_xt(
-    run_dir: Path, stock: str, specs: list[str], scale: float = 1.0,
-) -> pd.DataFrame | None:
-    """Read each `agg_<stock>_eulp_total_GWh_upgrade<spec>_reg_b2018.csv` in
-    the run_dir, roll columns county→state via FIPS prefix, sum across specs,
-    and multiply by `scale`. Uses polars for the CSV scan (~3 s vs pandas'
-    60 s on this 157K × 3100 county shape). Returns an hourly state-x-time
-    DataFrame in GWh, or None if no file matched. CONUS column is NOT added
-    here — _compute_state_xt_stats does."""
-    total: pd.DataFrame | None = None
-    for spec in specs:
-        p = run_dir / f'agg_{stock}_eulp_total_GWh_upgrade{spec}_reg_b2018.csv'
-        if not p.exists():
-            continue
-        # In-memory read: one file at a time consumes ~4 GB peak (157K rows ×
-        # 3107 county columns × 8 bytes). The sequential caller in
-        # panel_state_by_sector reads one at a time, so total peak stays under
-        # ~5 GB — well within the 64 GB SLURM budget. Streaming engine was
-        # ~30× slower for this workload than collect().
-        df_pl = pl.read_csv(p)
-        groups: dict[str, list[str]] = {}
-        for col in df_pl.columns:
-            if col == 'timestamp_EST':
-                continue
-            st = _county_fips_to_state(col)
-            if st is not None:
-                groups.setdefault(st, []).append(col)
-        if not groups:
-            continue
-        agg_exprs = [pl.col('timestamp_EST')]
-        for st in sorted(groups):
-            agg_exprs.append(
-                pl.sum_horizontal([pl.col(c) for c in groups[st]]).alias(st))
-        rolled_pl = df_pl.select(agg_exprs)
-        del df_pl  # release the wide DataFrame before we touch pandas
-        rolled = rolled_pl.to_pandas().set_index('timestamp_EST')
-        rolled.index = pd.to_datetime(rolled.index)
-        total = rolled if total is None else total.add(rolled, fill_value=0.0)
-    if total is not None and scale != 1.0:
-        total = total * scale
-    return total
-
-
 def _cohort_daily_allwys_task(args: tuple) -> tuple[str, int, str, str, dict]:
     """One (scenario, year, sector_in_file, cohort) intermediate `total` file →
     daily-aggregated GWh per (state, weather year) and the CONUS sum.
@@ -819,12 +680,13 @@ def panel_state_by_sector(
     FIPS prefix. Both paths return identical output shapes, so the merge
     logic below doesn't branch on year.
     """
-    proj_tasks = [(res_inter, com_inter, s, y, sec)
-                  for s in SCENARIOS for y in PROJECTION_YEARS
-                  for sec in ('residential', 'commercial', 'gap', 'total')]
-    b2018_tasks = [(res_run_dir, com_run_dir, s, sec)
-                   for s in SCENARIOS
-                   for sec in ('residential', 'commercial', 'gap', 'total')]
+    # All years (historical + projection) go through the same intermediate-
+    # file path now. Historical years emit only Baseline scenario files (per
+    # the projection package), so tasks for upgrade scenarios at those years
+    # find no input files and short-circuit to empty dicts inside the worker.
+    tasks = [(res_inter, com_inter, s, y, sec)
+             for s in SCENARIOS for y in STOCK_YEARS
+             for sec in ('residential', 'commercial', 'gap', 'total')]
 
     annual: dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
     peak:   dict = {s: {y: {} for y in STOCK_YEARS} for s in SCENARIOS}
@@ -839,60 +701,15 @@ def panel_state_by_sector(
             for wy, by_state in coinc.items():
                 coincident_decomp[scenario][year][wy] = by_state
 
-    _log(f'  state-by-sector projection — {len(proj_tasks)} tasks across {WORKERS} processes')
+    _log(f'  state-by-sector — {len(tasks)} tasks across {WORKERS} processes')
     done = 0
     with ProcessPoolExecutor(max_workers=WORKERS) as pool:
-        for scenario, year, sector, ann_d, peak_d, coinc in pool.map(_state_sector_task, proj_tasks):
+        for scenario, year, sector, ann_d, peak_d, coinc in pool.map(_state_sector_task, tasks):
             done += 1
             _absorb(scenario, year, sector, ann_d, peak_d, coinc)
-            if done == 1 or done == len(proj_tasks) or done % 16 == 0:
-                _log(f'    ({done:>2}/{len(proj_tasks)}) {scenario}/{year}/{sector}  '
+            if done == 1 or done == len(tasks) or done % 16 == 0:
+                _log(f'    ({done:>2}/{len(tasks)}) {scenario}/{year}/{sector}  '
                      f'states={len(next(iter(ann_d.values()), {}))}')
-
-    # 2018 path: only Baseline scenario (adoption begins at 2027 per
-    # projections/growth_factors.py, so ASHP/GHP/+Env at 2018 would be
-    # identical-by-construction to Baseline; we drop them rather than render
-    # four overlapping curves). Sequential pre-load to keep memory bounded
-    # (each agg file is ~4 GB in pandas; parallel × 4 files OOMs).
-    scale_res, gap_ratio_com = _baseline2018_scale_factors(res_run_dir, com_run_dir)
-    _log('  state-by-sector baseline 2018 — Baseline only')
-    # Residential: scaled to occupied households (× ~0.84).
-    # Commercial: unscaled — leave modeled commercial directly comparable to
-    # projection-year commercial values.
-    # Gap: synthesized from commercial × gap_ratio_com (= unmodeled-sqft /
-    # modeled-sqft from aux_coverage vs AEO 2018), so commercial + gap = AEO
-    # total commercial. Same gap semantic as projection years.
-    res_total = _roll_agg_b2018_to_state_xt(
-        res_run_dir, 'res', [BASELINE_2018_SPEC['res']], scale=scale_res)
-    com_total = _roll_agg_b2018_to_state_xt(
-        com_run_dir, 'com', [BASELINE_2018_SPEC['com']], scale=1.0)
-    if res_total is None and com_total is None:
-        _log('    no 2018 data found — skipping')
-    else:
-        gap_total = (com_total * gap_ratio_com) if com_total is not None else None
-        parts = [d for d in (res_total, com_total, gap_total) if d is not None]
-        total_sum = parts[0].copy()
-        for d in parts[1:]:
-            total_sum = total_sum.add(d, fill_value=0.0)
-        sector_to_df = {
-            'residential': res_total,
-            'commercial':  com_total,
-            'gap':         gap_total,
-            'total':       total_sum,
-        }
-        for sec, total_df in sector_to_df.items():
-            if total_df is None:
-                continue
-            ann_d, peak_d, coinc = _compute_state_xt_stats(
-                total=total_df,
-                res_df=res_total if sec == 'total' else None,
-                com_df=com_total if sec == 'total' else None,
-                gap_df=gap_total if sec == 'total' else None,
-                compute_coincident=(sec == 'total'),
-            )
-            _absorb('Baseline', BASELINE_YEAR, sec, ann_d, peak_d, coinc)
-            _log(f'    Baseline/{BASELINE_YEAR}/{sec}  '
-                 f'states={len(next(iter(ann_d.values()), {}))}')
 
     return {
         'annual_gwh': annual,
@@ -982,154 +799,92 @@ def panel_intermediate_annual(
     return out
 
 
-def panel_stock_counts(res_run_dir: Path, com_run_dir: Path) -> dict:
-    """Per-state, per-cohort stock-count trajectories on the ResStock-modeled
-    basis (not the raw AEO total), at every stock year.
+_AUX_FILE_RE = re.compile(
+    r'^aux_(?P<scenario>.+)_(?P<sector>residential|commercial)_'
+    r'(?P<cohort>NC|SA|SNA)_y(?P<year>\d{4})\.csv$'
+)
 
-    The displayed counts reflect the stock that's actually represented in the
-    projected energy data: the ResStock 2018 baseline (occupied households /
-    modeled floor space) scaled by AEO cohort growth factors, NOT AEO totals
-    directly. The two differ because the ResStock sampling frame's modeled
-    units / sqft don't exactly equal AEO 2018 — residential matches within
-    ~4 %, commercial undermodels by ~30 % (the gap sector).
 
-    Cohort breakdown matches the energy cohorts in the intermediate files:
-        residential: NC, SA, SNA
-        commercial:  NC, SA, SNA, gap
-
-    Calendar logic:
-        Before ANCHOR_YEAR (2027), no adoption has begun and no new
-        construction has accumulated — every modeled unit lives in the
-        SNA cohort. The 2018 cell falls in this regime.
-        From ANCHOR_YEAR onward, growth_factors' cohort_split functions
-        define the per-cohort AEO fractions; we scale those by the
-        ResStock-to-AEO ratio at the anchor year to land on the modeled
-        basis (modeled_2018 / AEO_anchor).
-
-    Per-state share comes from aux_coverage at 2018 (DC folded into MD,
-    AK/HI dropped). The share is applied per cohort identically — this
-    assumes state-level cohort proportions track the CONUS proportions.
+def panel_stock_counts(res_inter_dir: Path, com_inter_dir: Path) -> dict:
+    """Per-state, per-cohort stock counts read directly from the projection
+    package's per-cohort aux files (`aux_<scenario>_<sector>_<cohort>_y<year>.csv`
+    in intermediate/state/). Each aux file has 49 rows (one per state) with
+    `sqft` and `units_count` columns — projected by the same factors that
+    scale the energy outputs, so the dashboard stock-count display reads
+    out exactly what's implicit in the energy data.
 
     Output:
         {
-          'residential_units': {year: {cohort: {state: M occupied HH}}},
+          'residential_units': {year: {cohort: {state: M HH}}},
           'commercial_sqft':   {year: {cohort: {state: B sqft}}},
         }
+
+    Cohort breakdown:
+        residential: NC, SA, SNA
+        commercial:  NC, SA, SNA   (no aux for the gap cohort by design;
+                                    gap is the unmodeled commercial floor
+                                    space and has no per-building proxy)
+
+    Per-state aggregation:
+        units_count column (M HH) divided by 1e6 → M HH
+        sqft column         divided by 1e9 → B sqft
     """
-    from projections.growth_factors import (
-        residential_cohort_split, commercial_cohort_split,
-        commercial_total_floorspace, ANCHOR_YEAR, GAP_FRACTION,
-    )
-    from projections.common import RES_OCCUPANCY_FRACTION
-
-    aeo_dir = Path(__file__).resolve().parent.parent / 'AEO 2025'
-    res_aeo18 = pd.read_csv(
-        aeo_dir / 'Residential_Sector_Key_Indicators_and_Consumption_2018.csv',
-        skiprows=4)
-    com_aeo18 = pd.read_csv(
-        aeo_dir / 'Commercial_Sector_Key_Indicators_and_Consumption_2018.csv',
-        skiprows=4)
-    name_res = res_aeo18.columns[1]
-    name_com = com_aeo18.columns[1]
-    aeo_res_2018 = float(res_aeo18.loc[res_aeo18[name_res] ==
-        'Residential: Key Indicators: Households: Total: Reference case', '2018'].iloc[0])
-    aeo_com_2018 = float(com_aeo18.loc[com_aeo18[name_com] ==
-        'Commercial: Total Floorspace: Total: Reference case', '2018'].iloc[0])
-
-    # Per-state share + 2018 modeled basis from aux_coverage.
-    drop_states = {'AK', 'HI'}
-    res_aux = pd.read_csv(res_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
-    com_aux = pd.read_csv(com_run_dir / 'aux_coverage_upgradeAll-Baseline_reg_b2018.csv')
-    res_aux = res_aux[~res_aux['state'].isin(drop_states)].copy()
-    com_aux = com_aux[~com_aux['state'].isin(drop_states)].copy()
-    res_aux['state'] = res_aux['state'].replace({'DC': 'MD'})
-    com_aux['state'] = com_aux['state'].replace({'DC': 'MD'})
-    res_state_share = (res_aux.groupby('state')['units_count'].sum()
-                       / res_aux['units_count'].sum()).to_dict()
-    com_state_share = (com_aux.groupby('state')['sqft'].sum()
-                       / com_aux['sqft'].sum()).to_dict()
-    # Residential basis: the raw ResStock dwelling units count (including
-    # vacancies) — the "dwelling units modeled" by the projection. Each cohort
-    # at year Y then equals AEO_cohort(Y) × (aux_raw / aux_occupied_at_anchor)
-    # = AEO_cohort(Y) / RES_OCCUPANCY_FRACTION, which expresses the projection's
-    # implicit-count formulation: ResStock baseline × growth factor where the
-    # growth factor is AEO_Y_occupied / modeled_2018_occupied.
-    modeled_res_2018 = res_aux['units_count'].sum() / 1e6  # raw, NOT × occupancy
-    modeled_com_non_gap_2018 = com_aux['sqft'].sum() / 1e9
-    gap_ratio_com_2018 = (aeo_com_2018 - modeled_com_non_gap_2018) / modeled_com_non_gap_2018
-
-    # Residential scaling: 1/occupancy_fraction folds together
-    #   aux_raw / aux_occupied_at_anchor — yields ~1.09 at the 2027 anchor.
-    # Commercial scaling: modeled / AEO at the anchor year — no occupancy
-    # correction (sqft is not occupancy-dependent).
-    anchor_com_non_gap = commercial_cohort_split(ANCHOR_YEAR)['total_floorspace'] * (1 - GAP_FRACTION)
-    ratio_res          = 1.0 / RES_OCCUPANCY_FRACTION
-    ratio_com_non_gap  = modeled_com_non_gap_2018 / anchor_com_non_gap
-
-    def _per_state(value: float, share: dict[str, float]) -> dict[str, float]:
-        out = {st: float(value * s) for st, s in share.items()}
-        out['CONUS'] = float(value)
-        return out
+    res_aux_files = _gather_aux_files(res_inter_dir, 'residential')
+    com_aux_files = _gather_aux_files(com_inter_dir, 'commercial')
 
     residential_units: dict = {}
     commercial_sqft:   dict = {}
-    for year in STOCK_YEARS:
-        if year < ANCHOR_YEAR:
-            # 2018 calibration year. No adoption, no new construction — every
-            # unit lives in SNA. Residential goes through the same projection-
-            # flow formula as 2027+ (AEO_Y_occupied / RES_OCCUPANCY_FRACTION),
-            # using AEO 2018 vintage data; this gives a value smaller than
-            # raw aux because ResStock models more occupied units than AEO
-            # 2018 reports actually exist. Commercial uses the AEO 2018 total
-            # so the gap = total - non_gap_modeled stays consistent with the
-            # energy panel.
-            res_NC, res_SA = 0.0, 0.0
-            res_SNA = aeo_res_2018 / RES_OCCUPANCY_FRACTION
-            com_NC, com_SA = 0.0, 0.0
-            com_SNA = modeled_com_non_gap_2018
-            com_gap = modeled_com_non_gap_2018 * gap_ratio_com_2018
-        else:
-            res = residential_cohort_split(year)
-            com = commercial_cohort_split(year)
-            res_NC  = res['cumulative_new_households']                 * ratio_res
-            res_SA  = res['adopted_existing_households']               * ratio_res
-            res_SNA = (res['eligible_not_adopted_existing_households']
-                       + res['ineligible_existing_households'])         * ratio_res
-            # Commercial non-gap cohorts on the modeled basis. The cohort
-            # values from growth_factors are already non-gap-scoped for the
-            # adopted/eligible/ineligible terms; only cumulative_new needs
-            # the (1 - GAP_FRACTION) factor (the dict mixes scopes).
-            com_NC  = com['cumulative_new_floorspace'] * (1 - GAP_FRACTION) * ratio_com_non_gap
-            com_SA  = com['adopted_existing_floorspace']                    * ratio_com_non_gap
-            com_SNA = (com['eligible_not_adopted_existing_floorspace']
-                       + com['ineligible_existing_floorspace'])             * ratio_com_non_gap
-            # Commercial gap: scale 2018 gap by AEO total commercial growth.
-            # This keeps the gap proportional to the non-gap on the modeled
-            # basis as time advances, matching the energy panel's gap logic.
-            com_gap = (modeled_com_non_gap_2018 * gap_ratio_com_2018
-                       * commercial_total_floorspace(year) / aeo_com_2018)
+    for (scenario, year, cohort), path in res_aux_files.items():
+        if scenario != 'Baseline':
+            # Stock counts are scenario-invariant at the projection level
+            # (every scenario shares the same aux file content scaled by the
+            # same factors). We only need Baseline aux to populate the
+            # display — non-Baseline aux files are skipped to avoid double-
+            # counting the dashboard's single trajectory line.
+            continue
+        df = pd.read_csv(path)
+        per_state = {row['state']: float(row['units_count']) / 1e6
+                     for _, row in df.iterrows()}
+        per_state['CONUS'] = sum(per_state.values())
+        residential_units.setdefault(year, {})[cohort] = per_state
+    for (scenario, year, cohort), path in com_aux_files.items():
+        if scenario != 'Baseline':
+            continue
+        df = pd.read_csv(path)
+        per_state = {row['state']: float(row['sqft']) / 1e9 for _, row in df.iterrows()}
+        per_state['CONUS'] = sum(per_state.values())
+        commercial_sqft.setdefault(year, {})[cohort] = per_state
 
-        residential_units[year] = {
-            'NC':  _per_state(res_NC,  res_state_share),
-            'SA':  _per_state(res_SA,  res_state_share),
-            'SNA': _per_state(res_SNA, res_state_share),
-        }
-        commercial_sqft[year] = {
-            'NC':  _per_state(com_NC,  com_state_share),
-            'SA':  _per_state(com_SA,  com_state_share),
-            'SNA': _per_state(com_SNA, com_state_share),
-            'gap': _per_state(com_gap, com_state_share),
-        }
+    if 2050 in residential_units:
+        res2050 = sum(residential_units[2050].get(c, {}).get('CONUS', 0)
+                      for c in ('NC', 'SA', 'SNA'))
+        com2050 = sum(commercial_sqft.get(2050, {}).get(c, {}).get('CONUS', 0)
+                      for c in ('NC', 'SA', 'SNA'))
+        _log(f'  stock_counts (aux): 2050 Baseline CONUS res={res2050:.1f} M HH, '
+             f'com_modeled={com2050:.1f} B sqft '
+             f'(years present: {sorted(residential_units.keys())})')
 
-    _log(f'  stock_counts (modeled basis): '
-         f'2018 res={modeled_res_2018:.1f}M HH all-SNA, '
-         f'com_non_gap={modeled_com_non_gap_2018:.1f}B sqft + gap={modeled_com_non_gap_2018*gap_ratio_com_2018:.1f}B; '
-         f'2050 res_total={sum(residential_units[2050][c]["CONUS"] for c in ("NC","SA","SNA")):.1f}M HH, '
-         f'com_total={sum(commercial_sqft[2050][c]["CONUS"] for c in ("NC","SA","SNA","gap")):.1f}B sqft')
     return {
         'residential_units': residential_units,
         'commercial_sqft':   commercial_sqft,
     }
+
+
+def _gather_aux_files(intermediate_state_dir: Path,
+                      expect_sector: str) -> dict[tuple[str, int, str], Path]:
+    """Return {(scenario, year, cohort): path} for every aux file at
+    intermediate/state/ matching the given sector. Tolerates a missing dir
+    (returns empty) so the bake doesn't fail when projection hasn't been
+    run with aux output yet."""
+    out: dict[tuple[str, int, str], Path] = {}
+    if not intermediate_state_dir.is_dir():
+        return out
+    for p in sorted(intermediate_state_dir.iterdir()):
+        m = _AUX_FILE_RE.match(p.name)
+        if not m or m['sector'] != expect_sector:
+            continue
+        out[(m['scenario'], int(m['year']), m['cohort'])] = p
+    return out
 
 
 def panel_lbl(res_lbl_dir: Path, com_lbl_dir: Path) -> dict:
@@ -1220,24 +975,24 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
     _log('C. panel_state_by_sector — per-state annual+peak per sector...')
     state_by_sector = panel_state_by_sector(res_inter, com_inter, res_run_dir, com_run_dir)
 
-    # panel1 (CONUS trajectory) at the 2018 baseline: ReEDs has no 2018, so
-    # derive it from state_by_sector.total.CONUS. The test suite verifies
-    # this identity holds for the projection years — same source of truth,
-    # one year earlier.
-    for scen in SCENARIOS:
-        ann_2018  = state_by_sector['annual_gwh'].get(scen, {}).get(BASELINE_YEAR, {})
-        peak_2018 = state_by_sector['peak_gw']   .get(scen, {}).get(BASELINE_YEAR, {})
-        if not ann_2018 or not peak_2018:
-            continue
-        series_annual.setdefault(scen, {})[BASELINE_YEAR] = {
-            int(wy): float(by_sec['total']['CONUS'])
-            for wy, by_sec in ann_2018.items()
-        }
-        series_peak.setdefault(scen, {})[BASELINE_YEAR] = {
-            int(wy): float(by_sec['total']['CONUS']['annual'])
-            for wy, by_sec in peak_2018.items()
-        }
-        wy_seen.update(int(w) for w in peak_2018.keys())
+    # panel1 (CONUS trajectory) at HISTORICAL_YEARS: ReEDs has no historical
+    # data, so derive panel1 for those years from state_by_sector.total.CONUS.
+    # Only Baseline is meaningful at those years (per the projection package).
+    for year in HISTORICAL_YEARS:
+        for scen in SCENARIOS:
+            ann_y  = state_by_sector['annual_gwh'].get(scen, {}).get(year, {})
+            peak_y = state_by_sector['peak_gw']   .get(scen, {}).get(year, {})
+            if not ann_y or not peak_y:
+                continue
+            series_annual.setdefault(scen, {})[year] = {
+                int(wy): float(by_sec['total']['CONUS'])
+                for wy, by_sec in ann_y.items()
+            }
+            series_peak.setdefault(scen, {})[year] = {
+                int(wy): float(by_sec['total']['CONUS']['annual'])
+                for wy, by_sec in peak_y.items()
+            }
+            wy_seen.update(int(w) for w in peak_y.keys())
     panel1['weather_years'] = sorted(int(w) for w in wy_seen)
 
     _log('D. panel_cohort_daily_all_wys — daily cohort decomp, every wy...')
@@ -1250,8 +1005,9 @@ def build_payload(res_run_dir: Path, com_run_dir: Path) -> dict:
     lbl_annual = panel_lbl(res_run_dir / 'LBL', com_run_dir / 'LBL')
     _log(f'   LBL cells populated: {sum(1 for s in lbl_annual.values() for y in s.values() for w in y.values())}')
 
-    _log('F.1 panel_stock_counts (per-state HH + sqft per stock year)...')
-    stock_counts = panel_stock_counts(res_run_dir, com_run_dir)
+    _log('F.1 panel_stock_counts (read per-cohort aux files from intermediate/)...')
+    stock_counts = panel_stock_counts(res_run_dir / 'intermediate' / 'state',
+                                       com_run_dir / 'intermediate' / 'state')
 
     _log('G. axis pin maxes (per-state + per-sector)...')
     def _ceil_to_step(v: float, step: float) -> float:
