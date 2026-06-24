@@ -21,9 +21,27 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import re
 import shutil
 
 from .reeds import _parse_filename
+
+
+# Aux files follow the same per-(scenario, group, year) layout as energy
+# but with no enduse and no _GWh_ marker:
+#   aux_<stock>_<scenario>_<group>_y<year>.csv
+# Per-scenario aux summed across enduses isn't a thing — aux is a building
+# count, not an energy quantity.
+_AUX_FNAME_RE = re.compile(
+    r'^aux_(?P<stock>res|com)_(?P<scenario>.+?)'
+    r'_(?P<group>new_construction|surviving|new_adoption|surviving_adoption|surviving_non_adoption|gap_consumption)'
+    r'_y(?P<year>\d+)\.csv$'
+)
+
+
+def _parse_aux_filename(path: str) -> dict[str, str] | None:
+    m = _AUX_FNAME_RE.match(os.path.basename(path))
+    return m.groupdict() if m else None
 
 
 _GROUP_TO_COHORT: dict[str, str] = {
@@ -54,6 +72,12 @@ def _relabel(info: dict[str, str]) -> str:
     return f"{info['scenario']}_{sector}_{cohort}_{enduse}_y{info['year']}.csv"
 
 
+def _relabel_aux(info: dict[str, str]) -> str:
+    sector = _SECTOR_FROM_STOCK[info['stock']]
+    cohort = _GROUP_TO_COHORT[info['group']]
+    return f"aux_{info['scenario']}_{sector}_{cohort}_y{info['year']}.csv"
+
+
 def _emit(src: str, dst: str, copy: bool) -> None:
     """Replace dst with a relative symlink (or copy) of src."""
     if os.path.lexists(dst):
@@ -68,7 +92,8 @@ def build(run_dirs: list[str], out_dir: str, copy: bool = False) -> None:
     os.makedirs(out_dir, exist_ok=True)
     print(f'intermediate: writing to {out_dir} ({"copying" if copy else "symlinking"})')
 
-    counts = {'state': 0, 'county_group': 0, 'skipped': 0}
+    counts = {'state': 0, 'county_group': 0, 'aux_state': 0, 'aux_county_group': 0,
+              'skipped': 0}
     for rd in run_dirs:
         for src_subdir, dst_subdir in _SOURCE_TO_TARGET.items():
             src_root = os.path.join(rd, src_subdir)
@@ -76,6 +101,7 @@ def build(run_dirs: list[str], out_dir: str, copy: bool = False) -> None:
                 continue
             target = os.path.join(out_dir, dst_subdir)
             os.makedirs(target, exist_ok=True)
+            # Energy files: proj_<stock>_<scenario>_<group>_<enduse>_GWh_y<year>.csv
             for src in sorted(glob.glob(os.path.join(src_root, 'proj_*.csv'))):
                 info = _parse_filename(src)
                 if info is None or info['group'] not in _GROUP_TO_COHORT:
@@ -83,9 +109,19 @@ def build(run_dirs: list[str], out_dir: str, copy: bool = False) -> None:
                     continue
                 _emit(src, os.path.join(target, _relabel(info)), copy)
                 counts[dst_subdir] += 1
+            # Aux files: aux_<stock>_<scenario>_<group>_y<year>.csv
+            for src in sorted(glob.glob(os.path.join(src_root, 'aux_*.csv'))):
+                info = _parse_aux_filename(src)
+                if info is None or info['group'] not in _GROUP_TO_COHORT:
+                    counts['skipped'] += 1
+                    continue
+                _emit(src, os.path.join(target, _relabel_aux(info)), copy)
+                counts[f'aux_{dst_subdir}'] += 1
 
     print(f'intermediate: {counts["state"]} state + {counts["county_group"]} '
-          f'county_group files ({counts["skipped"]} skipped)')
+          f'county_group energy files; {counts["aux_state"]} state + '
+          f'{counts["aux_county_group"]} county_group aux files '
+          f'({counts["skipped"]} skipped)')
 
 
 def main() -> None:
