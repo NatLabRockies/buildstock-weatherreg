@@ -328,12 +328,21 @@ def _aggregate_aux(aux: pd.DataFrame, resolution: Resolution) -> pd.DataFrame:
 def _aux_for_group(group: GroupName, spec_tag: SpecTag, run_dir: str,
                    stock: Stock, year: int) -> pd.DataFrame | None:
     """Project the aux file for one (group, spec, year). Returns None for
-    the gap cohort (commercial only — no aux representation)."""
+    the gap cohort (commercial only — no aux representation).
+
+    The energy projection sources `_load_hvac_sources` from the upgrade
+    spec_tag for new_adoption / surviving_adoption — those rows represent
+    *upgrade-applied load* per building. The AUX representation, however,
+    counts *buildings*. Buildings being "upgraded" are still the same
+    bldg_ids as in the Upgraded-Baseline (eligible) cohort, so all upgrade
+    aux paths source from ELIGIBLE_TAG. Only the energy path needs the
+    upgrade spec's load profile; the aux is invariant to which upgrade is
+    installed.
+    """
     if group == GAP_GROUP:
         return None
     if group == 'new_construction':
-        # Baseline NC sources from Upgraded-Baseline (eligible), same as the
-        # energy path now does.
+        # Baseline NC sources from Upgraded-Baseline (eligible).
         fac = factors.baseline_scenario_factors(run_dir, stock, year)['new_construction']
         return _scale_aux(_load_aux_for_spec(run_dir, stock, ELIGIBLE_TAG), fac)
     if group == 'surviving':
@@ -341,10 +350,10 @@ def _aux_for_group(group: GroupName, spec_tag: SpecTag, run_dir: str,
         return _scale_aux(_load_aux_for_spec(run_dir, stock, ALL_BASELINE_TAG), fac)
     if group == 'new_adoption':
         fac = factors.upgrade_factors(run_dir, stock, year)['new_adoption']
-        return _scale_aux(_load_aux_for_spec(run_dir, stock, spec_tag), fac)
+        return _scale_aux(_load_aux_for_spec(run_dir, stock, ELIGIBLE_TAG), fac)
     if group == 'surviving_adoption':
         fac = factors.upgrade_factors(run_dir, stock, year)['surviving_adoption']
-        return _scale_aux(_load_aux_for_spec(run_dir, stock, spec_tag), fac)
+        return _scale_aux(_load_aux_for_spec(run_dir, stock, ELIGIBLE_TAG), fac)
     if group == 'surviving_non_adoption':
         fac = factors.upgrade_factors(run_dir, stock, year)
         elig   = _scale_aux(_load_aux_for_spec(run_dir, stock, ELIGIBLE_TAG),
