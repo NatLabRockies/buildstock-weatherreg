@@ -831,8 +831,19 @@ def panel_stock_counts(res_inter_dir: Path, com_inter_dir: Path) -> dict:
     residential_samples: dict = {}
     commercial_samples:  dict = {}
 
+    # Read from one *upgrade* scenario for projection years so we get the full
+    # NC/SA/SNA cohort split (Baseline has no SA — adoption hasn't happened).
+    # All upgrade scenarios share the same adoption ramp from growth_factors, so
+    # which one we pick doesn't matter; first sorted name wins for determinism.
+    # For HISTORICAL_YEARS we fall back to Baseline since only Baseline is
+    # emitted at those years.
+    def _pick_scenario(by_year_cohort: dict, year: int) -> str:
+        scenarios = sorted({s for s, y, _ in by_year_cohort if y == year})
+        upgrades = [s for s in scenarios if s != 'Baseline']
+        return upgrades[0] if upgrades else 'Baseline'
+
     for (scenario, year, cohort), path in res_aux_files.items():
-        if scenario != 'Baseline':
+        if scenario != _pick_scenario(res_aux_files, year):
             continue
         df = pd.read_csv(path)
         per_state_units   = {row['state']: float(row['units_count']) / 1e6 for _, row in df.iterrows()}
@@ -842,7 +853,7 @@ def panel_stock_counts(res_inter_dir: Path, com_inter_dir: Path) -> dict:
         residential_units  .setdefault(year, {})[cohort] = per_state_units
         residential_samples.setdefault(year, {})[cohort] = per_state_samples
     for (scenario, year, cohort), path in com_aux_files.items():
-        if scenario != 'Baseline':
+        if scenario != _pick_scenario(com_aux_files, year):
             continue
         df = pd.read_csv(path)
         per_state_sqft    = {row['state']: float(row['sqft']) / 1e9 for _, row in df.iterrows()}
