@@ -55,6 +55,7 @@ from .common import (
     ENDUSES,
     INELIGIBLE_SPEC_NAME,
     INELIGIBLE_TAG,
+    HISTORICAL_YEARS,
     PROJECTION_YEARS,
     STATE_FIPS_TO_POSTAL,
     EnduseFrames,
@@ -234,18 +235,110 @@ def get_gap(run_dir: str, stock: Stock, year: int,
 
 
 def get_new_construction_baseline(run_dir: str, stock: Stock, year: int) -> EnduseFrames:
-    """Newly-built stock with no adoption."""
-    fac = factors.baseline_scenario_factors(stock, year)
-    sources = _load_hvac_sources(run_dir, stock, ALL_BASELINE_TAG)
+    """Newly-built stock with no adoption.  New construction is always sourced
+    from the Upgraded-Baseline (eligible) cohort — new buildings have modern
+    construction supporting the upgrade even when the Baseline scenario
+    doesn't install it."""
+    fac = factors.baseline_scenario_factors(run_dir, stock, year)
+    sources = _load_hvac_sources(run_dir, stock, ELIGIBLE_TAG)
     return get_new_construction(sources, fac['new_construction'], stock, year)
 
 
 def get_surviving_baseline(run_dir: str, stock: Stock, year: int) -> EnduseFrames:
     """Existing stock surviving with no adoption (existing efficiency)."""
-    fac = factors.baseline_scenario_factors(stock, year)
+    fac = factors.baseline_scenario_factors(run_dir, stock, year)
     sources = _add_total(_load_hvac_sources(run_dir, stock, ALL_BASELINE_TAG))
     factor = fac['surviving']
     return {enduse: factor * frame for enduse, frame in sources.items()}
+
+
+# =========================================================================
+# Aux file projection. For every (scenario, year, cohort) we emit a per-
+# building aux file alongside the per-enduse energy files. Same factors —
+# from upgrade_factors / baseline_scenario_factors — applied to the source
+# aux_coverage rows' sqft and units_count columns. The dashboard sums these
+# across cohorts and aggregates to state; LBL reconstructs aux_samples by
+# summing weights across cohorts.
+# =========================================================================
+
+def _load_aux_for_spec(run_dir: str, stock: Stock, spec_tag: SpecTag) -> pd.DataFrame:
+    """Load source aux_coverage_<spec_tag>.csv — per-county aux from BSQ."""
+    return pd.read_csv(common.aux_path(run_dir, spec_tag))
+
+
+def _scale_aux(aux: pd.DataFrame, factor: float) -> pd.DataFrame:
+    out = aux.copy()
+    out['sqft'] = out['sqft'] * factor
+    out['units_count'] = out['units_count'] * factor
+    return out
+
+
+def _sum_aux(*dfs: pd.DataFrame) -> pd.DataFrame:
+    """Sum per-county aux frames row-wise. Frames must share row identity
+    (same county FIPS / nhgis_county_gisjoin in column 0). Non-numeric
+    columns (county_name, state) come from the first frame."""
+    key = dfs[0].columns[0]
+    base = dfs[0].set_index(key)
+    summed = base[['sqft', 'units_count']].copy()
+    for d in dfs[1:]:
+        summed = summed.add(d.set_index(key)[['sqft', 'units_count']], fill_value=0.0)
+    meta_cols = [c for c in base.columns if c not in ('sqft', 'units_count')]
+    return base[meta_cols].join(summed).reset_index()
+
+
+def _aggregate_aux(aux: pd.DataFrame, resolution: Resolution) -> pd.DataFrame:
+    """Roll per-county aux up to the target resolution. The energy code
+    aggregates by hourly column; aux aggregates by row identity:
+        state         → 49 rows keyed by state postal
+        county_group  → ~1,038 rows keyed by BuildStock county_group
+        county        → original ~3,100 rows unchanged
+    """
+    if resolution == 'state':
+        return aux.groupby('state', as_index=False)[['sqft', 'units_count']].sum()
+    if resolution == 'county_group':
+        county_col = aux.columns[0]
+        a = aux.copy()
+        a['county_group'] = a[county_col].map(COUNTY_TO_COUNTY_GROUP)
+        a = a.dropna(subset=['county_group'])
+        return a.groupby(['county_group', 'state'],
+                         as_index=False)[['sqft', 'units_count']].sum()
+    return aux  # county resolution: as-is
+
+
+def _aux_for_group(group: GroupName, spec_tag: SpecTag, run_dir: str,
+                   stock: Stock, year: int) -> pd.DataFrame | None:
+    """Project the aux file for one (group, spec, year). Returns None for
+    the gap cohort (commercial only — no aux representation)."""
+    if group == GAP_GROUP:
+        return None
+    if group == 'new_construction':
+        # Baseline NC sources from Upgraded-Baseline (eligible), same as the
+        # energy path now does.
+        fac = factors.baseline_scenario_factors(run_dir, stock, year)['new_construction']
+        return _scale_aux(_load_aux_for_spec(run_dir, stock, ELIGIBLE_TAG), fac)
+    if group == 'surviving':
+        fac = factors.baseline_scenario_factors(run_dir, stock, year)['surviving']
+        return _scale_aux(_load_aux_for_spec(run_dir, stock, ALL_BASELINE_TAG), fac)
+    if group == 'new_adoption':
+        fac = factors.upgrade_factors(run_dir, stock, year)['new_adoption']
+        return _scale_aux(_load_aux_for_spec(run_dir, stock, spec_tag), fac)
+    if group == 'surviving_adoption':
+        fac = factors.upgrade_factors(run_dir, stock, year)['surviving_adoption']
+        return _scale_aux(_load_aux_for_spec(run_dir, stock, spec_tag), fac)
+    if group == 'surviving_non_adoption':
+        fac = factors.upgrade_factors(run_dir, stock, year)
+        elig   = _scale_aux(_load_aux_for_spec(run_dir, stock, ELIGIBLE_TAG),
+                            fac['surviving_not_adopted_eligible'])
+        inelig = _scale_aux(_load_aux_for_spec(run_dir, stock, INELIGIBLE_TAG),
+                            fac['surviving_not_adopted_ineligible'])
+        return _sum_aux(elig, inelig)
+    raise ValueError(f'unknown group {group!r}')
+
+
+def _aux_output_path(run_dir: str, stock: Stock, display_name: str,
+                     group: GroupName, year: int) -> str:
+    return os.path.join(run_dir, _SUBFOLDER[common.RESOLUTION],
+                        f'aux_{stock}_{display_name}_{group}_y{year}.csv')
 
 
 def _compute_group(group: GroupName, spec_tag: SpecTag, run_dir: str, stock: Stock,
@@ -334,24 +427,39 @@ def _project_one_group(args: GroupTask) -> str:
     enduses = group_enduses(group)
     out_paths = {e: _projection_path(run_dir, stock, display_name, group, e, year)
                  for e in enduses}
-    if all(os.path.exists(p) for p in out_paths.values()):
+    aux_path = _aux_output_path(run_dir, stock, display_name, group, year)
+    has_aux = group != GAP_GROUP  # gap cohort has no per-building aux
+
+    energy_done = all(os.path.exists(p) for p in out_paths.values())
+    aux_done    = (not has_aux) or os.path.exists(aux_path)
+    if energy_done and aux_done:
         return (f'  [skip] {scenario:8s} {display_name:22s} {group:22s} '
-                f'y{year} → all {len(enduses)} enduses exist')
+                f'y{year} → all {len(enduses)} enduses + aux exist')
 
     t0 = pd.Timestamp.now()
-    frames = _compute_group(group, spec_tag, run_dir, stock, year, target_years)
     shape: tuple[int, int] = (0, 0)
-    # Atomic write: tmp + rename so an OOM-killed worker never leaves a partial
-    # CSV that the resume check would mistake for finished work.
-    for enduse, df in frames.items():
-        path = out_paths[enduse]
-        tmp = f'{path}.tmp.{os.getpid()}'
-        df.to_csv(tmp)
-        os.replace(tmp, path)
-        shape = df.shape
+
+    if not energy_done:
+        frames = _compute_group(group, spec_tag, run_dir, stock, year, target_years)
+        for enduse, df in frames.items():
+            path = out_paths[enduse]
+            tmp = f'{path}.tmp.{os.getpid()}'
+            df.to_csv(tmp)
+            os.replace(tmp, path)
+            shape = df.shape
+
+    if has_aux and not aux_done:
+        aux = _aux_for_group(group, spec_tag, run_dir, stock, year)
+        if aux is not None:
+            aux = _aggregate_aux(aux, common.RESOLUTION)
+            tmp = f'{aux_path}.tmp.{os.getpid()}'
+            aux.to_csv(tmp, index=False)
+            os.replace(tmp, aux_path)
+
     elapsed = (pd.Timestamp.now() - t0).total_seconds()
     return (f'  [{elapsed:5.1f}s] {scenario:8s} {display_name:22s} {group:22s} '
-            f'y{year} → {len(frames)} enduses ({shape[0]} rows × {shape[1]} cols each)')
+            f'y{year} → {len(enduses)} enduses + aux'
+            f' ({shape[0]} rows × {shape[1]} cols each)')
 
 
 def project_run_dir(run_dir: str, stock: Stock, n_workers: int | None = None) -> None:
@@ -368,14 +476,21 @@ def project_run_dir(run_dir: str, stock: Stock, n_workers: int | None = None) ->
     os.makedirs(out_dir, exist_ok=True)
     print(f'  resolution={common.RESOLUTION!r}; writing to {out_dir}')
 
+    # Build the per-(spec, group, year) task list. Historical years (2012,
+    # 2018, 2020) only get the Baseline scenario — adoption hasn't begun
+    # before ANCHOR_YEAR, so upgrade scenarios at those years would be
+    # identical-by-construction to Baseline.
     scenario_names = _load_scenario_names(run_dir)
-    tasks: list[GroupTask] = [
-        (run_dir, stock, _display_name(spec_name, scenario_names), spec_tag,
-         scenario, group, year, target_years)
-        for spec_name, spec_tag, scenario in _discover_specs(run_dir)
-        for group in scenario_groups(scenario, stock)
-        for year in PROJECTION_YEARS
-    ]
+    tasks: list[GroupTask] = []
+    for spec_name, spec_tag, scenario in _discover_specs(run_dir):
+        years = list(PROJECTION_YEARS)
+        if scenario == 'baseline':
+            years += list(HISTORICAL_YEARS)
+        for group in scenario_groups(scenario, stock):
+            for year in years:
+                tasks.append((run_dir, stock,
+                              _display_name(spec_name, scenario_names),
+                              spec_tag, scenario, group, year, target_years))
 
     if n_workers is None:
         n_workers = int(os.environ.get('SLURM_CPUS_PER_TASK') or os.cpu_count() or 8)

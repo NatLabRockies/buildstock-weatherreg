@@ -61,12 +61,15 @@ RESIDENTIAL_DEMOLITION_RATE = {
 # ============================================================================
 # This module lives in projections/, but the data CSVs sit at the repo root
 # (one level up), so resolve paths relative to the parent directory.
+# Single merged CSV per sector, covering 2007-2050. Produced by
+# `python -m projections.merge_aeo`. Most-recent-vintage-wins per (row, year)
+# so we can pull historical AEO data (2007-2022 from older vintages) and
+# future projections (2023-2050 from AEO 2025) through one loader call —
+# without any year-vs-vintage logic in this module.
 _REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_AEO_DIRECTORY = os.path.join(_REPO_DIR, 'AEO 2025')
-_AEO_COMMERCIAL_CSV = os.path.join(_AEO_DIRECTORY,
-    'Table_5._Commercial_Sector_Key_Indicators_and_Consumption.csv')
-_AEO_RESIDENTIAL_CSV = os.path.join(_AEO_DIRECTORY,
-    'Table_4._Residential_Sector_Key_Indicators_and_Consumption.csv')
+_AEO_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+_AEO_RESIDENTIAL_CSV = os.path.join(_AEO_DATA_DIR, 'aeo_merged_residential.csv')
+_AEO_COMMERCIAL_CSV  = os.path.join(_AEO_DATA_DIR, 'aeo_merged_commercial.csv')
 
 # "Full name" rows we read from each AEO CSV.
 COMMERCIAL_TOTAL_ROW         = 'Commercial: Total Floorspace: Total: Reference case'
@@ -198,6 +201,43 @@ def residential_new_construction_households(year):
 # ============================================================================
 # Cohort splits — the main payload.
 # ============================================================================
+def _all_existing_cohort_split_commercial(year):
+    """For year < ANCHOR_YEAR: every existing sqft sits in the
+    `ineligible_existing` cohort (which the dashboard maps to SNA), with
+    NC = SA = 0. AEO total still grows by year so the displayed total
+    follows the historical AEO trajectory."""
+    total = commercial_total_floorspace(year)
+    nongap = total * (1 - GAP_FRACTION)
+    return {
+        'total_floorspace':                          total,
+        'cumulative_new_floorspace':                 0.0,
+        'surviving_floorspace':                      total,
+        'gap_total_floorspace':                      total * GAP_FRACTION,
+        'adopted_existing_floorspace':               0.0,
+        'adopted_new_floorspace':                    0.0,
+        'eligible_not_adopted_existing_floorspace':  0.0,
+        'ineligible_existing_floorspace':            nongap,
+        'not_adopted_new_floorspace':                0.0,
+    }
+
+
+def _all_existing_cohort_split_residential(year):
+    """Pre-anchor residential split: everything in `ineligible_existing`
+    (= dashboard SNA). NC = SA = 0; eligible_not_adopted = 0 because no
+    adoption ramp has started."""
+    total = residential_total_households(year)
+    return {
+        'total_households':                          total,
+        'cumulative_new_households':                 0.0,
+        'surviving_households':                      total,
+        'adopted_existing_households':               0.0,
+        'adopted_new_households':                    0.0,
+        'eligible_not_adopted_existing_households':  0.0,
+        'ineligible_existing_households':            total,
+        'not_adopted_new_households':                0.0,
+    }
+
+
 def commercial_cohort_split(year):
     """Commercial cohort quantities at `year` (all in billion sq ft).
 
@@ -218,7 +258,14 @@ def commercial_cohort_split(year):
     cohorts (already non-gap-scoped). The gap/non-gap of cumulative_new and
     surviving_floorspace can be reconstructed as `value * GAP_FRACTION` /
     `value * (1 - GAP_FRACTION)` if ever needed.
+
+    For year < ANCHOR_YEAR the split collapses to all-SNA-equivalent (no
+    NC, no SA, gap proportional to total) — that's the historical /
+    calibration regime where neither adoption nor new construction (since
+    anchor) has accumulated yet.
     """
+    if year < ANCHOR_YEAR:
+        return _all_existing_cohort_split_commercial(year)
     total_floorspace                = commercial_total_floorspace(year)
     cumulative_new_floorspace       = commercial_new_cumulative_floorspace(year)
     surviving_floorspace            = commercial_surviving_floorspace(year)
@@ -254,7 +301,13 @@ def residential_cohort_split(year):
         eligible_not_adopted_existing_households  - existing eligible to adopt, not yet
         ineligible_existing_households            - existing that never qualifies
         not_adopted_new_households                - new that has not adopted (0 from anchor onward)
+
+    For year < ANCHOR_YEAR the split collapses to all-SNA-equivalent: the
+    historical / calibration regime where adoption hasn't begun and no
+    new construction has been tracked from the anchor's perspective.
     """
+    if year < ANCHOR_YEAR:
+        return _all_existing_cohort_split_residential(year)
     total_households            = residential_total_households(year)
     surviving_households        = residential_surviving_households(year)
     cumulative_new_households   = total_households - surviving_households

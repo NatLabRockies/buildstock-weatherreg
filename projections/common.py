@@ -72,6 +72,18 @@ type GroupTask = tuple[
 
 PROJECTION_YEARS: tuple[int, ...] = (2027, 2030, 2035, 2040, 2045, 2050)
 
+# Historical / calibration-anchor years. Only Baseline scenario is meaningful
+# here — pre-anchor years carry no adoption (adoption_rate = 0 for
+# year < ANCHOR_YEAR in growth_factors). The dashboard renders these as a
+# single SNA cohort (existing-not-adopted) since the cohort_split functions
+# in growth_factors special-case year < ANCHOR_YEAR to all-SNA.
+HISTORICAL_YEARS: tuple[int, ...] = (2012, 2018, 2020)
+
+# Combined: every stock year the projection emits outputs for. Past-year
+# entries appear only under the Baseline spec; projection-year entries
+# appear under every spec the run_specs configuration enumerates.
+STOCK_YEARS: tuple[int, ...] = HISTORICAL_YEARS + PROJECTION_YEARS
+
 # state  → county-FIPS agg cols summed to 49 state cols; gap from gap_by_state.csv.
 # county → county-FIPS cols kept; gap fetched per-county from S3 (cached).
 RESOLUTION: Resolution = 'state'

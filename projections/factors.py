@@ -30,6 +30,7 @@ from .common import (
 )
 from .growth_factors import (
     ANCHOR_YEAR,
+    GAP_FRACTION,
     commercial_cohort_split,
     commercial_total_floorspace,
     residential_cohort_split,
@@ -112,22 +113,33 @@ def upgrade_factors(run_dir: str, stock: Stock, projection_year: int) -> FactorT
     }
 
 
-def baseline_scenario_factors(stock: Stock, year: int) -> FactorTable:
+def baseline_scenario_factors(run_dir: str, stock: Stock, year: int) -> FactorTable:
     """Stock-growth ratios for the no-adoption baseline at one (stock, year).
 
-    Keys: new_construction, surviving. These multiply the All-Baseline load
-    directly (All-Baseline is the cohort, so no aux denominator).
+    Keys: new_construction, surviving.
+
+    * `new_construction` is applied to the *Upgraded-Baseline* (eligible) load
+      source, not All-Baseline. The reasoning: new buildings will be modern-
+      construction tracked to ComStock/ResStock coverage and will have
+      characteristics that *support* the upgrade — whether the upgrade is
+      installed is the scenario question, not the stock question. Factor =
+      `cumulative_new_<unit>` divided by the *eligible* aux cohort size.
+      For commercial we multiply by `(1 - GAP_FRACTION)` because the NC
+      cohort lives entirely in non-gap (the gap is handled by `get_gap`).
+    * `surviving` stays on All-Baseline source. Factor = `surviving_<unit>`
+      divided by the anchor-year AEO total — unchanged from the prior shape.
     """
+    eligible_size = common.load_aux_cohort_size(run_dir, stock, ELIGIBLE_TAG)
     if stock == 'com':
         cohort = commercial_cohort_split(year)
         anchor = commercial_total_floorspace(ANCHOR_YEAR)
         return {
-            'new_construction': cohort['cumulative_new_floorspace'] / anchor,
+            'new_construction': cohort['cumulative_new_floorspace'] * (1 - GAP_FRACTION) / eligible_size,
             'surviving':        cohort['surviving_floorspace']      / anchor,
         }
     cohort = residential_cohort_split(year)
     anchor = residential_cohort_split(ANCHOR_YEAR)['total_households']
     return {
-        'new_construction': cohort['cumulative_new_households'] / anchor,
-        'surviving':        cohort['surviving_households']      / anchor,
+        'new_construction': cohort['cumulative_new_households']   / eligible_size,
+        'surviving':        cohort['surviving_households']        / anchor,
     }
