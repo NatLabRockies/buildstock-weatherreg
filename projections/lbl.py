@@ -9,8 +9,12 @@ per-component groups to LBL's adoption cohorts (NC / SA / SNA), and writes:
     enduse, value_kwh.
 
   lbl/aux_samples_<scenario>_y<stock_year>.csv
-    Per-cohort sample IDs and cohort-scaled weights, combining all stocks/sectors.
-    Columns: county_group, sector, cohort, bldg_id, weight.
+    Per-cohort sample IDs, per-building floor area, and cohort-scaled weights,
+    combining all stocks/sectors.
+    Columns: county_group, sector, cohort, bldg_id, sqft, weight.
+    Consumers can reconstruct projected floor area for a cohort as
+    sum(sqft * weight); the sqft column is per-building (unchanged from the
+    aux_samples source), while weight = base_weight * cohort_factor.
 
 CLI: python -m projections.lbl <run_dir> [<run_dir> ...] [--out DIR]
                               [--only timeseries|samples|both]
@@ -26,15 +30,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import pandas as pd
 
-from . import factors
+from . import common, factors
 from .common import (
-    ALL_BASELINE_TAG,
     BASELINE_SPEC_NAME,
     COUNTY_TO_COUNTY_GROUP,
     ELIGIBLE_SPEC_NAME,
-    ELIGIBLE_TAG,
     INELIGIBLE_SPEC_NAME,
-    INELIGIBLE_TAG,
     PROJECTION_YEARS,
     Stock,
 )
@@ -169,22 +170,36 @@ def _aux_samples_path(run_dir: str, spec_tag: str) -> str:
 
 def _load_aux_samples(run_dir: str, spec_tag: str) -> pd.DataFrame:
     """Load aux_samples for one spec and project to (county_group, bldg_id,
-    base_weight). The county column is mostly GISJOIN ('G0100010') but the aux
-    file also carries 'State, County Name' rows for AK/HI; we keep only
-    GISJOIN-format rows and drop anything outside the county-group mapping.
+    sqft, base_weight). The county column is mostly GISJOIN ('G0100010') but
+    the aux file also carries 'State, County Name' rows for AK/HI; we keep
+    only GISJOIN-format rows and drop anything outside the county-group
+    mapping.
 
     Schema differs by stock: res uses 'county', com uses 'nhgis_county_gisjoin'
-    (see com_bsq_cols / res_bsq_cols in the switches snapshot)."""
+    (see com_bsq_cols / res_bsq_cols in the switches snapshot).
+
+    The raw aux_samples file stores `sqft` and `weight` on a TOTAL
+    contribution basis (sum(sqft) equals aux_coverage sqft; sum(weight)
+    equals aux_coverage units_count). We divide sqft by weight here to
+    recover per-building floor area, so downstream `sum(sqft * weight)`
+    reproduces the total floor area for the cohort — matching how a reader
+    would naturally consume the LBL handoff."""
     path = _aux_samples_path(run_dir, spec_tag)
     header = pd.read_csv(path, nrows=0).columns
     county_col = 'county' if 'county' in header else 'nhgis_county_gisjoin'
-    df = pd.read_csv(path, usecols=[county_col, 'bldg_id', 'weight'])
+    df = pd.read_csv(path, usecols=[county_col, 'bldg_id', 'sqft', 'weight'])
     df = df.rename(columns={county_col: 'county'})
     df = df[df['county'].str.match(r'^G\d{7}$', na=False)]
     df['county_fips'] = [str(int(g[1:3]) * 1000 + int(g[4:7])) for g in df['county']]
     df['county_group'] = df['county_fips'].map(COUNTY_TO_COUNTY_GROUP)
     df = df.dropna(subset=['county_group'])
-    return df[['county_group', 'bldg_id', 'weight']].rename(columns={'weight': 'base_weight'})
+    # Convert row-level totals to per-building floor area. `weight` here is
+    # buildings-per-sample (equivalent to units_count contribution). Divide
+    # by weight to recover the per-building sqft that stays constant when
+    # weights get scaled by a cohort factor downstream.
+    df['sqft_per_unit'] = df['sqft'] / df['weight']
+    return (df[['county_group', 'bldg_id', 'sqft_per_unit', 'weight']]
+            .rename(columns={'sqft_per_unit': 'sqft', 'weight': 'base_weight'}))
 
 
 def _discover_run_specs(run_dir: str) -> tuple[list[dict], dict[str, str]]:
@@ -211,39 +226,48 @@ def _cohort_weights_for_scenario(run_dir: str, stock: Stock, year: int,
                                  kind: str) -> dict[str, pd.DataFrame]:
     """Per-cohort sample frames for one (scenario, stock, year).
 
-    Returns {cohort_label: DataFrame(county_group, bldg_id, weight)}. Weights are
-    base_weight × cohort_factor. For baseline: NC + SNA. For upgrade: NC + SA +
-    SNA. Upgrade NC and SA reuse the eligible-cohort sample list (Upgraded-
-    Baseline is the same building set as Upgraded-Upgrade*; E_aux_query writes
-    aux_samples only once per cohort)."""
+    Returns {cohort_label: DataFrame(county_group, bldg_id, sqft, weight)}.
+    Weights are base_weight × cohort_factor. `sqft` is the per-building floor
+    area, carried through unchanged from the aux_samples file. A consumer can
+    reconstruct the projected total floor area for a cohort as
+    sum(sqft × weight).
+
+    For baseline: NC + SNA. For upgrade: NC + SA + SNA. Upgrade NC and SA
+    reuse the eligible-cohort sample list (Upgraded-Baseline is the same
+    building set as Upgraded-Upgrade*; E_aux_query writes aux_samples only
+    once per cohort).
+
+    Sets the common.X_TAG module attrs from this run_dir's snapshot before
+    delegating to factors.* — those functions read common.ELIGIBLE_TAG etc."""
+    common.set_baseline_tags(run_dir)
+    cols = ['county_group', 'bldg_id', 'sqft', 'weight']
     out: dict[str, pd.DataFrame] = {}
     if kind == 'baseline':
         fac = factors.baseline_scenario_factors(run_dir, stock, year)
         # Baseline NC sources from the eligible cohort (Upgraded-Baseline) —
         # same as the energy projection now does. SNA stays on All-Baseline.
-        nc_base = _load_aux_samples(run_dir, ELIGIBLE_TAG)
+        nc_base = _load_aux_samples(run_dir, common.ELIGIBLE_TAG)
         nc_df = nc_base.copy()
         nc_df['weight'] = nc_df['base_weight'] * fac['new_construction']
-        out['NC'] = nc_df[['county_group', 'bldg_id', 'weight']]
-        sna_base = _load_aux_samples(run_dir, ALL_BASELINE_TAG)
+        out['NC'] = nc_df[cols]
+        sna_base = _load_aux_samples(run_dir, common.ALL_BASELINE_TAG)
         sna_df = sna_base.copy()
         sna_df['weight'] = sna_df['base_weight'] * fac['surviving']
-        out['SNA'] = sna_df[['county_group', 'bldg_id', 'weight']]
+        out['SNA'] = sna_df[cols]
         return out
 
     fac = factors.upgrade_factors(run_dir, stock, year)
-    eligible = _load_aux_samples(run_dir, ELIGIBLE_TAG)
+    eligible = _load_aux_samples(run_dir, common.ELIGIBLE_TAG)
     for cohort, key in (('NC', 'new_adoption'), ('SA', 'surviving_adoption')):
         df = eligible.copy()
         df['weight'] = df['base_weight'] * fac[key]
-        out[cohort] = df[['county_group', 'bldg_id', 'weight']]
+        out[cohort] = df[cols]
 
     eligible_sna   = eligible.copy()
-    ineligible_sna = _load_aux_samples(run_dir, INELIGIBLE_TAG)
+    ineligible_sna = _load_aux_samples(run_dir, common.INELIGIBLE_TAG)
     eligible_sna['weight']   = eligible_sna['base_weight']   * fac['surviving_not_adopted_eligible']
     ineligible_sna['weight'] = ineligible_sna['base_weight'] * fac['surviving_not_adopted_ineligible']
-    out['SNA'] = pd.concat([eligible_sna[['county_group', 'bldg_id', 'weight']],
-                            ineligible_sna[['county_group', 'bldg_id', 'weight']]],
+    out['SNA'] = pd.concat([eligible_sna[cols], ineligible_sna[cols]],
                            ignore_index=True)
     return out
 
@@ -283,7 +307,7 @@ def build_samples(run_dirs: list[str], out_dir: str,
                     block['sector'] = sector
                     block['cohort'] = cohort
                     frames.append(block[['county_group', 'sector', 'cohort',
-                                         'bldg_id', 'weight']])
+                                         'bldg_id', 'sqft', 'weight']])
             if not frames:
                 continue
             combined = pd.concat(frames, ignore_index=True)
