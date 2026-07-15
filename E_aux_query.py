@@ -150,6 +150,7 @@ def process_spec(spec, switch, output_dir):
     run_types = switch["run_types"]
     base_run = spec["base_run"]
     aws_run_type = run_types[base_run].copy()
+    aws_run_type.pop('adjustment_factor', None)
 
     spec_restrict = spec.get("restrict") or None
     spec_avoid = spec.get("avoid") or None
