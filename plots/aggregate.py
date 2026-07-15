@@ -18,32 +18,33 @@ dashboard.html directly to iterate on plot design — no build step.
 EXACTLY WHAT GETS COMPUTED
 ==========================
 
-A. panel_state_by_sector  (parallel; ProcessPool, 96 tasks)
-   For each (scenario, stock_year, sector) where sector ∈ {residential,
-   commercial, gap, total}:
-     - read the cohort `total` files matching the (scenario, sector, year)
-     - sum to hourly state-x-time matrix
-     - per-state per-wy: ann = matrix.groupby(year).sum(),
-                        peak = matrix.groupby(year).max()  [intra-state coincident]
-     - CONUS: sum hourly across states first → joint hourly, then take max
-              [correct coincident peak — sum-of-state-peaks would over-count]
-   For sector='total' the task additionally computes per-(wy, state)
-   peak_contributions: each sub-sector's value AT the total-peak hour.
-   These sum to the total peak (coincident decomposition for the
-   trajectory's Peak GW breakdown stacked area).
+A. panel_state_by_sector  (parallel; ProcessPool, SCENARIOS × STOCK_YEARS tasks)
+   Each (scenario, stock_year) task reads every per-(sector, cohort, enduse)
+   leaf intermediate file and builds a per-state hourly matrix for all 28
+   breakdown keys:
+     - 4 rollups       : total, residential, commercial, gap
+     - 6 cohort totals : <sector>_<cohort>          (sector × {NC, SA, SNA})
+     - 18 leaves       : <sector>_<cohort>_<enduse> (× {cooling, heating, non_hvac})
+   Per key: annual GWh = matrix.groupby(year).sum(); peak GW =
+   {annual, summer, winter} max. CONUS sums hourly across states FIRST, then
+   takes the max (correct coincident peak — summing per-state peaks over-counts).
+   The 'total' key additionally yields peak_contributions: every leaf's (and
+   gap's) value AT the system-total-peak hour. These sum EXACTLY to the total
+   peak (coincident decomposition), so the trajectory's Peak GW Breakdown
+   stack height equals the un-broken Total line.
    Output:
-     state_by_sector.annual_gwh[scenario][year][wy][sector][state]    = GWh
-     state_by_sector.peak_gw   [scenario][year][wy][sector][state]    = GW
+     state_by_sector.annual_gwh[scenario][year][wy][key][state] = GWh
+     state_by_sector.peak_gw   [scenario][year][wy][key][state] = {annual,summer,winter} GW
      state_by_sector.peak_contributions[scenario][year][wy][state]
-                              = {residential, commercial, gap}        = GW
+                              = {leaf_or_gap_key: GW at total-peak hour}   (19 keys)
 
-   panel1 (headline CONUS trajectory) is a trivial projection of
-   state_by_sector.total.CONUS — computed inline in build_payload.
+   panel1 (headline CONUS trajectory) is derived inline in build_payload from
+   the state_by_sector 'total' key at CONUS — one source of truth per value.
 
-B. panel3_peak_week  (parallel; ProcessPool, 24 tasks)
+B. panel3_peak_week  (parallel; ProcessPool, SCENARIOS × PROJECTION_YEARS tasks)
    For each (scenario, stock_year):
-     - load each of the 7 cohort `total` files (res NC/SA/SNA + com NC/SA/SNA/gap)
-     - sum cohorts → res / com / total CONUS hourly GWh (= GW hourly)
+     - load all 19 leaf files (res/com × NC/SA/SNA × {cooling, heating,
+       non_hvac} + com gap) and sum to res / com / total CONUS hourly GW
      - for each weather year:
          summer peak = max(total) in Jun-Sep
          winter peak = max(total) in Dec-Feb
@@ -52,15 +53,26 @@ B. panel3_peak_week  (parallel; ProcessPool, 24 tasks)
    Output:
      panel3[scenario][stock_year][weather_year][summer|winter] =
        {timestamps, residential, commercial, peak_iso, peak_gw,
-        cohorts: {res_NC: [168 GW], ..., com_gap: [168 GW]}}
+        cohorts: {<leaf_key>: [168 GW]}}   (the 19 stacked leaves)
 
-C. panel_cohort_daily_all_wys  (parallel; ProcessPool, 168 tasks)
-   For each (scenario, stock_year, sector, cohort):
-     - read the cohort `total` intermediate file
+C. panel_cohort_daily_all_wys  (parallel; ProcessPool, one task per
+   (scenario, stock_year, series) over the 19 breakdown series)
+   For each series:
+     - read the series intermediate file
      - sum across state cols → CONUS hourly GWh
      - group by year-of-timestamp → per-wy daily resample (24h→1)
    Output:
-     cohort_daily[scenario][year][wy] = {dates: [iso], cohorts: {key: [daily]}}
+     cohort_daily[scenario][year][wy] = {dates: [iso], cohorts: {series_key: [daily]}}
+       (series_key ranges over the 19 breakdown series)
+
+C.2 panel_cohort_hourly_maxmin  (parallel; SCENARIOS × PROJECTION_YEARS tasks)
+   Per (scenario, stock_year), the daily MAX and MIN of the hourly CONUS
+   series for Total and Com Total — the bottom-left panel's 'hourly*'
+   granularity, showing the intra-day power envelope (4 lines). Populated
+   for PROJECTION_YEARS only (historical years lack per-cohort files).
+   Output:
+     cohort_hourly_maxmin[scenario][year][wy] =
+       {dates, series: {total_max, total_min, com_max, com_min}}   (GW)
 
 D. panel_stock_counts
    Read per-cohort aux files from intermediate/state/. Output per-state
@@ -77,12 +89,12 @@ E. Axis pin maxes  (cheap, in build_payload)
 CLI
 ===
   uv run python plots/aggregate.py \\
-      --res-run-dir /projects/geohc/radhikar/outputs/resstock_cross_val_may13_2026 \\
+      --res-run-dir /projects/geohc/radhikar/outputs/resstock_cross_val_june8_2026 \\
       --com-run-dir /projects/geohc/radhikar/outputs/comstock_cross_val_may13_2026
-  # output: plots/payload.json
+  # output: plots/data/main.js  +  plots/data/state_<postal>.js (×49)
 
-  # Then turn the payload into HTML (sub-second):
-  uv run python plots/build_dashboard.py
+  # No build step: plots/dashboard.html loads data/main.js directly.
+  # Refresh the browser (hard-refresh to bust cache) to pick up new data.
 """
 
 from __future__ import annotations

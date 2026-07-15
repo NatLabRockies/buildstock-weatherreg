@@ -10,7 +10,14 @@ Defaults reproduce the Excel sheet `adoption_2027 (start in 2027)`. Change a
 constant below to model a different scenario.
 
 CLI:
-  python -m projections.growth_factors   # writes growth_factors.csv (2024..2050, all cohort cols)
+  # AEO cohort amounts + adoption rates only (no run_dir needed):
+  python -m projections.growth_factors
+  # ...plus the factor multipliers the projection actually applies:
+  python -m projections.growth_factors --run-dir-res <res_run_dir> --run-dir-com <com_run_dir>
+  # Writes growth_factors.csv over HISTORICAL_YEARS + 2021..2050, with a
+  # plain-English description row under the header. The two-run-dir form also
+  # inlines the cohort-size denominators and writes growth_factors_denominators.csv.
+  # Override the output path with --out.
 
 API:
   from projections.growth_factors import (

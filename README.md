@@ -129,7 +129,7 @@ projections.
 | B | `B_building_stock_parallel_agg.py` | Python orchestrator | For each spec: bin-pack chunks, submit C array, submit F (depends C), accumulate F IDs, finally submit Z |
 | C | `C_run_bldg_chunk_agg.sh` | SLURM array task | Runs `D_process_chunk_agg.py` with the chunk's start/end indices |
 | D | `D_process_chunk_agg.py` | Python worker | BSQ Athena pull, **apply calibration factors if set**, RF / NN regression, write chunk CSV |
-| E | `E_aux_query.py` | Python | Auxiliary BSQ pulls — populates `aux_coverage_*.csv` (cohort sizes) and `aux_samples_*.csv` (per-cohort bldg_ids + weights) |
+| E | `E_aux_query.py` | Python | Auxiliary BSQ pulls — populates `aux_coverage_*.csv` (cohort sizes) and `aux_samples_*.csv` (per-cohort bldg_ids + per-building sqft + weights) |
 | F | `F_aggregate_chunks.sh` | SLURM job | Runs `agg_buildings.py` per spec — stitches per-chunk CSVs into 4 per-enduse aggregates |
 | Z | `Z_post_pipeline.sh` | SLURM meta-launcher | When every F completes: submits G×2 projections + handoff_light + H_run_lbl |
 | G | `G_run_projection.sh` | SLURM wrapper | Runs `python -m projections <run_dir> --resolution {state\|county\|county_group}` |
@@ -281,6 +281,10 @@ follows its own spec image:
   = 132 files per stock, plus 24 `aux_samples_*` files = 156 total.
 * Filenames `<scenario>_<sector>_<cohort>_<year>_amy<weather>.csv`.
 * Columns: `timestamp_EST, county_group, sector, cohort, enduse, value_kwh`.
+* `aux_samples_<scenario>_y<stock_year>.csv`: the cohort's sample buildings —
+  columns `county_group, sector, cohort, bldg_id, sqft, weight`. `sqft` is
+  per-building floor area and `weight` is the cohort-scaled sample weight, so
+  `sum(sqft × weight)` reproduces the projected floor area for that cohort.
 * Sectors: `residential` (res run_dir) and `commercial` (com run_dir).
 * Cohorts: `NC` (new construction), `SA` (surviving adopting), `SNA` (surviving
   not adopting). Baseline emits only NC + SNA (no adoption).
