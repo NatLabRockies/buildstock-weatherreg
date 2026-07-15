@@ -13,13 +13,12 @@ The merge rule is **most-recent-vintage-wins per (row, year)**:
   AEO 2012 covers 2009-2035 → wins 2009-2015.
   AEO 2010 covers 2007-2035 → wins 2007-2008.
 
-Some vintage files are **partial single-indicator exports** (e.g. AEO 2020
-carries only Commercial Surviving Floorspace; AEO 2019/2021 only Residential
-Households) rather than full-sector dumps. Because the rule is per (row, year),
-a partial file only overrides the specific rows it contains — the intermediate
-vintages (2015/2019/2020/2021) refine individual recent-year cells that the
-older full-sector vintages would otherwise supply, leaving unrelated rows
-untouched.
+This parser expects the standard AEO export layout — indicators down the rows,
+years across the columns (row-5 header `"",full name,api key,"units","2016",…`).
+Single-indicator exports with years down the rows (`Year,<indicator>`) do NOT
+parse here: no 4-digit year-column headers are detected, so their values get
+mis-read as row labels and pollute the output. Keep such files out of
+`AEO 2025/` (or transpose them first) before re-running this merge.
 
 Output covers years 2007-2050 inclusive. Same 4-line preamble + header
 + data shape as the source AEO CSVs, so growth_factors._load_aeo_csv
