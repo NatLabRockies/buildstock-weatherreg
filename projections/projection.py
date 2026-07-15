@@ -46,15 +46,12 @@ import pandas as pd
 
 from . import common, factors, gap
 from .common import (
-    ALL_BASELINE_TAG,
     BASELINE_SPEC_NAME,
     COUNTY_GROUP_TO_STATE_POSTAL,
     COUNTY_TO_COUNTY_GROUP,
     ELIGIBLE_SPEC_NAME,
-    ELIGIBLE_TAG,
     ENDUSES,
     INELIGIBLE_SPEC_NAME,
-    INELIGIBLE_TAG,
     HISTORICAL_YEARS,
     PROJECTION_YEARS,
     STATE_FIPS_TO_POSTAL,
@@ -153,7 +150,7 @@ def _efficiency_per_column(stock: Stock, enduse: Enduse, year: int,
 def _reference_axes(run_dir: str, stock: Stock) -> tuple[pd.DatetimeIndex, pd.Index]:
     """The timestamp index and column labels of the All-Baseline agg, read
     without its payload, so gap data can be aligned to the same axes."""
-    path = common.agg_path(run_dir, stock, ALL_BASELINE_TAG, 'total')
+    path = common.agg_path(run_dir, stock, common.ALL_BASELINE_TAG, 'total')
     index = pd.DatetimeIndex(pd.to_datetime(pd.read_csv(path, usecols=[0]).iloc[:, 0]))
     index.name = 'timestamp_EST'
     county_cols = pd.read_csv(path, nrows=0, index_col=0).columns
@@ -213,8 +210,8 @@ def get_surviving_non_adoption_upgrade(upgrade_scenario: SpecTag, run_dir: str,
     """
     del upgrade_scenario
     fac = factors.upgrade_factors(run_dir, stock, year)
-    eligible   = _add_total(_load_hvac_sources(run_dir, stock, ELIGIBLE_TAG))
-    ineligible = _add_total(_load_hvac_sources(run_dir, stock, INELIGIBLE_TAG))
+    eligible   = _add_total(_load_hvac_sources(run_dir, stock, common.ELIGIBLE_TAG))
+    ineligible = _add_total(_load_hvac_sources(run_dir, stock, common.INELIGIBLE_TAG))
     eligible_factor   = fac['surviving_not_adopted_eligible']
     ineligible_factor = fac['surviving_not_adopted_ineligible']
     return {enduse: eligible_factor * eligible[enduse] + ineligible_factor * ineligible[enduse]
@@ -240,14 +237,14 @@ def get_new_construction_baseline(run_dir: str, stock: Stock, year: int) -> Endu
     construction supporting the upgrade even when the Baseline scenario
     doesn't install it."""
     fac = factors.baseline_scenario_factors(run_dir, stock, year)
-    sources = _load_hvac_sources(run_dir, stock, ELIGIBLE_TAG)
+    sources = _load_hvac_sources(run_dir, stock, common.ELIGIBLE_TAG)
     return get_new_construction(sources, fac['new_construction'], stock, year)
 
 
 def get_surviving_baseline(run_dir: str, stock: Stock, year: int) -> EnduseFrames:
     """Existing stock surviving with no adoption (existing efficiency)."""
     fac = factors.baseline_scenario_factors(run_dir, stock, year)
-    sources = _add_total(_load_hvac_sources(run_dir, stock, ALL_BASELINE_TAG))
+    sources = _add_total(_load_hvac_sources(run_dir, stock, common.ALL_BASELINE_TAG))
     factor = fac['surviving']
     return {enduse: factor * frame for enduse, frame in sources.items()}
 
@@ -282,28 +279,54 @@ def _load_aux_for_spec(run_dir: str, stock: Stock, spec_tag: SpecTag) -> pd.Data
     return coverage.merge(n_samples, on=county_col, how='left').fillna({'n_samples': 0})
 
 
-def _scale_aux(aux: pd.DataFrame, factor: float) -> pd.DataFrame:
-    """Scale the projected-quantity columns (sqft, units_count) by `factor`.
-    n_samples is left alone — sample count is structural, not projected."""
+# Quantity columns that sum across rows when aggregating county → state /
+# county_group. Everything else (county_name, state, factor*) is preserved
+# row-by-row via 'first' semantics in the groupby — they're constant within
+# a source aux, so taking the first is correct.
+_AUX_QUANTITY_COLS: tuple[str, ...] = ('sqft', 'units_count', 'n_samples')
+
+
+def _scale_aux(aux: pd.DataFrame, factor: float,
+               factor_col: str = 'factor') -> pd.DataFrame:
+    """Scale projected-quantity columns (sqft, units_count) by `factor` and
+    record the scalar in `factor_col` for transparency.
+
+    `factor` is AEO_cohort_amount(year) / load_aux_cohort_size(source_spec) —
+    the cohort growth ratio that takes the source aux's raw building counts
+    onto the AEO-comparable basis for the target year. Stored per-row as a
+    constant so the projection's scaling is auditable from the aux file alone.
+
+    n_samples is left alone — sample count is structural, not projected.
+    """
     out = aux.copy()
-    out['sqft'] = out['sqft'] * factor
+    out['sqft']        = out['sqft'] * factor
     out['units_count'] = out['units_count'] * factor
+    out[factor_col]    = factor
     return out
 
 
 def _sum_aux(*dfs: pd.DataFrame) -> pd.DataFrame:
     """Sum per-county aux frames row-wise. Frames must share row identity
-    (same county FIPS / nhgis_county_gisjoin in column 0). Non-numeric
-    columns (county_name, state) come from the first frame. n_samples sums
-    because eligible/ineligible cohorts are disjoint sets of bldg_ids."""
+    (same county FIPS / nhgis_county_gisjoin in column 0). Quantity columns
+    (sqft, units_count, n_samples) sum; n_samples sums because eligible /
+    ineligible cohorts are disjoint sets of bldg_ids. Every other column
+    (county_name, state, factor*) carries through: overlapping columns take
+    values from the first frame, and disjoint factor columns (e.g.
+    `factor_eligible` from one frame, `factor_ineligible` from another) both
+    end up in the output."""
     key = dfs[0].columns[0]
     base = dfs[0].set_index(key)
-    cols = ['sqft', 'units_count', 'n_samples']
-    summed = base[cols].copy()
+    summed = base[list(_AUX_QUANTITY_COLS)].copy()
     for d in dfs[1:]:
-        summed = summed.add(d.set_index(key)[cols], fill_value=0.0)
-    meta_cols = [c for c in base.columns if c not in cols]
-    return base[meta_cols].join(summed).reset_index()
+        summed = summed.add(d.set_index(key)[list(_AUX_QUANTITY_COLS)],
+                            fill_value=0.0)
+    meta = base[[c for c in base.columns if c not in _AUX_QUANTITY_COLS]].copy()
+    for d in dfs[1:]:
+        d_i = d.set_index(key)
+        for c in d_i.columns:
+            if c not in _AUX_QUANTITY_COLS and c not in meta.columns:
+                meta[c] = d_i[c]
+    return meta.join(summed).reset_index()
 
 
 def _aggregate_aux(aux: pd.DataFrame, resolution: Resolution) -> pd.DataFrame:
@@ -312,17 +335,22 @@ def _aggregate_aux(aux: pd.DataFrame, resolution: Resolution) -> pd.DataFrame:
         state         → 49 rows keyed by state postal
         county_group  → ~1,038 rows keyed by BuildStock county_group
         county        → original ~3,100 rows unchanged
+
+    Quantity columns sum; factor columns are constants per source row, so
+    `first` preserves them through the groupby.
     """
-    cols = ['sqft', 'units_count', 'n_samples']
+    if resolution == 'county':
+        return aux
+    factor_cols = [c for c in aux.columns if c.startswith('factor')]
+    agg = {c: 'sum' for c in _AUX_QUANTITY_COLS}
+    agg.update({c: 'first' for c in factor_cols})
     if resolution == 'state':
-        return aux.groupby('state', as_index=False)[cols].sum()
-    if resolution == 'county_group':
-        county_col = aux.columns[0]
-        a = aux.copy()
-        a['county_group'] = a[county_col].map(COUNTY_TO_COUNTY_GROUP)
-        a = a.dropna(subset=['county_group'])
-        return a.groupby(['county_group', 'state'], as_index=False)[cols].sum()
-    return aux  # county resolution: as-is
+        return aux.groupby('state', as_index=False).agg(agg)
+    county_col = aux.columns[0]
+    a = aux.copy()
+    a['county_group'] = a[county_col].map(COUNTY_TO_COUNTY_GROUP)
+    a = a.dropna(subset=['county_group'])
+    return a.groupby(['county_group', 'state'], as_index=False).agg(agg)
 
 
 def _aux_for_group(group: GroupName, spec_tag: SpecTag, run_dir: str,
@@ -344,22 +372,24 @@ def _aux_for_group(group: GroupName, spec_tag: SpecTag, run_dir: str,
     if group == 'new_construction':
         # Baseline NC sources from Upgraded-Baseline (eligible).
         fac = factors.baseline_scenario_factors(run_dir, stock, year)['new_construction']
-        return _scale_aux(_load_aux_for_spec(run_dir, stock, ELIGIBLE_TAG), fac)
+        return _scale_aux(_load_aux_for_spec(run_dir, stock, common.ELIGIBLE_TAG), fac)
     if group == 'surviving':
         fac = factors.baseline_scenario_factors(run_dir, stock, year)['surviving']
-        return _scale_aux(_load_aux_for_spec(run_dir, stock, ALL_BASELINE_TAG), fac)
+        return _scale_aux(_load_aux_for_spec(run_dir, stock, common.ALL_BASELINE_TAG), fac)
     if group == 'new_adoption':
         fac = factors.upgrade_factors(run_dir, stock, year)['new_adoption']
-        return _scale_aux(_load_aux_for_spec(run_dir, stock, ELIGIBLE_TAG), fac)
+        return _scale_aux(_load_aux_for_spec(run_dir, stock, common.ELIGIBLE_TAG), fac)
     if group == 'surviving_adoption':
         fac = factors.upgrade_factors(run_dir, stock, year)['surviving_adoption']
-        return _scale_aux(_load_aux_for_spec(run_dir, stock, ELIGIBLE_TAG), fac)
+        return _scale_aux(_load_aux_for_spec(run_dir, stock, common.ELIGIBLE_TAG), fac)
     if group == 'surviving_non_adoption':
         fac = factors.upgrade_factors(run_dir, stock, year)
-        elig   = _scale_aux(_load_aux_for_spec(run_dir, stock, ELIGIBLE_TAG),
-                            fac['surviving_not_adopted_eligible'])
-        inelig = _scale_aux(_load_aux_for_spec(run_dir, stock, INELIGIBLE_TAG),
-                            fac['surviving_not_adopted_ineligible'])
+        elig   = _scale_aux(_load_aux_for_spec(run_dir, stock, common.ELIGIBLE_TAG),
+                            fac['surviving_not_adopted_eligible'],
+                            factor_col='factor_eligible')
+        inelig = _scale_aux(_load_aux_for_spec(run_dir, stock, common.INELIGIBLE_TAG),
+                            fac['surviving_not_adopted_ineligible'],
+                            factor_col='factor_ineligible')
         return _sum_aux(elig, inelig)
     raise ValueError(f'unknown group {group!r}')
 
@@ -567,8 +597,9 @@ def main() -> None:
         with open(os.path.join(args.run_dir, 'inputs', 'switches_agg.json')) as f:
             args.stock = 'com' if json.load(f).get('comstock') else 'res'
 
-    # Set before the pool forks so workers inherit it (see common.RESOLUTION).
+    # Set before the pool forks so workers inherit them (see common docstring).
     common.RESOLUTION = cast(Resolution, args.resolution)
+    common.set_baseline_tags(args.run_dir)
     project_run_dir(args.run_dir, cast(Stock, args.stock), n_workers=args.workers)
 
 

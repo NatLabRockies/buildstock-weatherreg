@@ -19,8 +19,6 @@ import pandas as pd
 
 from . import common
 from .common import (
-    ELIGIBLE_TAG,
-    INELIGIBLE_TAG,
     STATE_POSTAL_TO_NAME,
     Enduse,
     FactorTable,
@@ -74,8 +72,12 @@ def new_construction_efficiency_factor(stock: Stock, enduse: Enduse, year: int,
 
 
 def gap_growth_factor(year: int) -> float:
-    """Commercial gap floorspace growth relative to the anchor year."""
-    return (commercial_cohort_split(year)['total_floorspace']
+    """Commercial gap floorspace growth relative to the anchor year.
+    Uses `commercial_total_floorspace` directly (full AEO, gap + non-gap)
+    rather than `commercial_cohort_split['total_floorspace']` because the
+    cohort split now returns non-gap only — but the gap's growth ratio
+    inherently depends on full AEO floorspace."""
+    return (commercial_total_floorspace(year)
             / commercial_total_floorspace(ANCHOR_YEAR))
 
 
@@ -97,8 +99,8 @@ def upgrade_factors(run_dir: str, stock: Stock, projection_year: int) -> FactorT
     are in billion sqft / million households, so load_aux_cohort_size already
     rescales the aux denominators to match.
     """
-    eligible_size   = common.load_aux_cohort_size(run_dir, stock, ELIGIBLE_TAG)
-    ineligible_size = common.load_aux_cohort_size(run_dir, stock, INELIGIBLE_TAG)
+    eligible_size   = common.load_aux_cohort_size(run_dir, stock, common.ELIGIBLE_TAG)
+    ineligible_size = common.load_aux_cohort_size(run_dir, stock, common.INELIGIBLE_TAG)
 
     cohort: dict[str, float]
     unit: Literal['floorspace', 'households']
@@ -121,30 +123,43 @@ def upgrade_factors(run_dir: str, stock: Stock, projection_year: int) -> FactorT
 def baseline_scenario_factors(run_dir: str, stock: Stock, year: int) -> FactorTable:
     """Stock-growth ratios for the no-adoption baseline at one (stock, year).
 
-    Keys: new_construction, surviving.
+    Keys: new_construction, surviving. Both denominators come from
+    `load_aux_cohort_size`, which puts the ResStock raw `units_count` on the
+    AEO occupied-households basis (× RES_OCCUPANCY_FRACTION; for commercial
+    sqft is already on AEO basis). The factor shape is uniform with
+    `upgrade_factors`: AEO_cohort_amount(year) / load_aux_cohort_size(source).
 
-    * `new_construction` is applied to the *Upgraded-Baseline* (eligible) load
-      source, not All-Baseline. The reasoning: new buildings will be modern-
-      construction tracked to ComStock/ResStock coverage and will have
-      characteristics that *support* the upgrade — whether the upgrade is
-      installed is the scenario question, not the stock question. Factor =
-      `cumulative_new_<unit>` divided by the *eligible* aux cohort size.
-      For commercial we multiply by `(1 - GAP_FRACTION)` because the NC
-      cohort lives entirely in non-gap (the gap is handled by `get_gap`).
-    * `surviving` stays on All-Baseline source. Factor = `surviving_<unit>`
-      divided by the anchor-year AEO total — unchanged from the prior shape.
+    * `new_construction` is applied to the *Upgraded-Baseline* (eligible)
+      load source, not All-Baseline. The reasoning: new buildings will be
+      modern-construction tracked to ComStock/ResStock coverage and will
+      have characteristics that *support* the upgrade — whether the upgrade
+      is installed is the scenario question, not the stock question. Factor
+      = `cumulative_new_<unit>` divided by the *eligible* aux cohort size.
+      The commercial cohort split now reports `cumulative_new_floorspace`
+      on a non-gap basis (see `commercial_cohort_split`), so no
+      `(1 - GAP_FRACTION)` correction is needed here — it's already baked
+      into the cohort.
+    * `surviving` is applied to the All-Baseline source. Factor =
+      `surviving_<unit>` / load_aux_cohort_size(ALL_BASELINE) — the
+      occupancy-aware total stock denominator. Previously this used
+      AEO(ANCHOR_YEAR) directly, which silently dropped the
+      ResStock raw→occupied correction and under-projected baseline load by
+      ~12 % (the missing 1 / RES_OCCUPANCY_FRACTION ≈ 1.139 factor). The
+      commercial surviving cohort is now non-gap to match the All-Baseline
+      source's non-gap basis (previously mixed gap-incl numerator with
+      non-gap denominator, which over-projected by 1/0.6 and double-counted
+      the gap that `get_gap` separately handles).
     """
-    eligible_size = common.load_aux_cohort_size(run_dir, stock, ELIGIBLE_TAG)
+    eligible_size     = common.load_aux_cohort_size(run_dir, stock, common.ELIGIBLE_TAG)
+    all_baseline_size = common.load_aux_cohort_size(run_dir, stock, common.ALL_BASELINE_TAG)
     if stock == 'com':
         cohort = commercial_cohort_split(year)
-        anchor = commercial_total_floorspace(ANCHOR_YEAR)
         return {
-            'new_construction': cohort['cumulative_new_floorspace'] * (1 - GAP_FRACTION) / eligible_size,
-            'surviving':        cohort['surviving_floorspace']      / anchor,
+            'new_construction': cohort['cumulative_new_floorspace'] / eligible_size,
+            'surviving':        cohort['surviving_floorspace']      / all_baseline_size,
         }
     cohort = residential_cohort_split(year)
-    anchor = residential_cohort_split(ANCHOR_YEAR)['total_households']
     return {
         'new_construction': cohort['cumulative_new_households']   / eligible_size,
-        'surviving':        cohort['surviving_households']        / anchor,
+        'surviving':        cohort['surviving_households']        / all_baseline_size,
     }

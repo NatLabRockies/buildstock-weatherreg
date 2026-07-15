@@ -3,14 +3,17 @@ the state geography, and the agg/aux input loaders.
 
 Every other module sits on top of this one; nothing here imports them.
 
-RESOLUTION is mutated by projection.main() before the worker pool forks. Read it
-as `common.RESOLUTION` (attribute access on this module) rather than
-`from .common import RESOLUTION`, so workers see the value set at fork time
-instead of a stale import-time copy.
+RESOLUTION and the three baseline tags (ALL_BASELINE_TAG / ELIGIBLE_TAG /
+INELIGIBLE_TAG) are mutated at startup — RESOLUTION by projection.main(),
+the tags by set_baseline_tags() called from projection.main() or per-run_dir
+in lbl.main(). Read all four as `common.X` (attribute access on this module)
+rather than `from .common import X`, so workers see the value set at fork
+time instead of a stale import-time copy.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Literal, cast
 
@@ -27,22 +30,16 @@ type GroupName  = Literal[
     'gap_consumption',
 ]
 
-# Spec names and on-disk tags, enumerated from switches_agg_{res,com}stock.json.
-# Every spec is regression-on at base 2018, so a tag is its name + '_reg_b2018'.
-# Keep in sync with the switches files.
+# Spec names enumerated from switches_agg_{res,com}stock.json. A spec's on-disk
+# tag is `{name}_{'reg' if apply_regression else 'ref'}_b{base_year}`; the
+# suffix is fixed within one run_dir but varies across runs, so SpecTag is a
+# bare str instead of a Literal.
 type SpecName = Literal[
     'All-Baseline', 'Upgraded-Baseline', 'Non-Upgraded-Baseline',
     'Upgraded-Upgrade4', 'Upgraded-Upgrade8', 'Upgraded-Upgrade32',
     'Upgraded-Upgrade1-14', 'Upgraded-Upgrade55', 'Upgraded-Upgrade59',
 ]
-type SpecTag = Literal[
-    'All-Baseline_reg_b2018', 'Upgraded-Baseline_reg_b2018',
-    'Non-Upgraded-Baseline_reg_b2018',
-    'Upgraded-Upgrade4_reg_b2018', 'Upgraded-Upgrade8_reg_b2018',
-    'Upgraded-Upgrade32_reg_b2018',
-    'Upgraded-Upgrade1-14_reg_b2018', 'Upgraded-Upgrade55_reg_b2018',
-    'Upgraded-Upgrade59_reg_b2018',
-]
+type SpecTag = str
 
 type StatePostal = str   # 'CO'                — agg/gap columns at state resolution
 type StateName   = str   # 'Colorado'          — shell-factor table key
@@ -92,9 +89,27 @@ BASELINE_SPEC_NAME:   SpecName = 'All-Baseline'
 ELIGIBLE_SPEC_NAME:   SpecName = 'Upgraded-Baseline'
 INELIGIBLE_SPEC_NAME: SpecName = 'Non-Upgraded-Baseline'
 
-ALL_BASELINE_TAG: SpecTag = cast(SpecTag, f'{BASELINE_SPEC_NAME}_reg_b2018')
-ELIGIBLE_TAG:     SpecTag = cast(SpecTag, f'{ELIGIBLE_SPEC_NAME}_reg_b2018')
-INELIGIBLE_TAG:   SpecTag = cast(SpecTag, f'{INELIGIBLE_SPEC_NAME}_reg_b2018')
+# Mutated by set_baseline_tags() before the work starts. The placeholder
+# suffix matches the cross_val convention; it gets overwritten as soon as a
+# run_dir is loaded.
+ALL_BASELINE_TAG: SpecTag = f'{BASELINE_SPEC_NAME}_reg_b2018'
+ELIGIBLE_TAG:     SpecTag = f'{ELIGIBLE_SPEC_NAME}_reg_b2018'
+INELIGIBLE_TAG:   SpecTag = f'{INELIGIBLE_SPEC_NAME}_reg_b2018'
+
+
+def set_baseline_tags(run_dir: str) -> None:
+    """Set the three module-level tag constants from a run_dir's switches
+    snapshot. The suffix is `_reg_b<year>` or `_ref_b<year>` depending on the
+    All-Baseline spec's apply_regression flag and base_year. Call this once
+    per run_dir before reading any agg/aux file."""
+    with open(os.path.join(run_dir, 'inputs', 'switches_agg.json')) as f:
+        specs = json.load(f)['run_specs']
+    baseline = next(s for s in specs if s['name'] == BASELINE_SPEC_NAME)
+    suffix = f"_{'reg' if baseline['apply_regression'] else 'ref'}_b{baseline['base_year']}"
+    global ALL_BASELINE_TAG, ELIGIBLE_TAG, INELIGIBLE_TAG
+    ALL_BASELINE_TAG = f'{BASELINE_SPEC_NAME}{suffix}'
+    ELIGIBLE_TAG     = f'{ELIGIBLE_SPEC_NAME}{suffix}'
+    INELIGIBLE_TAG   = f'{INELIGIBLE_SPEC_NAME}{suffix}'
 
 ENDUSES: tuple[Enduse, ...] = ('cooling_elec', 'heating_elec', 'non_hvac_elec', 'total')
 
