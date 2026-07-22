@@ -100,6 +100,15 @@ After the chain completes, the run_dir holds:
 └── intermediate/{state, county_group}/  — symlinks: per-component, relabeled with sector/cohort/enduse
 ```
 
+Two additional handoffs live at the repo root (not the run_dir) because they are
+run-independent:
+
+* `growth_factors.csv` / `growth_factors_denominators.csv` — self-describing AEO
+  cohort split + factor tables the projection multiplies loads by. Regenerated
+  by `python -m projections.growth_factors`; shareable as a stand-alone artifact.
+* `plots/dashboard.html` + `plots/data/main.js` — self-contained dashboard baked
+  from the intermediate/state handoff; see **[Dashboard](#dashboard)** below.
+
 ---
 
 ## Entry point
@@ -243,7 +252,8 @@ projections/
 ├── common.py          shared types, state geography, agg/aux loaders
 ├── factors.py         efficiency + cohort-growth multipliers
 ├── gap.py             ComStock gap-model loader (state CSV / per-county S3)
-├── growth_factors.py  AEO 2025 cohort splits
+├── growth_factors.py  AEO 2025 cohort splits + growth_factors.csv writer
+├── merge_aeo.py       merges AEO vintages under `AEO 2025/` into wide-format tables
 ├── projection.py      the six projection components + parallel driver
 ├── reeds.py           ReEDs handoff (state-aggregated long → wide MWh)
 ├── lbl.py             LBL handoff (county-group long-format + per-cohort samples)
@@ -303,6 +313,57 @@ follows its own spec image:
 
 ---
 
+## Dashboard
+
+`plots/dashboard.html` is a self-contained regression + projection dashboard —
+one HTML file plus a baked `plots/data/main.js` payload plus per-state sidecars
+under `plots/data/states/`. No server required after the payload is baked; open
+`dashboard.html` locally or serve it over an SSH tunnel with `serve_dashboard.sh`.
+
+### Four panels
+
+* **Trajectory (top-left)** — annual TWh or peak GW vs. stock year (Future
+  Trajectory tab) or vs. weather year (Weather Year Trajectory tab), for the
+  selected scenario / state / weather-year (or stock-year in weather mode).
+  Total and 19-layer Breakdown modes: gap → commercial SNA/SA/NC → residential
+  SNA/SA/NC, each split into non-HVAC / cooling / heating.
+* **Choropleth (top-right)** — per-state Annual TWh, Peak GW, kWh/sqft
+  (commercial), or kWh/dwelling (residential). Sector + slice dropdowns, mode
+  toggle (absolute / saved / % saved vs. a reference scenario), and a Global vs.
+  This-view color-scale toggle. Min/Max state annotations reveal the underlying
+  data range even when the global scale saturates.
+* **Cohort daily / monthly / hourly\* (bottom-left)** — 19-layer stacked daily
+  or monthly energy for the selected `(scenario, state, stock year, weather year)`,
+  or the `hourly*` view showing daily-max & daily-min of hourly GW for Total and
+  Com Total. Summer + winter peak annotations.
+* **Peak week (bottom-right)** — ±3-day hourly window around the summer or
+  winter peak day, stacked by the same 19 layers.
+
+### Baking the payload
+
+```bash
+# after a full pipeline run has landed intermediate/state under both res + com run_dirs
+sbatch plots/I_run_bake.sh <res_run_dir> <com_run_dir>
+# → writes plots/data/main.js (~150 MB) + plots/data/states/<postal>.js sidecars
+# → runs plots/tests/ (payload schema + reconciliation + Playwright UI)
+```
+
+The bake also runs the test suite: payload schema invariants, cross-source
+reconciliation (per-cohort leaves sum to sector totals, coincident-peak
+decomposition sums exactly to the annual peak, etc.), and browser-driven UI
+tests against the rendered dashboard.
+
+### Serving
+
+```bash
+./serve_dashboard.sh start
+# then from your laptop:
+ssh -N -L 8787:localhost:8787 <user>@kestrel.hpc.nlr.gov
+# open http://localhost:8787/dashboard.html
+```
+
+---
+
 ## Manual reruns (after the chain has finished)
 
 Any stage can be re-run by itself once the prerequisites exist on disk:
@@ -312,6 +373,10 @@ Any stage can be re-run by itself once the prerequisites exist on disk:
 python -m projections.reeds        <run_dir>
 python -m projections.intermediate <run_dir>
 sbatch H_run_lbl.sh                <run_dir>
+
+# Regenerate the run-independent handoffs:
+python -m projections.growth_factors    # writes growth_factors*.csv at repo root
+sbatch plots/I_run_bake.sh <res_run_dir> <com_run_dir>   # writes plots/data/main.js
 
 # Re-project at a different resolution:
 sbatch G_run_projection.sh <run_dir> res county_group
@@ -424,7 +489,7 @@ Per the **Pipeline at a glance** layout above. Most-asked questions:
 
 * **Where are the per-county hourly aggregates?** `<output_dir>/agg_<stock>_eulp_<enduse>_GWh_upgrade<tag>.csv` — one file per (enduse, spec). Index is `timestamp_EST`, columns are county FIPS.
 * **Where are the per-stock-year projections?** `<output_dir>/projections_state/proj_<stock>_<scenario>_<group>_<enduse>_GWh_y<year>.csv` (or `projections_county_group/` for finer geography). Wide format.
-* **Where are the handoff files I send to a stakeholder?** The three folders directly under `<output_dir>/`: `ReEDs/`, `LBL/`, `intermediate/`. The naming, units, and shape of each is described in **Handoffs** above.
+* **Where are the handoff files I send to a stakeholder?** The three folders directly under `<output_dir>/`: `ReEDs/`, `LBL/`, `intermediate/`. The naming, units, and shape of each is described in **Handoffs** above. Two additional run-independent handoffs live at the repo root: `growth_factors.csv` (+ `growth_factors_denominators.csv`) and `plots/dashboard.html`.
 * **Why didn't the pipeline run end-to-end?** Check `<output_dir>/slurm-out/` and the launcher's `slurm-res_building_stock_parallel_*.out`. The `--dependency=afterok` chain short-circuits on any failure, so downstream stages will simply show `Dependency` as their reason until the upstream stage is fixed and the chain rebuilt.
 
 ---
