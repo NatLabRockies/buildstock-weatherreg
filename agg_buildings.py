@@ -35,11 +35,12 @@ import pandas as pd
 def _chunks_eulp_dir(bldg_path: str, upgrade_tag: str) -> str:
     '''Path to the per-spec EULP chunks subfolder.
 
-    upgrade_tag is `<upgrade_id>_<reg|ref>_b<base_year>`. The folder
-    convention is `chunks_<reg|ref>_b<base_year>` — i.e., the upgrade_tag
-    minus its leading `<upgrade_id>_` segment.
+    upgrade_tag is `<upgrade_name>_<reg|ref>_b<base_year>` (name-based,
+    e.g. `All-Baseline_ref_b2018`; historically it was `<upgrade_id>_...`).
+    The folder convention is `chunks_<reg|ref>_b<base_year>` — i.e., the
+    upgrade_tag minus its leading `<upgrade_name>_` segment.
     '''
-    suffix = upgrade_tag.split('_', 1)[1]  # e.g. "reg_b2018"
+    suffix = upgrade_tag.split('_', 1)[1]  # e.g. "ref_b2018"
     return os.path.join(bldg_path, f'chunks_{suffix}')
 
 

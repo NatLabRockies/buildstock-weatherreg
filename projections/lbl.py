@@ -4,17 +4,19 @@ Reads from projections_county_group/ in one or more run_dirs (typically res and
 com), filters to the LBL weather years (2012 and 2018), maps the package's
 per-component groups to LBL's adoption cohorts (NC / SA / SNA), and writes:
 
-  lbl/<scenario>_<sector>_<cohort>_<stock_year>_amy<weather_year>.csv
+  LBL/<scenario>_<sector>_<cohort>_<stock_year>_amy<weather_year>.csv
     Long-format timeseries. Columns: timestamp_EST, county_group, sector, cohort,
     enduse, value_kwh.
 
-  lbl/aux_samples_<scenario>_y<stock_year>.csv
+  LBL/aux_samples_<scenario>_y<stock_year>.csv
     Per-cohort sample IDs, per-building floor area, and cohort-scaled weights,
     combining all stocks/sectors.
     Columns: county_group, sector, cohort, bldg_id, sqft, weight.
     Consumers can reconstruct projected floor area for a cohort as
     sum(sqft * weight); the sqft column is per-building (unchanged from the
     aux_samples source), while weight = base_weight * cohort_factor.
+
+Output directory defaults to `<first run_dir>/LBL/` (see `_resolve_out_dir`).
 
 CLI: python -m projections.lbl <run_dir> [<run_dir> ...] [--out DIR]
                               [--only timeseries|samples|both]
@@ -326,7 +328,7 @@ def main() -> None:
                     help='One or more run dirs with projections_county_group/ '
                          '(and aux_samples_*.csv) generated.')
     ap.add_argument('--out', default=None,
-                    help='Output directory (default: <first run_dir>/lbl/).')
+                    help='Output directory (default: <first run_dir>/LBL/).')
     ap.add_argument('--only', choices=('timeseries', 'samples', 'both'), default='both',
                     help='Which artifacts to generate (default: both).')
     args = ap.parse_args()

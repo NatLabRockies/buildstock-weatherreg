@@ -100,12 +100,20 @@ def _merge_sector(sector: str) -> pd.DataFrame:
 
     # Year matrix: each vintage contributes its year columns, indexed by
     # full-name. combine_first does the right thing: newer wins, older fills.
+    # Vintages with no year columns (row-oriented single-indicator exports
+    # where Year is a row axis, not a column axis) are skipped — including
+    # them would pollute the merged index with numeric-year row labels.
     year_matrices: list[pd.DataFrame] = []
     for vp in vintages:
         df, vname_col, vyears = _read_aeo(vp)
+        if not vyears:
+            continue
         keep = [vname_col] + [y for y in vyears if y in _TARGET_YEARS]
         m = df[keep].rename(columns={vname_col: '_name'}).set_index('_name')
         year_matrices.append(m)
+    if not year_matrices:
+        raise RuntimeError(
+            f'no wide-format (year-as-columns) AEO vintages found for {sector!r}')
 
     merged = year_matrices[0]
     for older in year_matrices[1:]:
@@ -125,17 +133,11 @@ def _merge_sector(sector: str) -> pd.DataFrame:
     metadata.index.name = '_name'
     out = metadata.join(merged, how='outer')
     out = out.reset_index().rename(columns={'_name': name_col})
-    # Reorder so name_col sits where it does in source files (position 1).
-    cols_ordered = ([out.columns[0] if out.columns[0] != name_col
-                     else non_year_cols[0]]
-                    + [name_col]
-                    + [c for c in non_year_cols if c != out.columns[0]]
-                    + _TARGET_YEARS)
-    # Simpler: just put name_col second + all metadata + years.
-    other_meta = [c for c in non_year_cols if c not in (name_col,)]
-    section_col = newest_df.columns[0]  # the "section" / first column
+    # Reorder so name_col sits at position 1 (matching source-file layout):
+    # section col first, then name, then other metadata, then years.
+    other_meta = [c for c in non_year_cols if c != name_col]
+    section_col = newest_df.columns[0]
     out_cols = [section_col, name_col] + other_meta + _TARGET_YEARS
-    # Some out_cols may not be present after the join; filter.
     out_cols = [c for c in out_cols if c in out.columns]
     return out[out_cols]
 
