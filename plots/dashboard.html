@@ -1160,27 +1160,6 @@ function renderTrajectoryBreakdown() {
       line: {color: '#111', width: 1.8},
       hovertemplate: `<b>Total</b><br>${hoverFmt}<extra></extra>`,
     });
-    // Self-consistency diagnostic: the Total we just built from summing 19
-    // leaves at each x should match state_by_sector.total (annual for
-    // peak_gw). Any drift is a payload-vs-render mismatch — usually a
-    // stale-cached main.js. Log to console for post-hoc debugging.
-    (() => {
-      const referenceLookup = (xv) => {
-        const raw = isWeatherAxis
-          ? stateMetricLookup(metric, scenario, ySel, xv, 'total', stSel)
-          : stateMetricLookup(metric, scenario, xv, wySel, 'total', stSel);
-        return (raw == null ? 0 : raw) * displayScale;
-      };
-      const drift = xAxisValues.map((xv, i) => {
-        const stackTotal = totals[i];
-        const ref = referenceLookup(xv);
-        return {xv, stackTotal, ref, drift: ref - stackTotal};
-      }).filter(d => Math.abs(d.drift) > (metric === 'annual_gwh' ? 0.01 : 0.5));
-      if (drift.length) {
-        console.warn(`[Breakdown/${metric}] stack sum ≠ state_by_sector.total at ${drift.length}/${xAxisValues.length} x values`, drift);
-        console.warn('If stack ≪ ref, likely a stale main.js cache (hard-refresh: Cmd/Ctrl+Shift+R).');
-      }
-    })();
     yLabel = metric === 'annual_gwh' ? 'Annual energy (TWh)' : 'Annual peak power — coincident decomposition (GW)';
     yMax = (PAYLOAD.axis.trajectory_max[stSel] || {})['total']?.[metric] || 1;
     if (metric === 'annual_gwh') yMax = yMax * 1e-3;
@@ -1757,26 +1736,11 @@ function renderCohortHourlyMaxMin() {
   const wy = weatherYear();
   const st = state.trajState;
   const y = stockYear();
-  // Debug: verify payload shape at time of render so cache-vs-code mismatches
-  // are easy to diagnose in DevTools.
-  if (!PAYLOAD.cohort_hourly_maxmin) {
-    console.warn('cohort_hourly_maxmin missing from PAYLOAD — main.js may be a stale cached copy. Force-reload with Cmd/Ctrl+Shift+R.');
-  } else {
-    console.log('hourly* lookup', {scenario: state.scenario, y, wy, st,
-      hasScen: !!PAYLOAD.cohort_hourly_maxmin[state.scenario],
-      years: Object.keys(PAYLOAD.cohort_hourly_maxmin[state.scenario] || {}),
-    });
-  }
   const entry = getCohortHourlyMaxMinEntry(st, state.scenario, y, wy);
   if (!entry || !entry.series) {
-    const isHistorical = y < 2027;
     const placeholder = isStateLoading(st)
       ? `Loading ${st} data…`
-      : (isHistorical
-          ? `No hourly* data at stock year ${y} (historical years have no per-cohort intermediate files)`
-          : (!PAYLOAD.cohort_hourly_maxmin
-             ? `hourly* payload missing — force-reload the page (Cmd/Ctrl+Shift+R)`
-             : `No hourly* data for ${state.scenario} / stock ${y} / amy${wy}`));
+      : `No hourly* data at stock year ${y} (populated only for projection years, ≥ 2027)`;
     Plotly.react('plot-cohort', [], {
       margin: {t: 24, r: 8, b: 36, l: 70},
       annotations: [{text: placeholder, xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {color: '#999'}}],

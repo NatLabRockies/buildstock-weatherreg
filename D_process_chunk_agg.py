@@ -38,7 +38,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import matplotlib.pyplot as plt
 import datetime as dt
-import os
 import json
 import shutil
 import subprocess
@@ -119,11 +118,11 @@ print('Script start time:', script_start_time)
 start_index = int(sys.argv[1])
 end_index = int(sys.argv[2])
 meta_path = sys.argv[3]
-# argv[4] is retained for backward compatibility with C_run_bldg_chunk_agg.sh,
-# but the authoritative source of `upgrade_id` is now `spec['upgrade_id']`
-# (read below). With list-valued upgrade specs, argv[4] is a stringified token
-# (e.g. "[1, 14, 58]") used only in log messages.
-_argv4_upgrade_token = sys.argv[4]
+# Passed by C_run_bldg_chunk_agg.sh as `$upgrade`. With list-valued upgrade
+# specs this is a stringified token (e.g. "[1, 14, 58]") used only in the
+# "how to re-run this exact chunk" log message below; the authoritative
+# upgrade_id is `spec['upgrade_id']`, read from the switches JSON.
+upgrade_token_display = sys.argv[4]
 prefix = sys.argv[5]
 output_dir = sys.argv[6]
 script_dir = sys.argv[7]
@@ -226,7 +225,7 @@ _task_id = os.environ.get('SLURM_ARRAY_TASK_ID', '<task_idx_from_manifest>')
 _manifest_path = f'{output_dir}/inputs/manifest_upgrade{upgrade_tag}.csv'
 print(f'sbatch --job-name={prefix}chunk_{upgrade_tag} '
       f'--array={_task_id} ./C_run_bldg_chunk_agg.sh '
-      f'{_manifest_path} {meta_path} {_argv4_upgrade_token} {prefix} '
+      f'{_manifest_path} {meta_path} {upgrade_token_display} {prefix} '
       f'{output_dir} {script_dir} {spec_index}')
 
 ## Switch that designates comstock or resstock data
@@ -266,11 +265,9 @@ if sw_test_target and len(target_years) != 1:
 time.sleep(random.uniform(0, sleep_seconds))
 
 # FUNCTIONS
-# Detect HPC (SLURM or explicit flag)
+# Detect HPC by presence of a SLURM_JOB_ID (only set under sbatch/srun).
 def _is_hpc() -> bool:
-    return bool(int(os.environ.get('SLURM_JOB_ID', 0) or
-                    os.environ.get('REEDS_USE_SLURM', 0)
-                    ))
+    return 'SLURM_JOB_ID' in os.environ
 
 # Process one weather-location worker function — for HPC multiprocessing.
 # Each weather location (an as_sim GISJOIN for ComStock 2025.2; a county code
@@ -882,11 +879,6 @@ def test_fit(yr_type, year, prefix, upgrade_tag, bldg_id, model, Y_test, Y_pred,
     Returns:
         None
     """
-
-    """ DELETE: TODO: Should round, etc. _after_ calculations for average
-        metrics. May want to create global df instead of appending .csv. For
-        now, it's good enough. Also, transpose columns in averages.csv?"""
-
     energy_out = 'HVAC.elec' if energy_type == 'HVAC.elec' else 'natural_gas'
     # Print the building ID/upgrade/year combination
     print(f'{yr_type}{year}_{prefix}up{upgrade:02}_{str(bldg_id)}_{energy_out}')
@@ -908,8 +900,9 @@ def test_fit(yr_type, year, prefix, upgrade_tag, bldg_id, model, Y_test, Y_pred,
 
     fig_dir = f'{output_dir}/{yr_type}{year}'
     metrics = f'{prefix}metrics_upgrade{upgrade_tag}_{start_index:04}-{end_index:04}'
+    if sw_save_metrics or sw_save_fit:
+        os.makedirs(fig_dir, exist_ok=True)
     if sw_save_metrics:
-        os.makedirs(fig_dir, exist_ok=True) # DELETE TODO: duplicated code that will unnecessarily run for each building
         # Save the metrics and feature importances to a .txt file
         with open(f'{fig_dir}/{metrics}.txt', 'a') as f:
             f.write(f'{prefix}up{upgrade_tag}_{str(bldg_id)}_{energy_out}\n')
@@ -966,7 +959,6 @@ def test_fit(yr_type, year, prefix, upgrade_tag, bldg_id, model, Y_test, Y_pred,
             # Show the legend
             plt.legend()
             if sw_save_fit:
-                os.makedirs(fig_dir, exist_ok=True) # DELETE TODO: duplicated code that will unnecessarily run for each building
                 plt.savefig(f'{fig_dir}/{prefix}up{upgrade_tag}_{str(bldg_id)}.png')
             if sw_show_fit:
                 plt.show()
@@ -980,7 +972,6 @@ def test_fit(yr_type, year, prefix, upgrade_tag, bldg_id, model, Y_test, Y_pred,
         plt.xlabel('Actual')
         plt.ylabel('Predicted')
         if sw_save_fit:
-            os.makedirs(fig_dir, exist_ok=True) # DELETE TODO: duplicated code that will unnecessarily run for each building
             plt.savefig(f'{fig_dir}/fit_{prefix}up{upgrade_tag}_{str(bldg_id)}.png')
         if sw_show_fit:
             plt.show()
@@ -1292,8 +1283,8 @@ if df_meta.empty:
     )
 
 # Error check: Sum AWS cooling/heating/ng timeseries data for each bldg_id.
-# AWS_HVAC.elec is kept as the derived sum (cool + heat) for backward-compat
-# with the existing meta_HVAC.elec ratio diagnostics below.
+# AWS_HVAC.elec is the derived sum (cool + heat) — used by the meta_HVAC.elec
+# ratio diagnostics further down to catch metering / column-mapping errors.
 df_meta['AWS_cooling.elec'] = ts_agg.groupby('bldg_id').apply(
     lambda x: x['cooling.elec'].iloc[:8760].sum()
 )
@@ -1312,7 +1303,7 @@ df_meta['AWS_non_hvac.elec'] = ts_agg.groupby('bldg_id').apply(
     lambda x: x['non_hvac.elec'].iloc[:8760].sum()
 )
 
-if sw_apply_regression: # TODO: or `individual_building`?
+if sw_apply_regression:
     # === Per-weather-location training, then per-bldg_id share-out ===
     #
     # Reference math (per energy type — same shape for cool/heat/NG):
@@ -1559,7 +1550,7 @@ df_meta = (
     .set_index(county)
 )
 
-# Error checking using ratios and percent differences in df_meta TODO: fxn?
+# Error checking using ratios and percent differences in df_meta
 ## Ratios (note: small_number is to avoid division by zero)
 df_meta['ratio_HVAC_AWS_meta'] = (
     df_meta['AWS_HVAC.elec'] /

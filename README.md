@@ -115,11 +115,17 @@ run-independent:
 
 ```bash
 # resstock with calibration (recommended starting point):
-sbatch A_start_building_stock_parallel_agg.sh switches_agg_resstock.json
+sbatch --job-name=res_building_stock_parallel \
+       A_start_building_stock_parallel_agg.sh switches_agg_resstock.json
 
 # comstock (no res-calibration concept):
-sbatch A_start_building_stock_parallel_agg.sh switches_agg_comstock.json
+sbatch --job-name=com_building_stock_parallel \
+       A_start_building_stock_parallel_agg.sh switches_agg_comstock.json
 ```
+
+The `--job-name` flag prefixes both the queue entry and the
+`slurm-<name>_<jobid>.out` file so a concurrent res + com pair stays visually
+distinct in `squeue` output and on disk.
 
 A single submission produces every output above — chunks, aggregates, projections, and all three handoff folders. No manual chaining needed.
 
@@ -134,7 +140,7 @@ projections.
 | Stage | File | Type | What it does |
 |---|---|---|---|
 | 0 | `switches_agg_resstock.json` / `switches_agg_comstock.json` | config | Per-stock spec list, run_type definitions, calibration path, scenario name map |
-| A | `A_start_building_stock_parallel_agg.sh` | SLURM wrapper | AWS auth, renames the running job `res_/com_*`, runs B |
+| A | `A_start_building_stock_parallel_agg.sh` | SLURM wrapper | AWS auth, runs B. Caller passes `--job-name=<res_\|com_>building_stock_parallel` on the sbatch CLI. |
 | B | `B_building_stock_parallel_agg.py` | Python orchestrator | For each spec: bin-pack chunks, submit C array, submit F (depends C), accumulate F IDs, finally submit Z |
 | C | `C_run_bldg_chunk_agg.sh` | SLURM array task | Runs `D_process_chunk_agg.py` with the chunk's start/end indices |
 | D | `D_process_chunk_agg.py` | Python worker | BSQ Athena pull, **apply calibration factors if set**, RF / NN regression, write chunk CSV |

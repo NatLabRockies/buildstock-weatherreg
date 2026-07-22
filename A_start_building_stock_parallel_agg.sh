@@ -7,37 +7,21 @@
 
 # add >>> #SBATCH --qos=high <<< above for quicker launch at double AU cost
 
-#SBATCH --job-name=building_stock_parallel
+# --job-name is passed on the sbatch CLI so the res_/com_ prefix appears in
+# both `squeue` and the slurm-<name>_<jobid>.out filename from the start
+# (no in-flight rename). Callers:
+#   sbatch --job-name=res_building_stock_parallel \
+#          A_start_building_stock_parallel_agg.sh switches_agg_resstock.json
+#   sbatch --job-name=com_building_stock_parallel \
+#          A_start_building_stock_parallel_agg.sh switches_agg_comstock.json
 #SBATCH --output=slurm-%x_%j.out
 
-# Optional first arg: path to a switches JSON file (e.g. switches_resstock.json,
-# switches_comstock.json). Defaults to switches_agg.json in the script dir so
-# existing one-config workflows keep working.
-# Example: sbatch A_start_building_stock_parallel_agg.sh switches_resstock.json
-switches_path="${1:-switches_agg.json}"
-
-# Rename the running launcher job with a res_/com_ prefix based on the
-# `comstock` switch in the chosen JSON. SLURM has already assigned the name
-# from the #SBATCH directive at queue time, so we use scontrol to rename
-# the in-progress job. Failures are non-fatal — the run continues.
-job_prefix=$(python -c "
-import json, sys
-try:
-    s = json.load(open(sys.argv[1]))
-    print('com_' if s.get('comstock') else 'res_')
-except Exception:
-    print('')
-" "$switches_path" 2>/dev/null)
-if [ -n "$SLURM_JOB_ID" ] && [ -n "$job_prefix" ]; then
-    scontrol update jobid="$SLURM_JOB_ID" name="${job_prefix}building_stock_parallel" 2>/dev/null || true
-    # Also rename the slurm-out file to include the res_/com_ prefix. SLURM
-    # holds an open FD on the inode, so writes after this point keep flowing
-    # into the renamed file. Failures are non-fatal.
-    old_out="slurm-building_stock_parallel_${SLURM_JOB_ID}.out"
-    new_out="slurm-${job_prefix}building_stock_parallel_${SLURM_JOB_ID}.out"
-    if [ -f "$old_out" ] && [ "$old_out" != "$new_out" ]; then
-        mv "$old_out" "$new_out" 2>/dev/null || true
-    fi
+# First arg: path to a switches JSON file (e.g. switches_agg_resstock.json,
+# switches_agg_comstock.json).
+switches_path="$1"
+if [ -z "$switches_path" ]; then
+    echo "usage: sbatch --job-name=<res_|com_>building_stock_parallel $0 <switches.json>" >&2
+    exit 2
 fi
 
 # Ensure uv is on PATH (adjust if installed elsewhere)

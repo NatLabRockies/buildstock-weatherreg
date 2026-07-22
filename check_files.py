@@ -20,13 +20,6 @@ Usage:
 Output:
 - Results are printed to the terminal and saved to `check_results.txt`
   in the specified directory.
-
-TODO (optional):
-- Identify missing files before the first file.
-- Remove "Misaligned files" processes as they are not necessary (?).
-- Ensure that there are no files that should come after the last file
-  (using meta_master?).
-- Write main function for better modularity and reusability.
 """
 
 import os

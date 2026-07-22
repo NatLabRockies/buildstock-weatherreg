@@ -250,7 +250,6 @@ def _compress_array_indices(indices):
 
 if __name__ == "__main__":
     # Detect if running on HPC
-    # hpc = bool(int(os.environ.get('REEDS_USE_SLURM', 0)))
     hpc = 'SLURM_JOB_ID' in os.environ
     logger.info("Running on HPC: %s", hpc)
 
@@ -326,7 +325,6 @@ if __name__ == "__main__":
                         .decode('utf-8'))
 
     logger.info("Loading switches from snapshot at %s", snapshot_switches_path)
-    # SWITCHES #TODO: Only import necessary for this script & reorder
     # Read from the snapshot (not the source) so B and D are guaranteed to see
     # identical bytes regardless of edits to the source between submissions.
     with open(snapshot_switches_path, 'r') as f:
@@ -682,41 +680,6 @@ if __name__ == "__main__":
 
         # Set `county` based on `sw_comstock` value
         county = 'in.nhgis_county_gisjoin' if sw_comstock else 'in.county'
-
-        # TODO: Alter testing code blocks to incorporate ComStock 2025.2
-        # TESTING - DELETE for production or comment out
-        # Testing Subset 1
-        ## For ResStock testing purposes, subset to 'Single-Family Detached'
-        # df_meta = df_meta[df_meta['in.geometry_building_type_recs']
-        #                           == 'Single-Family Detached']
-        
-        # For ComStock testing purposes, subset to 'LargeOffice'
-        # df_meta = df_meta[df_meta['in.comstock_building_type'] == 'LargeOffice']
-
-        # counties = df_meta[county].unique()[:1] # TODO: counties (or restrict) should be a switch
-        
-        ## For testing purposes, subset counties
-        # Note: G5000030 is the NHGIS code for Bennington County, VT
-        # G1901630 = Scott County, IA; G1901530 = Polk County, IA
-        # df_meta = df_meta[df_meta[county].isin(['G5000030'])] # or next line
-        # df_meta = df_meta[df_meta[county].isin(counties)]
-        # Testing Subset 1 end
-
-        # # Testing Subset 2
-        # states = ['WY', 'VT', 'AK', 'ND', 'SD']
-
-        # # Filter df_meta to only include the specified states
-        # df_meta = df_meta[df_meta['in.state'].isin(states)]
-
-        # # Group by state and select the first three counties from each state
-        # df_meta_subset = df_meta.groupby('in.state').apply(lambda x: x[county].unique()[:3]).reset_index()
-
-        # # Flatten the list of counties for each state
-        # counties = [county for sublist in df_meta_subset[0].tolist() for county in sublist]
-
-        # # Filter df_meta to only include the selected counties
-        # df_meta = df_meta[df_meta[county].isin(counties)]
-        # # Testing Subset 2 end
 
         # Restrict to buildings upgraded in the current upgrade iteration
         if applied_only:
