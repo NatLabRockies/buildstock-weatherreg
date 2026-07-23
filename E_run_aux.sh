@@ -26,5 +26,9 @@ fi
 export PATH="$HOME/.local/bin:$PATH"
 source /kfs2/shared-projects/buildstock/aws_credentials.sh
 
-cd /kfs2/projects/geohc/radhikar/weather_regression/buildstock-weatherreg
+# SLURM stages the script into /var/spool/slurmd at runtime, so $0 / BASH_SOURCE
+# don't reach the repo. SLURM_SUBMIT_DIR is the directory sbatch was invoked
+# from; the standard workflow submits every job from the repo root (A_start
+# is run there; B runs there; Z runs there). Fall back to PWD for interactive.
+cd "${SLURM_SUBMIT_DIR:-$PWD}"
 uv run python E_aux_query.py "$run_dir"

@@ -1,5 +1,6 @@
 {
-    "output_dir": "/projects/geohc/radhikar/outputs/resstock_cross_val_june8_2026",
+    "output_dir": "/projects/geohc/radhikar/outputs",
+    "run_name": "resstock_cross_val_june8_2026",
     "testmode": false,
     "run_specs": [
         {"upgrade_id": 0,

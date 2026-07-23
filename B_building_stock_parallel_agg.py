@@ -43,7 +43,16 @@ import hashlib
 import re
 from pathlib import Path
 
-COUNTY_PARQUET_CACHE_DIR = Path("/projects/geohc/radhikar/outputs/county_parquet_cache")
+# County parquet cache — set once at startup from switches['output_dir']
+# via `_set_county_parquet_cache_dir` below. Lives sibling to per-run outputs
+# so downloads are shared across (scenario, spec) reruns.
+COUNTY_PARQUET_CACHE_DIR: Path | None = None
+
+
+def _set_county_parquet_cache_dir(path: Path | str) -> None:
+    global COUNTY_PARQUET_CACHE_DIR
+    COUNTY_PARQUET_CACHE_DIR = Path(path)
+    COUNTY_PARQUET_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Bypass SSL certificate verification for all HTTPS requests in this script.
 
@@ -273,10 +282,15 @@ if __name__ == "__main__":
     logger.info("Using switches file: %s", switches_path)
 
     # Pre-read switches to resolve output_dir before touching the filesystem.
-    # The full canonical load happens later from the snapshot copy.
+    # The full canonical load happens later from the snapshot copy. Per-run
+    # outputs land at `<output_dir>/<run_name>`; the county-parquet cache is a
+    # sibling at `<output_dir>/county_parquet_cache/` so it survives across
+    # (scenario, spec) reruns of the same output_dir.
     with open(switches_path, 'r') as _f:
         _pre_switch = json.load(_f)
-    output_dir = _pre_switch['output_dir']
+    _base_output_dir = Path(_pre_switch['output_dir'])
+    output_dir = str(_base_output_dir / _pre_switch['run_name'])
+    _set_county_parquet_cache_dir(_base_output_dir / 'county_parquet_cache')
     is_resume = os.path.isdir(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     if is_resume:

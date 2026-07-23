@@ -600,6 +600,11 @@ def main() -> None:
     # Set before the pool forks so workers inherit them (see common docstring).
     common.RESOLUTION = cast(Resolution, args.resolution)
     common.set_baseline_tags(args.run_dir)
+    # County-level gap cache is a sibling of the run_dir (matches B's
+    # county_parquet_cache convention: cache lives at output_dir/, per-run
+    # outputs at output_dir/run_name/).
+    gap.set_gap_cache_dir(os.path.join(os.path.dirname(os.path.abspath(args.run_dir)),
+                                        'gap_model_cache'))
     project_run_dir(args.run_dir, cast(Stock, args.stock), n_workers=args.workers)
 
 

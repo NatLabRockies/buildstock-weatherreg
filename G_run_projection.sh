@@ -86,14 +86,12 @@ export NUMEXPR_NUM_THREADS=1
 # Unbuffered Python so worker per-file completion messages flush live.
 export PYTHONUNBUFFERED=1
 
-# Repo path. Hard-coded because SLURM stages the wrapper into
-# /var/spool/slurmd at runtime — `BASH_SOURCE[0]` then points at the staged
-# copy, so the auto-resolve trick doesn't work for the projections/ package.
-# cd here so `python -m projections` finds the package on the path. Same
-# pattern the other wrappers in this repo use.
-script_dir=/kfs2/projects/geohc/radhikar/weather_regression/buildstock-weatherreg
-
-cd "$script_dir"
+# SLURM stages the wrapper into /var/spool/slurmd at runtime, so BASH_SOURCE
+# / $0 don't reach the repo. SLURM_SUBMIT_DIR is the directory sbatch was
+# invoked from; the standard workflow submits every job from the repo root
+# (see A_start / B_building_stock_parallel_agg / Z_post_pipeline). Fall back
+# to PWD for interactive runs.
+cd "${SLURM_SUBMIT_DIR:-$PWD}"
 
 cmd=(uv run python -m projections "$run_dir" --resolution "$resolution")
 if [ -n "$stock_override" ]; then

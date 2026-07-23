@@ -1199,7 +1199,9 @@ def build_comparisons_from_switches(switches_path: Path):
     """
     with open(switches_path) as f:
         switches = json.load(f)
-    output_dir = Path(switches['output_dir'])
+    # Per-run directory is <output_dir>/<run_name> (see A/B). This is the same
+    # path the projection stages read as `run_dir`.
+    output_dir = Path(switches['output_dir']) / switches['run_name']
     is_comstock = switches.get('comstock', False)
     bldg_type = 'com' if is_comstock else 'res'
 

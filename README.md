@@ -127,6 +127,12 @@ The `--job-name` flag prefixes both the queue entry and the
 `slurm-<name>_<jobid>.out` file so a concurrent res + com pair stays visually
 distinct in `squeue` output and on disk.
 
+**Submit from the repo root.** All SLURM wrappers use `$SLURM_SUBMIT_DIR` to
+find the repo (SLURM stages the script into `/var/spool/slurmd`, so `$0` doesn't
+resolve back to your checkout). B and Z chain their sub-`sbatch`es from the
+same working directory, so as long as the initial `sbatch` runs from the repo,
+every downstream job also lands there without any hardcoded path.
+
 A single submission produces every output above — chunks, aggregates, projections, and all three handoff folders. No manual chaining needed.
 
 If anything inside the chain fails, downstream stages are short-circuited via
@@ -167,7 +173,8 @@ The two template files define everything per stock:
 
 ```json
 {
-  "output_dir": "/projects/geohc/radhikar/outputs/resstock_cross_val_june8_2026",
+  "output_dir": "/projects/geohc/radhikar/outputs",
+  "run_name": "resstock_cross_val_june8_2026",
   "testmode": false,
   "comstock": false,
   "run_specs": [
@@ -203,7 +210,8 @@ Field highlights added since the original pipeline:
 
 | Field | Where it lives | Meaning |
 |---|---|---|
-| `output_dir` | top level | Where the entire pipeline writes — projections, handoffs, slurm-out/, everything. Bump the date to start a fresh run without overwriting old data. |
+| `output_dir` | top level | Base output directory (shared across runs and users of the same account). Two per-user caches sit directly under this: `county_parquet_cache/` (S3 building-parquet downloads) and `gap_model_cache/` (per-county ComStock gap CSVs). |
+| `run_name` | top level | Subfolder under `output_dir` for THIS run. All per-run artifacts (chunks, projections, handoffs) live at `<output_dir>/<run_name>/`. Bump the date to start a fresh run without overwriting old data. |
 | `scenario_names` | top level | `{spec-short-id: display-name}`. Strips `Upgraded-` prefix and looks the result up; used by every projection filename and every handoff. Falls back to the raw short id if absent. |
 | `run_types[<name>].adjustment_factor` | per run_type | Optional. Filename of a per-(state, hour) `[8760 × 49]` parquet of multiplicative calibration factors. Resolved against the repo dir. When set, `D_process_chunk_agg.py` multiplies every electricity column in that run_type's `ts_agg` by `factor[state, hour]`. Absent → no calibration. |
 | `apply_regression` | per spec | `true` trains and predicts; `false` writes the base-year load directly. Calibration runs in both modes (it sits *before* the regression branch). |
@@ -471,7 +479,7 @@ Edit one of the four templates at the repo root (or copy one to a new name):
 | `switches_agg_resstock_2018.json` | ResStock | off (base year only) | on |
 | `switches_agg_comstock_2018.json` | ComStock | off (base year only) | n/a |
 
-Bump `output_dir` to a fresh path, adjust `run_specs` and `scenario_names` to
+Bump `run_name` to a fresh label, adjust `run_specs` and `scenario_names` to
 match what you want to produce, and submit via the entry point at the top of
 this README. The **switches_agg_*.json reference** and **Switches reference
 (full)** sections above describe every field.
@@ -511,7 +519,8 @@ See regression validation outputs for ResStock and ComStock HVAC EULP here:
 
 | Switch | Where | Description | Typical |
 |---|---|---|---|
-| `output_dir` | top-level | Run output folder. Bump date for fresh runs. | `…/outputs/<stock>_cross_val_<date>` |
+| `output_dir` | top-level | Base outputs directory. Per-run outputs go under `<output_dir>/<run_name>/`. Caches (`county_parquet_cache/`, `gap_model_cache/`) live directly under `<output_dir>/`. | `/projects/geohc/radhikar/outputs` |
+| `run_name` | top-level | Per-run subfolder under `output_dir`. Bump for a fresh run. | `<stock>_cross_val_<date>` |
 | `testmode` | top-level | Vermont-only test slice in B. | `false` (production) |
 | `comstock` | top-level | `true` selects ComStock branches. | `false` (resstock template) / `true` (comstock template) |
 | `scenario_names` | top-level | `{short-id → display-name}` map for projection filenames + handoffs. | `{All-Baseline→Baseline, Upgrade4→ASHP, …}` |

@@ -1484,10 +1484,9 @@ if sw_apply_regression:
     # with each target year's calendar. Without this, copying e.g. 2018's
     # Mon-Tue-Wed-... block into 2020 (a Wednesday-start year) puts
     # weekday-sensitive loads (lighting / plug / appliance) on the wrong
-    # day. Same algorithm as E_combine_nonHVAC.match_day_patterns:
-    # shift = (base_jan1_dow - target_jan1_dow) * 24, then np.roll. The
-    # 8760-cap above means no leap-day padding is needed (cool/heat are
-    # likewise 8760/yr, so they don't have a leap-day to align to).
+    # day. Shift = (base_jan1_dow - target_jan1_dow) * 24, then np.roll.
+    # The 8760-cap above means no leap-day padding is needed (cool/heat
+    # are likewise 8760/yr, so they don't have a leap-day to align to).
     # Drift footprint: the wrap caused by np.roll is at most 144 hours
     # (6 days) and lands at year-boundaries, where it interacts with the
     # other end of the rolled profile — small and contained.

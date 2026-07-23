@@ -88,9 +88,10 @@ E. Axis pin maxes  (cheap, in build_payload)
 
 CLI
 ===
+  # run_dir = <switches.output_dir>/<switches.run_name>, i.e. what B writes to.
   uv run python plots/aggregate.py \\
-      --res-run-dir /projects/geohc/radhikar/outputs/resstock_cross_val_june8_2026 \\
-      --com-run-dir /projects/geohc/radhikar/outputs/comstock_cross_val_may13_2026
+      --res-run-dir <res_output_dir>/<res_run_name> \\
+      --com-run-dir <com_output_dir>/<com_run_name>
   # output: plots/data/main.js  +  plots/data/state_<postal>.js (×49)
 
   # No build step: plots/dashboard.html loads data/main.js directly.

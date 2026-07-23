@@ -27,7 +27,11 @@ if [ -z "$run_dir" ] || [ -z "$stock" ]; then
 fi
 
 export PATH="$HOME/.local/bin:$PATH"
-cd /kfs2/projects/geohc/radhikar/weather_regression/buildstock-weatherreg
+# SLURM_SUBMIT_DIR = the directory sbatch was invoked from. The standard
+# workflow submits every job from the repo root (see A_start / B), so this
+# lands us there. Fall back to PWD for interactive runs. script_dir is
+# embedded into the --wrap= below, so the sub-sbatch's shell can re-cd there.
+cd "${SLURM_SUBMIT_DIR:-$PWD}"
 script_dir="$PWD"
 
 # Projection: state resolution (small frames, 20 workers, ~480 GB peak)

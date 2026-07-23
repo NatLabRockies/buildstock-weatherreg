@@ -28,7 +28,10 @@ export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
 
-cd /kfs2/projects/geohc/radhikar/weather_regression/buildstock-weatherreg
+# SLURM_SUBMIT_DIR = the directory sbatch was invoked from. The standard
+# workflow submits every job from the repo root (see A_start / B / Z), so this
+# lands us there. Fall back to PWD for interactive runs.
+cd "${SLURM_SUBMIT_DIR:-$PWD}"
 
 echo "Running: uv run python -m projections.lbl $run_dir"
 uv run python -m projections.lbl "$run_dir"

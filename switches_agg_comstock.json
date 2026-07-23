@@ -1,5 +1,6 @@
 {
-    "output_dir": "/projects/geohc/radhikar/outputs/comstock_cross_val_may13_2026",
+    "output_dir": "/projects/geohc/radhikar/outputs",
+    "run_name": "comstock_cross_val_may13_2026",
     "testmode": false,
     "run_specs": [
         {"upgrade_id": 0,

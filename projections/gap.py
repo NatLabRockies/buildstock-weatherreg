@@ -28,8 +28,17 @@ _GAP_S3_URL_BASE: str = (
     'end-use-load-profiles-for-us-building-stock/2025/'
     'comstock_amy2018_release_2/commercial_gap_model/by_county/upgrade=0/'
 )
-_GAP_CACHE_DIR: str = '/projects/geohc/radhikar/outputs/gap_model_cache'
+# Per-county gap-model CSV cache. Set once at startup by the projections driver
+# (see set_gap_cache_dir below) so it lives at `<output_dir>/gap_model_cache/`
+# — sibling to per-run outputs, shared across (scenario, spec) reruns.
+_GAP_CACHE_DIR: str | None = None
 _GAP_S3_STORAGE_OPTIONS: dict[str, object] = {'anon': True, 'client_kwargs': {'verify': False}}
+
+
+def set_gap_cache_dir(path: str | os.PathLike) -> None:
+    global _GAP_CACHE_DIR
+    _GAP_CACHE_DIR = str(path)
+    os.makedirs(_GAP_CACHE_DIR, exist_ok=True)
 
 
 def _replicate_2018_across_years(base: GwhFrame, target_years: Sequence[int]) -> GwhFrame:
@@ -59,6 +68,10 @@ def load_gap_gwh(target_years: Sequence[int]) -> GwhFrame:
 
 def _gap_county_cache_path(gisjoin: Gisjoin, url_base: str) -> str:
     # Hash the URL base into the name so a release bump auto-invalidates the cache.
+    if _GAP_CACHE_DIR is None:
+        raise RuntimeError(
+            'gap cache dir not configured — call gap.set_gap_cache_dir(...) '
+            'from the projections driver before loading county-level gap.')
     digest = hashlib.sha1(url_base.encode('utf-8')).hexdigest()[:12]
     return os.path.join(_GAP_CACHE_DIR, f'{gisjoin}_{digest}.csv')
 
