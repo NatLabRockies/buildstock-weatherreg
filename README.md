@@ -470,21 +470,16 @@ cd buildstock-weatherreg
 uv sync   # creates .venv, installs everything from pyproject.toml
 ```
 
-### Non-HVAC Load Queries (Aggregate Notebooks)
+### Ad-hoc BSQ query notebooks (optional)
 
- Use the notebooks in `aggregates/` for queries of non-HVAC electricity loads by state and hour.
-
-
-### BuildStockQuery schema install (one-time)
-
-ComStock pulls use a custom BSQ schema (`comstock_oedi_state_and_county`) that
-isn't shipped with `buildstock-query`. Copy this repo's `comstock_oedi.toml`
-into the BSQ package's `db_schema/` directory after `uv sync`:
-
-```bash
-uv run python -c "import site; print(site.getsitepackages())"
-# copy comstock_oedi.toml to <site-packages-dir>/buildstock_query/db_schema/
-```
+The two notebooks in `aggregates/` — `resstock_aggregates.ipynb` and
+`comstock_aggregates.ipynb` — are optional exploration tools for ad-hoc
+BuildStockQuery pulls (state × hour aggregates over any enduse column,
+upgrade filter, etc.). They are **not** part of the standard pipeline —
+D_process_chunk_agg.py already pulls every enduse the projection needs,
+and non-HVAC is derived inline as `total − cooling − heating − ev − pv`.
+Use these notebooks only if you need a one-off aggregate the pipeline
+doesn't already produce.
 
 ### Configuring a run
 
