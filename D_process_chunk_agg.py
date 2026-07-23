@@ -39,8 +39,6 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import matplotlib.pyplot as plt
 import datetime as dt
 import json
-import shutil
-import subprocess
 from buildstock_query import BuildStockQuery
 import sqlglot
 import time

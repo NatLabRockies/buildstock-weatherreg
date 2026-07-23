@@ -447,7 +447,6 @@ curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip
 unzip awscliv2.zip
 ./aws/install -i "$HOME/local/aws-cli" -b "$HOME/local/bin"
 echo 'export PATH="$HOME/local/bin:$PATH"' >> ~/.bashrc
-echo 'export REEDS_USE_SLURM=1' >> ~/.bashrc   # only on HPC
 source ~/.bashrc
 aws --version
 ```

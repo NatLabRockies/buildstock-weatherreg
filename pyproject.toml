@@ -11,7 +11,6 @@ dependencies = [
     "scipy>=1.10",
     "scikit-learn>=1.1",
     "matplotlib>=3.8",
-    "seaborn>=0.12",
     # Data / IO
     "pyarrow>=14",
     "polars>=0.20",
@@ -21,14 +20,10 @@ dependencies = [
     "tensorflow>=2.16",
     # Data querying
     "pyathena>=3",
-    # Web / dashboards
+    # Web / plotting (the dashboard is a static HTML file that loads plotly
+    # from a vendored bundle; no Dash app anywhere in the pipeline).
     "requests>=2.31",
     "plotly>=5.22",
-    "dash>=2.17",
-    "dash-bootstrap-components>=1.6",
-    "dash-extensions>=1.0",
-    "dash-iconify>=0.1",
-    "dash-mantine-components>=0.10,<1",
     # Utilities
     "pyyaml>=6",
     "rich>=13",

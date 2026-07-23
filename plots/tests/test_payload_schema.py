@@ -7,8 +7,6 @@ hits it in the UI.
 """
 from __future__ import annotations
 
-import pytest
-
 from .conftest import _walk
 
 

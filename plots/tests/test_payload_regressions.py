@@ -54,7 +54,6 @@ def test_state_peak_does_not_exceed_conus_peak(payload):
     """REGRESSION: per-state seasonal peak must be ≤ CONUS peak for the
     same (scen, year, wy, season). Anti-physics if it ever isn't."""
     for path, by_state in _walk(payload["state_by_sector"]["peak_gw"], 4):
-        scalar = lambda v: v["annual"] if isinstance(v, dict) else v
         conus = by_state.get("CONUS")
         if conus is None:
             continue

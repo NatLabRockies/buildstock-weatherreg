@@ -28,7 +28,6 @@ from .common import (
 )
 from .growth_factors import (
     ANCHOR_YEAR,
-    GAP_FRACTION,
     commercial_cohort_split,
     commercial_total_floorspace,
     residential_cohort_split,

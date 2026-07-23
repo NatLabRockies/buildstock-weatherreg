@@ -39,7 +39,6 @@ os.environ.setdefault("AWS_CA_BUNDLE", _CA)
 os.environ.setdefault("CURL_CA_BUNDLE", _CA)
 os.environ.setdefault("SSL_CERT_FILE", _CA)
 os.environ.setdefault("REQUESTS_CA_BUNDLE", _CA)
-import ssl
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -656,7 +655,6 @@ def run_comparison(ref_path: Path, reg_path: Path, comp_name: str,
         peak_max_idx = county_peak_pct.idxmax()
         peak_min_idx = county_peak_pct.idxmin()
 
-    nat_nmae_pct = nat_nmae * 100 if np.isfinite(nat_nmae) else float("nan")
     log("metrics computed; writing data exports")
 
     data_dir = get_out_dir() / "data"

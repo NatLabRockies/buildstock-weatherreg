@@ -8,8 +8,6 @@ codepath but not its sibling, a mismatch will surface immediately.
 """
 from __future__ import annotations
 
-import pytest
-
 from .conftest import _walk
 
 TOL_ENERGY = 0.05  # GWh — float drift from sum order

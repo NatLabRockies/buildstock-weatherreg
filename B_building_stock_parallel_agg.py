@@ -28,7 +28,7 @@ os.environ.setdefault("REQUESTS_CA_BUNDLE", _CA)
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 import multiprocessing
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import fnmatch
 import sys
 import shutil
@@ -37,7 +37,6 @@ import subprocess
 import time as pytime
 import logging
 import pandas as pd
-import numpy as np
 import json
 import hashlib
 import re
@@ -269,14 +268,14 @@ if __name__ == "__main__":
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Optional CLI arg: path to a switches JSON. Lets a user maintain separate
-    # ResStock/ComStock switch files and submit them back-to-back via:
-    #   sbatch A_start_building_stock_parallel_agg.sh switches_resstock.json
-    # Defaults to script_dir/switches_agg.json for backwards compatibility.
-    if len(sys.argv) > 1:
-        switches_path = os.path.abspath(sys.argv[1])
-    else:
-        switches_path = os.path.join(script_dir, 'switches_agg.json')
+    # CLI arg: path to a switches JSON — the stock-specific templates at the
+    # repo root (switches_agg_resstock.json / switches_agg_comstock.json /
+    # the _2018 / _2012 variants). A_start requires this arg upfront and
+    # exits before invoking B if it's missing, so we can too.
+    if len(sys.argv) < 2:
+        raise SystemExit(
+            "usage: python B_building_stock_parallel_agg.py <switches.json>")
+    switches_path = os.path.abspath(sys.argv[1])
     if not os.path.isfile(switches_path):
         raise FileNotFoundError(f"Switches file not found: {switches_path}")
     logger.info("Using switches file: %s", switches_path)

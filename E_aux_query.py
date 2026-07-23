@@ -36,7 +36,6 @@ import json
 import os
 import random
 import re
-import sys
 import time
 
 import certifi
@@ -49,7 +48,6 @@ os.environ.setdefault("REQUESTS_CA_BUNDLE", _CA)
 import ssl  # noqa: E402
 ssl._create_default_https_context = ssl._create_unverified_context
 
-import pandas as pd  # noqa: E402
 from buildstock_query import BuildStockQuery  # noqa: E402
 
 
