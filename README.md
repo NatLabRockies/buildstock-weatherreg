@@ -379,8 +379,9 @@ sbatch plots/I_build_dashboard.sh <res_run_dir> <com_run_dir>
 # → default output dir: <parent(res_run_dir)>/dashboard/
 #     dashboard.html                (copied from plots/)
 #     plotly-*.min.js               (copied from plots/)
-#     data/main.js                  ~150 MB CONUS payload
-#     data/state_<postal>.js × 49   per-state sidecars, lazy-loaded on click
+#     pako-*.min.js                 (copied from plots/; sync gzip lib)
+#     data/main.js                  ~30 MB CONUS payload (gzipped+base64)
+#     data/state_<postal>.js × 49   ~2-4 MB per-state sidecars, lazy-loaded on click
 # → also runs plots/tests/ (payload schema + reconciliation + Playwright UI)
 #
 # Pass an explicit third arg to override the destination:

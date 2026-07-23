@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <title>BuildStock Projection Dashboard</title>
 <script src="plotly-3.0.1.min.js"></script>
+<!-- pako = sync gzip ungzip in the browser. main.js + state_*.js store the
+     payload as base64-encoded gzipped JSON to fit within GitHub-Pages-friendly
+     file sizes; pako inflates them at load time. -->
+<script src="pako-2.1.0.min.js"></script>
 <!-- Main payload (CONUS view). Per-state cohort + peak-week data is loaded
      lazily from data/state_<postal>.js when the user picks a state. -->
 <script src="data/main.js"></script>

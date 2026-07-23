@@ -4,15 +4,21 @@ Reads one folder (`intermediate/state/`) from a ResStock run_dir and a ComStock
 run_dir, pre-aggregates everything to the smallest shapes the dashboard needs,
 and writes:
 
-  <out_dir>/main.js           ~55 MB   (CONUS payload — sets window.PAYLOAD)
-  <out_dir>/state_<postal>.js ~10 MB × 49  (per-state — lazy-loaded via
-                                            <script> injection on click)
+  <out_dir>/main.js           ~30 MB   (CONUS payload — sets window.PAYLOAD)
+  <out_dir>/state_<postal>.js ~2-4 MB × 49  (per-state — lazy-loaded via
+                                             <script> injection on click)
+
+Each .js file is a small IIFE around a base64-encoded gzipped JSON blob
+that's inflated in-browser by pako. Compared to a raw JSON literal (~170 MB
+for a full res+com bundle), the compressed encoding cuts main.js by ~5×
+so the dashboard fits within GitHub-Pages-friendly file limits. Floats are
+rounded to 2 decimals before gzip — well below the resolution the UI shows.
 
 The dashboard itself is `plots/dashboard.html` (tracked in git, edit
 directly). The SLURM wrapper `plots/I_build_dashboard.sh` copies
-dashboard.html + the vendored plotly bundle alongside <out_dir>/'s parent
-so `<parent>/dashboard.html` can `<script src="data/main.js">` correctly.
-After a rebuild, refresh the browser to pick up new data.
+dashboard.html + the vendored plotly bundle + pako alongside <out_dir>/'s
+parent so `<parent>/dashboard.html` loads the .js files directly (pako
+first, then main.js).
 
 Re-run aggregate.py only when the source run_dirs change. Edit
 dashboard.html directly to iterate on plot design — no build step.
@@ -107,6 +113,8 @@ CLI
 from __future__ import annotations
 
 import argparse
+import base64
+import gzip
 import json
 import os
 import re
@@ -1114,42 +1122,81 @@ def main() -> None:
 
     bundle = build_payload(args.res_run_dir, args.com_run_dir)
 
-    _log('Writing data/ sidecars...')
+    _log('Writing data/ sidecars (gzip+base64 encoded)...')
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    # data/main.js — sets window.PAYLOAD via an IIFE; fires onPayloadLoaded if
-    # the dashboard wants to schedule something after main load.
-    main_json = json.dumps(bundle['main'], separators=(',', ':'))
-    main_js = (
-        '(function(){\n'
-        f'  window.PAYLOAD = {main_json};\n'
-        '  if (window.onPayloadLoaded) window.onPayloadLoaded();\n'
-        '})();\n'
+    # data/main.js — sets window.PAYLOAD via an IIFE. The payload is JSON,
+    # gzipped, base64-encoded, then decompressed in-browser with pako. Compared
+    # to a raw JSON literal (~170 MB for a full res+com bundle), this cuts main.js
+    # to ~30 MB — small enough to serve from GitHub Pages. dashboard.html loads
+    # `pako-*.min.js` before `data/main.js` so ungzip is available synchronously.
+    main_js = _write_compressed_js(
+        bundle['main'],
+        args.out_dir / 'main.js',
+        assign_expr='window.PAYLOAD = payload;',
+        post_hook='if (window.onPayloadLoaded) window.onPayloadLoaded();',
     )
-    main_path = args.out_dir / 'main.js'
-    main_path.write_text(main_js)
-    _log(f'  main.js  → {main_path.stat().st_size/1e6:.2f} MB')
+    _log(f'  main.js  → {main_js/1e6:.2f} MB')
 
     # data/state_<postal>.js — one per state. Registers into window.STATE_DATA
-    # and fires onStateLoaded(postal) if a callback is set.
+    # and fires onStateLoaded(postal) if a callback is set. Same compression
+    # scheme as main.js.
     per_state = bundle['per_state']
     _log(f'  per-state — {len(per_state)} sidecars')
     total_state_bytes = 0
     for st, st_data in per_state.items():
-        st_json = json.dumps(st_data, separators=(',', ':'))
-        st_js = (
-            '(function(){\n'
-            '  window.STATE_DATA = window.STATE_DATA || {};\n'
-            f'  window.STATE_DATA[{json.dumps(st)}] = {st_json};\n'
-            f'  if (window.onStateLoaded) window.onStateLoaded({json.dumps(st)});\n'
-            '})();\n'
+        key_lit = json.dumps(st)
+        st_bytes = _write_compressed_js(
+            st_data,
+            args.out_dir / f'state_{st}.js',
+            preamble='window.STATE_DATA = window.STATE_DATA || {};',
+            assign_expr=f'window.STATE_DATA[{key_lit}] = payload;',
+            post_hook=f'if (window.onStateLoaded) window.onStateLoaded({key_lit});',
         )
-        st_path = args.out_dir / f'state_{st}.js'
-        st_path.write_text(st_js)
-        total_state_bytes += st_path.stat().st_size
+        total_state_bytes += st_bytes
     _log(f'  state_*.js total → {total_state_bytes/1e6:.2f} MB across {len(per_state)} files'
          f' ({total_state_bytes/max(len(per_state),1)/1e6:.2f} MB avg)')
     _log('Done.')
+
+
+def _round_floats(obj, digits: int = 2):
+    """Recursively round every float in a JSON-ish tree. Cuts down size by
+    dropping trailing significand digits that gzip can't compress (and that
+    the dashboard rounds off during display anyway). 2 dp gives 0.01 GWh /
+    10 kW / 0.001 TWh resolution — well below the smallest thing the UI shows."""
+    if isinstance(obj, dict):
+        return {k: _round_floats(v, digits) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_round_floats(v, digits) for v in obj]
+    if isinstance(obj, float):
+        return round(obj, digits)
+    return obj
+
+
+def _write_compressed_js(payload_obj, out_path,
+                        assign_expr: str, post_hook: str,
+                        preamble: str = '') -> int:
+    """Serialize `payload_obj` to JSON, round floats, gzip, base64-encode, and
+    write a small IIFE that decompresses in the browser via pako.ungzip. See
+    the caller for the loader semantics."""
+    rounded = _round_floats(payload_obj, digits=2)
+    payload_json = json.dumps(rounded, separators=(',', ':'))
+    gz = gzip.compress(payload_json.encode('utf-8'), compresslevel=9)
+    b64 = base64.b64encode(gz).decode('ascii')
+    # pako is loaded by dashboard.html before this script runs (see the
+    # `<script src="pako-*.min.js">` line preceding data/main.js in the HTML).
+    js = (
+        '(function(){\n'
+        + (f'  {preamble}\n' if preamble else '')
+        + f'  var b64 = "{b64}";\n'
+          '  var bytes = Uint8Array.from(atob(b64), function(c){return c.charCodeAt(0);});\n'
+          '  var payload = JSON.parse(pako.ungzip(bytes, {to: "string"}));\n'
+        + f'  {assign_expr}\n'
+        + f'  {post_hook}\n'
+          '})();\n'
+    )
+    out_path.write_text(js)
+    return out_path.stat().st_size
 
 
 if __name__ == '__main__':

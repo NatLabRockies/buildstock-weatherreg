@@ -12,8 +12,9 @@
 #
 #   <dashboard_dir>/dashboard.html            (copied from plots/)
 #   <dashboard_dir>/plotly-*.min.js           (copied from plots/)
-#   <dashboard_dir>/data/main.js              ~55 MB (CONUS payload)
-#   <dashboard_dir>/data/state_*.js           ~10 MB × 49 (per-state, lazy)
+#   <dashboard_dir>/pako-*.min.js             (copied from plots/; gzip lib)
+#   <dashboard_dir>/data/main.js              ~30 MB (CONUS payload, gzipped+b64)
+#   <dashboard_dir>/data/state_*.js           ~2 MB × 49 (per-state, lazy)
 #
 # The whole directory is portable — zip it, share it, or serve it directly
 # with `serve_dashboard.sh <dashboard_dir>`.
@@ -70,6 +71,7 @@ echo
 mkdir -p "$dashboard_dir/data"
 cp plots/dashboard.html "$dashboard_dir/"
 cp plots/plotly-*.min.js "$dashboard_dir/"
+cp plots/pako-*.min.js "$dashboard_dir/"
 
 # Aggregate the payload into <dashboard_dir>/data/{main.js, state_*.js}.
 uv run python -u plots/aggregate.py \
