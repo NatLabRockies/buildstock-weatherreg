@@ -22,10 +22,11 @@ Output filename convention matches B / D / agg_buildings.py:
   spec_tag = <spec['name']>_<reg|ref>_b<base_year>
 
 Usage:
-  python E_aux_query.py <output_dir> [--spec-index N]
+  python E_aux_query.py <run_dir> [--spec-index N]
 
-  <output_dir>: A run output directory containing inputs/switches_agg.json.
-                The aux CSVs are written at the top level of this directory.
+  <run_dir>: A per-run output directory containing inputs/switches_agg.json.
+             Equal to `<switches.output_dir>/<switches.run_name>/`. The aux
+             CSVs are written at the top level of this directory.
   --spec-index N: Process only run_specs[N] (must have upgrade_id == 0).
 """
 
@@ -138,7 +139,7 @@ RES_SQFT_COL = "in.sqft..ft2"
 COM_SQFT_COL = "in.sqft..ft2"  # most ComStock releases also expose ..ft2
 
 
-def process_spec(spec, switch, output_dir):
+def process_spec(spec, switch, run_dir):
     """Run the aux query for one spec and write the two CSVs."""
     spec_name = _validate_spec_name(spec["name"])
     regression_tag = "reg" if spec["apply_regression"] else "ref"
@@ -214,8 +215,8 @@ def process_spec(spec, switch, output_dir):
         .loc[:, county_keys + ["bldg_id", "sqft", "weight"]]
     )
 
-    cov_path = os.path.join(output_dir, f"aux_coverage_upgrade{spec_tag}.csv")
-    samples_path = os.path.join(output_dir, f"aux_samples_upgrade{spec_tag}.csv")
+    cov_path = os.path.join(run_dir, f"aux_coverage_upgrade{spec_tag}.csv")
+    samples_path = os.path.join(run_dir, f"aux_samples_upgrade{spec_tag}.csv")
     cov.to_csv(cov_path, index=False)
     samples.to_csv(samples_path, index=False)
 
@@ -256,8 +257,9 @@ def process_spec(spec, switch, output_dir):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "output_dir",
-        help="Run output dir (must contain inputs/switches_agg.json).",
+        "run_dir",
+        help="Per-run output dir (= <switches.output_dir>/<switches.run_name>/, "
+             "must contain inputs/switches_agg.json).",
     )
     parser.add_argument(
         "--spec-index",
@@ -267,7 +269,7 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
 
-    snap = os.path.join(args.output_dir, "inputs", "switches_agg.json")
+    snap = os.path.join(args.run_dir, "inputs", "switches_agg.json")
     if not os.path.isfile(snap):
         raise SystemExit(f"switches snapshot not found: {snap}")
     with open(snap) as f:
@@ -305,7 +307,7 @@ def main(argv=None):
     t_all = time.time()
     for i, spec in specs_to_run:
         try:
-            process_spec(spec, switch, args.output_dir)
+            process_spec(spec, switch, args.run_dir)
         except Exception as e:
             print(f"  [spec {i}] FAILED: {type(e).__name__}: {e}")
             raise

@@ -84,20 +84,23 @@ downstream consumers (ReEDS, LBL, and an Intermediate publishing/debugging view)
       everything below is automatic; outputs land in <output_dir>/
 ```
 
-After the chain completes, the run_dir holds:
+After the chain completes, the run_dir (= `<output_dir>/<run_name>/`) holds:
 
 ```
-<output_dir>/
-├── chunks_reg_b2018/                 — per-chunk regressed timeseries (D outputs)
-├── chunks_meta_b2018/                — per-chunk metadata
-├── agg_<stock>_eulp_<enduse>_GWh_upgrade<tag>.csv     — county-level annual hourly CSVs (F output)
-├── aux_coverage_upgrade<tag>.csv     — cohort sizes per state, used by projection
-├── aux_samples_upgrade<tag>.csv      — sampled bldg_ids per cohort, used by LBL
-├── projections_state/                — per-component CSVs at state resolution (G)
-├── projections_county_group/         — per-component CSVs at 1,038 county-group resolution (G)
-├── ReEDs/                            — 24 files: wide-format MWh, lowercase state names (handoff)
-├── LBL/                              — 156 files: long-format kWh county-group timeseries + samples
-└── intermediate/{state, county_group}/  — symlinks: per-component, relabeled with sector/cohort/enduse
+<output_dir>/                                       — base outputs (from switches)
+├── county_parquet_cache/             — S3 building-parquet cache (shared across runs)
+├── gap_model_cache/                  — per-county ComStock gap CSVs (shared across runs)
+└── <run_name>/                       — this run's directory
+    ├── chunks_reg_b2018/             — per-chunk regressed timeseries (D outputs)
+    ├── chunks_meta_b2018/            — per-chunk metadata
+    ├── agg_<stock>_eulp_<enduse>_GWh_upgrade<tag>.csv — county-level annual hourly CSVs (F)
+    ├── aux_coverage_upgrade<tag>.csv — cohort sizes per state, used by projection
+    ├── aux_samples_upgrade<tag>.csv  — sampled bldg_ids per cohort, used by LBL
+    ├── projections_state/            — per-component CSVs at state resolution (G)
+    ├── projections_county_group/     — per-component CSVs at 1,038 county-group resolution (G)
+    ├── ReEDs/                        — 24 files: wide-format MWh, lowercase state names (handoff)
+    ├── LBL/                          — 156 files: long-format kWh county-group timeseries + samples
+    └── intermediate/{state, county_group}/  — symlinks: per-component, relabeled sector/cohort/enduse
 ```
 
 Two additional handoffs live at the repo root (not the run_dir) because they are
@@ -501,9 +504,9 @@ On Kestrel this is already set to `/projects/geohc/EPW/epw_symlinks`.
 
 Per the **Pipeline at a glance** layout above. Most-asked questions:
 
-* **Where are the per-county hourly aggregates?** `<output_dir>/agg_<stock>_eulp_<enduse>_GWh_upgrade<tag>.csv` — one file per (enduse, spec). Index is `timestamp_EST`, columns are county FIPS.
-* **Where are the per-stock-year projections?** `<output_dir>/projections_state/proj_<stock>_<scenario>_<group>_<enduse>_GWh_y<year>.csv` (or `projections_county_group/` for finer geography). Wide format.
-* **Where are the handoff files I send to a stakeholder?** The three folders directly under `<output_dir>/`: `ReEDs/`, `LBL/`, `intermediate/`. The naming, units, and shape of each is described in **Handoffs** above. Two additional run-independent handoffs live at the repo root: `growth_factors.csv` (+ `growth_factors_denominators.csv`) and `plots/dashboard.html`.
+* **Where are the per-county hourly aggregates?** `<output_dir>/<run_name>/agg_<stock>_eulp_<enduse>_GWh_upgrade<tag>.csv` — one file per (enduse, spec). Index is `timestamp_EST`, columns are county FIPS.
+* **Where are the per-stock-year projections?** `<output_dir>/<run_name>/projections_state/proj_<stock>_<scenario>_<group>_<enduse>_GWh_y<year>.csv` (or `projections_county_group/` for finer geography). Wide format.
+* **Where are the handoff files I send to a stakeholder?** The three folders directly under `<output_dir>/<run_name>/`: `ReEDs/`, `LBL/`, `intermediate/`. The naming, units, and shape of each is described in **Handoffs** above. Two additional run-independent handoffs live at the repo root: `growth_factors.csv` (+ `growth_factors_denominators.csv`) and `plots/dashboard.html`.
 * **Why didn't the pipeline run end-to-end?** Check `<output_dir>/slurm-out/` and the launcher's `slurm-res_building_stock_parallel_*.out`. The `--dependency=afterok` chain short-circuits on any failure, so downstream stages will simply show `Dependency` as their reason until the upstream stage is fixed and the chain rebuilt.
 
 ---

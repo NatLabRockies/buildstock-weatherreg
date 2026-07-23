@@ -580,8 +580,9 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument('run_dir', help='Run output directory (agg + aux + '
-                                    'inputs/switches_agg.json).')
+    ap.add_argument('run_dir', help='Per-run output directory (agg + aux + '
+                                    'inputs/switches_agg.json). Equal to '
+                                    '<switches.output_dir>/<switches.run_name>.')
     ap.add_argument('--stock', choices=('res', 'com'), default=None,
                     help='Override stock (default: inferred from switches `comstock`).')
     ap.add_argument('--workers', type=int, default=None,
