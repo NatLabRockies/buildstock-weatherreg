@@ -7,22 +7,28 @@
 #SBATCH --job-name=dash_build
 #SBATCH --output=slurm-%x_%j.out
 
-# Build the BuildStock projection dashboard's data payload from one res run_dir
-# + one com run_dir. Writes:
-#   plots/data/main.js      ~55 MB   (CONUS payload, eager load)
-#   plots/data/state_*.js   ~10 MB × 49 (per-state, lazy-loaded on click)
+# Build the BuildStock projection dashboard from one res run_dir + one com
+# run_dir. Produces a self-contained dashboard directory OUTSIDE the code repo:
 #
-# The dashboard itself is `plots/dashboard.html` — committed to git, edit
-# directly. It references data/main.js via <script src>. After this build,
-# refresh the browser to pick up new data.
+#   <dashboard_dir>/dashboard.html            (copied from plots/)
+#   <dashboard_dir>/plotly-*.min.js           (copied from plots/)
+#   <dashboard_dir>/data/main.js              ~55 MB (CONUS payload)
+#   <dashboard_dir>/data/state_*.js           ~10 MB × 49 (per-state, lazy)
+#
+# The whole directory is portable — zip it, share it, or serve it directly
+# with `serve_dashboard.sh <dashboard_dir>`.
+#
+# <dashboard_dir> defaults to `<parent(res_run_dir)>/dashboard/`; override
+# with the optional third arg.
 #
 # Usage:
-#   sbatch plots/I_build_dashboard.sh <res_run_dir> <com_run_dir>
+#   sbatch plots/I_build_dashboard.sh <res_run_dir> <com_run_dir> [<dashboard_dir>]
 
 set -euo pipefail
 
 res_run_dir="${1:?missing res_run_dir as first arg}"
 com_run_dir="${2:?missing com_run_dir as second arg}"
+dashboard_dir="${3:-$(dirname "$res_run_dir")/dashboard}"
 
 # SLURM runs the staged script from /var/spool/slurmd, so $0 isn't usable to
 # locate the repo. $SLURM_SUBMIT_DIR is the directory `sbatch` was invoked
@@ -32,6 +38,9 @@ export PATH="$HOME/.local/bin:$PATH"
 
 # Tell aggregate.py how many processes it can use.
 export DASHBOARD_BUILD_WORKERS="${SLURM_CPUS_PER_TASK:-16}"
+
+# Tests read this to locate the built payload (see plots/tests/conftest.py).
+export DASHBOARD_DIR="$dashboard_dir"
 
 # Pin polars to one thread per process. Without this, the parent's polars
 # (used by the 2018-baseline path) spawns ~104 threads on a typical node,
@@ -50,17 +59,27 @@ export NUMEXPR_NUM_THREADS=1
 
 echo "res:        $res_run_dir"
 echo "com:        $com_run_dir"
+echo "dashboard:  $dashboard_dir"
 echo "workers:    $DASHBOARD_BUILD_WORKERS"
 echo "slurm node: ${SLURMD_NODENAME:-unknown}"
 echo
 
+# Stage the static files (dashboard.html + vendored plotly bundle) so the
+# built dashboard directory is self-contained: `python -m http.server
+# --directory <dashboard_dir>` alone is enough to view it.
+mkdir -p "$dashboard_dir/data"
+cp plots/dashboard.html "$dashboard_dir/"
+cp plots/plotly-*.min.js "$dashboard_dir/"
+
+# Aggregate the payload into <dashboard_dir>/data/{main.js, state_*.js}.
 uv run python -u plots/aggregate.py \
     --res-run-dir "$res_run_dir" \
-    --com-run-dir "$com_run_dir"
+    --com-run-dir "$com_run_dir" \
+    --out-dir "$dashboard_dir/data"
 
 # After build: run dashboard payload tests. Catches schema regressions
 # (e.g. peak_gw shape change) + cross-source disagreements before they
-# reach the user. Tests load plots/data/main.js + a few state sidecars.
+# reach the user. Tests load $DASHBOARD_DIR/data/main.js + a few sidecars.
 echo
 echo "=== running dashboard payload tests ==="
 uv run pytest plots/tests/ -v

@@ -113,14 +113,17 @@ After the chain completes, the run_dir (= `<output_dir>/<run_name>/`) holds:
     └── intermediate/{state, county_group}/  — symlinks: per-component, relabeled sector/cohort/enduse
 ```
 
-Two additional handoffs live at the repo root (not the run_dir) because they are
-run-independent:
+One handoff lives at the repo root because it's run-independent:
 
 * `growth_factors.csv` / `growth_factors_denominators.csv` — self-describing AEO
   cohort split + factor tables the projection multiplies loads by. Regenerated
   by `python -m projections.growth_factors`; shareable as a stand-alone artifact.
-* `plots/dashboard.html` + `plots/data/main.js` — self-contained dashboard built
-  from the intermediate/state handoff; see **[Dashboard](#dashboard)** below.
+
+One handoff lives at `<output_dir>/dashboard/` (built from a (res, com) pair):
+
+* Self-contained dashboard directory — `dashboard.html`, the vendored plotly
+  bundle, and `data/main.js` + per-state sidecars. Portable; zip it and share.
+  See **[Dashboard](#dashboard)** below.
 
 ---
 
@@ -342,10 +345,11 @@ follows its own spec image:
 
 ## Dashboard
 
-`plots/dashboard.html` is a self-contained regression + projection dashboard —
-one HTML file plus a pre-built `plots/data/main.js` payload plus per-state
-sidecars under `plots/data/states/`. No server required after the payload is
-built; open `dashboard.html` locally or serve it over an SSH tunnel with
+`plots/dashboard.html` is the source of a self-contained regression + projection
+dashboard. The build script copies it (and the vendored plotly bundle) alongside
+the generated `data/*.js` files into a portable dashboard directory that lives
+under `<output_dir>/dashboard/`, so the built artifact is entirely outside the
+code repo. Zip it, share it, or serve it over an SSH tunnel with
 `serve_dashboard.sh`.
 
 ### Four panels
@@ -367,13 +371,20 @@ built; open `dashboard.html` locally or serve it over an SSH tunnel with
 * **Peak week (bottom-right)** — ±3-day hourly window around the summer or
   winter peak day, stacked by the same 19 layers.
 
-### Building the payload
+### Building the dashboard
 
 ```bash
 # after a full pipeline run has landed intermediate/state under both res + com run_dirs
 sbatch plots/I_build_dashboard.sh <res_run_dir> <com_run_dir>
-# → writes plots/data/main.js (~150 MB) + plots/data/states/<postal>.js sidecars
-# → runs plots/tests/ (payload schema + reconciliation + Playwright UI)
+# → default output dir: <parent(res_run_dir)>/dashboard/
+#     dashboard.html                (copied from plots/)
+#     plotly-*.min.js               (copied from plots/)
+#     data/main.js                  ~150 MB CONUS payload
+#     data/state_<postal>.js × 49   per-state sidecars, lazy-loaded on click
+# → also runs plots/tests/ (payload schema + reconciliation + Playwright UI)
+#
+# Pass an explicit third arg to override the destination:
+#   sbatch plots/I_build_dashboard.sh <res> <com> /custom/dashboard/path
 ```
 
 The build step also runs the test suite: payload schema invariants,
@@ -384,7 +395,12 @@ browser-driven UI tests against the rendered dashboard.
 ### Serving
 
 ```bash
+# Pass the dashboard directory as the second arg:
+./serve_dashboard.sh start <parent(res_run_dir)>/dashboard/
+# or export it once:
+export DASHBOARD_DIR=<parent(res_run_dir)>/dashboard/
 ./serve_dashboard.sh start
+
 # then from your laptop:
 ssh -N -L 8787:localhost:8787 <user>@kestrel.hpc.nlr.gov
 # open http://localhost:8787/dashboard.html
@@ -404,7 +420,7 @@ sbatch H_run_lbl.sh                <run_dir>
 
 # Regenerate the run-independent handoffs:
 python -m projections.growth_factors    # writes growth_factors*.csv at repo root
-sbatch plots/I_build_dashboard.sh <res_run_dir> <com_run_dir>   # writes plots/data/main.js
+sbatch plots/I_build_dashboard.sh <res_run_dir> <com_run_dir>   # writes to <parent(res_run_dir)>/dashboard/
 
 # Re-run E (auxiliary BSQ pulls) — the aux_coverage / aux_samples files
 # G and H consume. Cheap; safe to rerun any time.

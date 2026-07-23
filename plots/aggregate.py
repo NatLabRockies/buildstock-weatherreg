@@ -4,13 +4,15 @@ Reads one folder (`intermediate/state/`) from a ResStock run_dir and a ComStock
 run_dir, pre-aggregates everything to the smallest shapes the dashboard needs,
 and writes:
 
-  plots/data/main.js           ~55 MB   (CONUS payload — sets window.PAYLOAD)
-  plots/data/state_<postal>.js ~10 MB × 49  (per-state — lazy-loaded via
+  <out_dir>/main.js           ~55 MB   (CONUS payload — sets window.PAYLOAD)
+  <out_dir>/state_<postal>.js ~10 MB × 49  (per-state — lazy-loaded via
                                             <script> injection on click)
 
 The dashboard itself is `plots/dashboard.html` (tracked in git, edit
-directly). It references `data/main.js` via <script src>. After this
-script writes new data/, refresh the browser to pick it up.
+directly). The SLURM wrapper `plots/I_build_dashboard.sh` copies
+dashboard.html + the vendored plotly bundle alongside <out_dir>/'s parent
+so `<parent>/dashboard.html` can `<script src="data/main.js">` correctly.
+After a rebuild, refresh the browser to pick up new data.
 
 Re-run aggregate.py only when the source run_dirs change. Edit
 dashboard.html directly to iterate on plot design — no build step.
@@ -89,13 +91,17 @@ E. Axis pin maxes  (cheap, in build_payload)
 CLI
 ===
   # run_dir = <switches.output_dir>/<switches.run_name>, i.e. what B writes to.
+  # Standard invocation goes through plots/I_build_dashboard.sh which sets
+  # --out-dir to <parent(res_run_dir)>/dashboard/data/ and stages the HTML
+  # + plotly bundle alongside. Called directly:
   uv run python plots/aggregate.py \\
       --res-run-dir <res_output_dir>/<res_run_name> \\
-      --com-run-dir <com_output_dir>/<com_run_name>
-  # output: plots/data/main.js  +  plots/data/state_<postal>.js (×49)
+      --com-run-dir <com_output_dir>/<com_run_name> \\
+      --out-dir    <output_dir>/dashboard/data
 
-  # No build step: plots/dashboard.html loads data/main.js directly.
-  # Refresh the browser (hard-refresh to bust cache) to pick up new data.
+  # No build step for the HTML: plots/dashboard.html loads data/main.js
+  # directly. Refresh the browser (hard-refresh to bust cache) to pick up
+  # new data.
 """
 
 from __future__ import annotations
@@ -1094,9 +1100,12 @@ def main() -> None:
                     help='ResStock run dir containing intermediate/state/.')
     ap.add_argument('--com-run-dir', type=Path, required=True,
                     help='ComStock run dir containing intermediate/state/.')
-    ap.add_argument('--out-dir', type=Path, default=Path(__file__).parent / 'data',
+    ap.add_argument('--out-dir', type=Path, required=True,
                     help='Output dir for main.js + state_<postal>.js sidecars '
-                         '(default: plots/data/).')
+                         '(typically <output_dir>/dashboard/data/, alongside '
+                         'a copy of dashboard.html + plotly-*.min.js). '
+                         'plots/I_build_dashboard.sh sets this to '
+                         '<parent(res_run_dir)>/dashboard/data/.')
     args = ap.parse_args()
 
     _log(f'aggregate.py — WORKERS={WORKERS} (env DASHBOARD_BUILD_WORKERS={os.environ.get("DASHBOARD_BUILD_WORKERS","unset")}, cpu_count={os.cpu_count()})')

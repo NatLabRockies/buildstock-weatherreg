@@ -20,6 +20,7 @@ slow part; subsequent tests reuse the loaded page).
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -27,8 +28,12 @@ import pytest
 playwright = pytest.importorskip("playwright.sync_api")
 from playwright.sync_api import Page, sync_playwright  # noqa: E402
 
-DASHBOARD = Path(__file__).resolve().parent.parent / "dashboard.html"
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+# I_build_dashboard.sh exports $DASHBOARD_DIR to the built directory
+# (containing dashboard.html, plotly-*.min.js, and data/*.js). Skip
+# gracefully if it's not set.
+_DASHBOARD_DIR = Path(os.environ["DASHBOARD_DIR"]) if os.environ.get("DASHBOARD_DIR") else None
+DASHBOARD = _DASHBOARD_DIR / "dashboard.html" if _DASHBOARD_DIR else None
+DATA_DIR = _DASHBOARD_DIR / "data" if _DASHBOARD_DIR else None
 
 # A few representative states for the click-a-state test. TX is summer-
 # peaking; ME winter-peaking — both exercise the seasonal code paths.
@@ -37,10 +42,10 @@ STATES_TO_CLICK = ["TX", "ME"]
 
 @pytest.fixture(scope="session")
 def browser_session():
+    if _DASHBOARD_DIR is None:
+        pytest.skip("$DASHBOARD_DIR not set — run `sbatch plots/I_build_dashboard.sh <res> <com>` first")
     if not DASHBOARD.exists() or not (DATA_DIR / "main.js").exists():
-        pytest.skip(
-            "dashboard.html or data/ not found — run `sbatch plots/I_build_dashboard.sh` first"
-        )
+        pytest.skip(f"dashboard.html or data/ not found under {_DASHBOARD_DIR}")
     with sync_playwright() as p:
         browser = p.chromium.launch()
         yield browser
