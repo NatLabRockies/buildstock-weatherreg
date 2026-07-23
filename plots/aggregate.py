@@ -113,7 +113,7 @@ import numpy as np
 import pandas as pd
 
 # Repo root on sys.path so we can `from projections.X import Y`. The dashboard
-# bake is launched as `python plots/aggregate.py`, which puts plots/ (not the
+# build is launched as `python plots/aggregate.py`, which puts plots/ (not the
 # repo root) first on sys.path — without this prepend the projections package
 # imports below fail with ModuleNotFoundError.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -164,7 +164,7 @@ _INTERMEDIATE_FILE_RE = re.compile(
 # Process worker cap. ProcessPoolExecutor for guaranteed parallelism — pandas'
 # GIL release is inconsistent across read / groupby / dict-build, so threads
 # can stall. On Linux fork() is COW so passing the path dicts per task is cheap.
-WORKERS: int = max(1, min(16, int(os.environ.get('BAKE_WORKERS', os.cpu_count() or 4)) - 1))
+WORKERS: int = max(1, min(16, int(os.environ.get('DASHBOARD_BUILD_WORKERS', os.cpu_count() or 4)) - 1))
 
 
 # === File-system catalogers ===============================================
@@ -945,8 +945,8 @@ def _gather_aux_files(intermediate_state_dir: Path,
                       expect_sector: str) -> dict[tuple[str, int, str], Path]:
     """Return {(scenario, year, cohort): path} for every aux file at
     intermediate/state/ matching the given sector. Tolerates a missing dir
-    (returns empty) so the bake doesn't fail when projection hasn't been
-    run with aux output yet."""
+    (returns empty) so the dashboard build doesn't fail when projection
+    hasn't been run with aux output yet."""
     out: dict[tuple[str, int, str], Path] = {}
     if not intermediate_state_dir.is_dir():
         return out
@@ -1099,7 +1099,7 @@ def main() -> None:
                          '(default: plots/data/).')
     args = ap.parse_args()
 
-    _log(f'aggregate.py — WORKERS={WORKERS} (env BAKE_WORKERS={os.environ.get("BAKE_WORKERS","unset")}, cpu_count={os.cpu_count()})')
+    _log(f'aggregate.py — WORKERS={WORKERS} (env DASHBOARD_BUILD_WORKERS={os.environ.get("DASHBOARD_BUILD_WORKERS","unset")}, cpu_count={os.cpu_count()})')
     _log(f'  res_run_dir: {args.res_run_dir}')
     _log(f'  com_run_dir: {args.com_run_dir}')
 

@@ -119,7 +119,7 @@ run-independent:
 * `growth_factors.csv` / `growth_factors_denominators.csv` — self-describing AEO
   cohort split + factor tables the projection multiplies loads by. Regenerated
   by `python -m projections.growth_factors`; shareable as a stand-alone artifact.
-* `plots/dashboard.html` + `plots/data/main.js` — self-contained dashboard baked
+* `plots/dashboard.html` + `plots/data/main.js` — self-contained dashboard built
   from the intermediate/state handoff; see **[Dashboard](#dashboard)** below.
 
 ---
@@ -343,9 +343,10 @@ follows its own spec image:
 ## Dashboard
 
 `plots/dashboard.html` is a self-contained regression + projection dashboard —
-one HTML file plus a baked `plots/data/main.js` payload plus per-state sidecars
-under `plots/data/states/`. No server required after the payload is baked; open
-`dashboard.html` locally or serve it over an SSH tunnel with `serve_dashboard.sh`.
+one HTML file plus a pre-built `plots/data/main.js` payload plus per-state
+sidecars under `plots/data/states/`. No server required after the payload is
+built; open `dashboard.html` locally or serve it over an SSH tunnel with
+`serve_dashboard.sh`.
 
 ### Four panels
 
@@ -366,19 +367,19 @@ under `plots/data/states/`. No server required after the payload is baked; open
 * **Peak week (bottom-right)** — ±3-day hourly window around the summer or
   winter peak day, stacked by the same 19 layers.
 
-### Baking the payload
+### Building the payload
 
 ```bash
 # after a full pipeline run has landed intermediate/state under both res + com run_dirs
-sbatch plots/I_run_bake.sh <res_run_dir> <com_run_dir>
+sbatch plots/I_build_dashboard.sh <res_run_dir> <com_run_dir>
 # → writes plots/data/main.js (~150 MB) + plots/data/states/<postal>.js sidecars
 # → runs plots/tests/ (payload schema + reconciliation + Playwright UI)
 ```
 
-The bake also runs the test suite: payload schema invariants, cross-source
-reconciliation (per-cohort leaves sum to sector totals, coincident-peak
-decomposition sums exactly to the annual peak, etc.), and browser-driven UI
-tests against the rendered dashboard.
+The build step also runs the test suite: payload schema invariants,
+cross-source reconciliation (per-cohort leaves sum to sector totals,
+coincident-peak decomposition sums exactly to the annual peak, etc.), and
+browser-driven UI tests against the rendered dashboard.
 
 ### Serving
 
@@ -403,7 +404,7 @@ sbatch H_run_lbl.sh                <run_dir>
 
 # Regenerate the run-independent handoffs:
 python -m projections.growth_factors    # writes growth_factors*.csv at repo root
-sbatch plots/I_run_bake.sh <res_run_dir> <com_run_dir>   # writes plots/data/main.js
+sbatch plots/I_build_dashboard.sh <res_run_dir> <com_run_dir>   # writes plots/data/main.js
 
 # Re-run E (auxiliary BSQ pulls) — the aux_coverage / aux_samples files
 # G and H consume. Cheap; safe to rerun any time.

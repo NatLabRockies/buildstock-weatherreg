@@ -1,9 +1,9 @@
 """Fixtures: parse JSON out of the dashboard's JS payload files.
 
-Tests run against the live data/ produced by `sbatch plots/I_run_bake.sh`.
-If data/ is missing, every test in this folder skips with a clear message
-rather than failing — keeps `pytest plots/tests/` from breaking CI on
-fresh clones.
+Tests run against the live data/ produced by
+`sbatch plots/I_build_dashboard.sh`. If data/ is missing, every test in
+this folder skips with a clear message rather than failing — keeps
+`pytest plots/tests/` from breaking CI on fresh clones.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def payload():
     main_js = DATA_DIR / "main.js"
     if not main_js.exists():
         pytest.skip(
-            f"{main_js} not found — run `sbatch plots/I_run_bake.sh <res> <com>` first"
+            f"{main_js} not found — run `sbatch plots/I_build_dashboard.sh <res> <com>` first"
         )
     return _extract_json(main_js, r"window\.PAYLOAD")
 
@@ -42,7 +42,7 @@ def state_sidecar(request):
     postal = request.param
     side = DATA_DIR / f"state_{postal}.js"
     if not side.exists():
-        pytest.skip(f"{side} not found — run the bake first")
+        pytest.skip(f"{side} not found — build the dashboard payload first")
     data = _extract_json(side, rf'window\.STATE_DATA\["{postal}"\]')
     return postal, data
 

@@ -39,7 +39,7 @@ STATES_TO_CLICK = ["TX", "ME"]
 def browser_session():
     if not DASHBOARD.exists() or not (DATA_DIR / "main.js").exists():
         pytest.skip(
-            "dashboard.html or data/ not found — run `sbatch plots/I_run_bake.sh` first"
+            "dashboard.html or data/ not found — run `sbatch plots/I_build_dashboard.sh` first"
         )
     with sync_playwright() as p:
         browser = p.chromium.launch()
