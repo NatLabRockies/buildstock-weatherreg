@@ -1,11 +1,11 @@
 # ResStock / ComStock Weather-Regression + Projection Pipeline
 
 End-to-end pipeline that pulls per-building EULP (End Use Load Profiles) from
-ResStock / ComStock on AWS, optionally weather-regresses them to multiple
-target years, optionally calibrates ResStock against ground-truth net
-electricity, aggregates to county-level CSVs, projects forward to future stock
+ResStock / ComStock on AWS, calibrates ResStock electricity using scaling factors
+obtained from ComStock gap modelling, weather-regresses them to multiple target years,
+aggregates to county-level CSVs (and also to state-level), projects forward to future stock
 years (2027–2050) across four adoption cohorts, and emits handoff folders for
-downstream consumers (ReEDS, LBL, and an Intermediate publishing/debugging view).
+downstream consumers (ReEDS, LBL for LODGE analysis, and an Intermediate publishing/debugging view).
 
 > **HPC-first.** Heavy compute (BSQ pulls, chunk processing, projection) runs on
 > SLURM. The login node is for orchestration only — a runaway login-node load
@@ -33,7 +33,9 @@ downstream consumers (ReEDS, LBL, and an Intermediate publishing/debugging view)
     ║  uv run B_*.py             ║    • computes county chunks (bin-packed by weather_loc)
     ║                            ║    • submits C array (chunk pulls + per-county processing)
     ║                            ║    • submits F (chunk aggregation), depends afterok on C
-    ║                            ║  at the end, submits Z, depends afterok on every F.
+    ║                            ║  once all specs are dispatched:
+    ║                            ║    • submits E (aux BSQ query, parallel with C/F)
+    ║                            ║    • submits Z, depends afterok on every F and E.
     ╚════════════════════════════╝
           │
           ▼
@@ -61,7 +63,15 @@ downstream consumers (ReEDS, LBL, and an Intermediate publishing/debugging view)
   │     `adjustment_factor` set; see "Calibration" below.             │
   └───────────────────────────────────────────────────────────────────┘
           │
-          │  every F has completed
+          │  (in parallel with the per-spec box above)
+          ▼
+    ╔════════════════════════════╗
+    ║  E_run_aux.sh              ║  auxiliary BSQ pulls per baseline spec:
+    ║  → E_aux_query.py          ║    aux_coverage_upgrade<tag>.csv (cohort sizes)
+    ║  (single job, ~4 workers)  ║    aux_samples_upgrade<tag>.csv  (cohort samples)
+    ╚════════════════════════════╝  read by G/H (projection + LBL).
+          │
+          │  every F has completed AND E has completed
           ▼
     ╔════════════════════════════╗
     ║  Z_post_pipeline.sh        ║  meta-launcher; submits four jobs with
@@ -153,10 +163,10 @@ projections.
 | B | `B_building_stock_parallel_agg.py` | Python orchestrator | For each spec: bin-pack chunks, submit C array, submit F (depends C), accumulate F IDs, finally submit Z |
 | C | `C_run_bldg_chunk_agg.sh` | SLURM array task | Runs `D_process_chunk_agg.py` with the chunk's start/end indices |
 | D | `D_process_chunk_agg.py` | Python worker | BSQ Athena pull, **apply calibration factors if set**, RF / NN regression, write chunk CSV |
-| E | `E_aux_query.py` | Python | Auxiliary BSQ pulls — populates `aux_coverage_*.csv` (cohort sizes) and `aux_samples_*.csv` (per-cohort bldg_ids + per-building sqft + weights) |
+| E | `E_run_aux.sh` / `E_aux_query.py` | SLURM wrapper / Python | Submitted by B in parallel with C/F. Auxiliary BSQ pulls per baseline spec — populates `aux_coverage_*.csv` (cohort sizes) and `aux_samples_*.csv` (per-cohort bldg_ids + per-building sqft + weights). G and H read these. |
 | F | `F_aggregate_chunks.sh` | SLURM job | Runs `agg_buildings.py` per spec — stitches per-chunk CSVs into 4 per-enduse aggregates |
-| Z | `Z_post_pipeline.sh` | SLURM meta-launcher | When every F completes: submits G×2 projections + handoff_light + H_run_lbl |
-| G | `G_run_projection.sh` | SLURM wrapper | Runs `python -m projections <run_dir> --resolution {state\|county\|county_group}` |
+| Z | `Z_post_pipeline.sh` | SLURM meta-launcher | When every F AND E completes: submits G×2 projections + handoff_light + H_run_lbl |
+| G | `G_run_projection.sh` | SLURM wrapper | Runs `python -m projections <run_dir> --resolution <state\|county\|county_group>`. Positional args: `<run_dir> [<stock>] [<resolution>]`. |
 | H | `H_run_lbl.sh` | SLURM wrapper | Runs `python -m projections.lbl <run_dir>` (parallel ProcessPool) |
 | — | `projections/` | package | Future-year projections + ReEDs / LBL / intermediate handoff modules (see below) |
 | — | `agg_buildings.py` | Python | Stitches per-chunk hourly CSVs into one per-enduse CSV at county resolution |
@@ -395,13 +405,17 @@ sbatch H_run_lbl.sh                <run_dir>
 python -m projections.growth_factors    # writes growth_factors*.csv at repo root
 sbatch plots/I_run_bake.sh <res_run_dir> <com_run_dir>   # writes plots/data/main.js
 
+# Re-run E (auxiliary BSQ pulls) — the aux_coverage / aux_samples files
+# G and H consume. Cheap; safe to rerun any time.
+sbatch E_run_aux.sh <run_dir>
+
 # Re-project at a different resolution:
-sbatch G_run_projection.sh <run_dir> res county_group
+sbatch G_run_projection.sh <run_dir> <res|com> county_group
 
 # Re-run a single failed chunk (slurm-*.out for the failed task prints the exact command):
 sbatch --job-name=res_chunk_<tag> --array=<idx> ./C_run_bldg_chunk_agg.sh <manifest> <meta> <upg> res_ <out> <repo> <spec_idx>
 
-# Re-run only Z (skip B/C/D/F entirely; useful if F's done but Z didn't fire):
+# Re-run only Z (skip B/C/D/E/F entirely; useful if all upstream's done but Z didn't fire):
 sbatch Z_post_pipeline.sh <run_dir> <res|com>
 ```
 
@@ -479,8 +493,10 @@ Edit one of the four templates at the repo root (or copy one to a new name):
 |---|---|---|---|
 | `switches_agg_resstock.json` | ResStock | cross-validation | on (per-state hourly) |
 | `switches_agg_comstock.json` | ComStock | cross-validation | n/a |
-| `switches_agg_resstock_2018.json` | ResStock | off (base year only) | on |
-| `switches_agg_comstock_2018.json` | ComStock | off (base year only) | n/a |
+| `switches_agg_resstock_2018.json` | ResStock | off (2018 base only) | on |
+| `switches_agg_comstock_2018.json` | ComStock | off (2018 base only) | n/a |
+| `switches_agg_resstock_2012.json` | ResStock | off (2012 base only) | on |
+| `switches_agg_comstock_2012.json` | ComStock | off (2012 base only) | n/a |
 
 Bump `run_name` to a fresh label, adjust `run_specs` and `scenario_names` to
 match what you want to produce, and submit via the entry point at the top of
@@ -507,7 +523,7 @@ Per the **Pipeline at a glance** layout above. Most-asked questions:
 * **Where are the per-county hourly aggregates?** `<output_dir>/<run_name>/agg_<stock>_eulp_<enduse>_GWh_upgrade<tag>.csv` — one file per (enduse, spec). Index is `timestamp_EST`, columns are county FIPS.
 * **Where are the per-stock-year projections?** `<output_dir>/<run_name>/projections_state/proj_<stock>_<scenario>_<group>_<enduse>_GWh_y<year>.csv` (or `projections_county_group/` for finer geography). Wide format.
 * **Where are the handoff files I send to a stakeholder?** The three folders directly under `<output_dir>/<run_name>/`: `ReEDs/`, `LBL/`, `intermediate/`. The naming, units, and shape of each is described in **Handoffs** above. Two additional run-independent handoffs live at the repo root: `growth_factors.csv` (+ `growth_factors_denominators.csv`) and `plots/dashboard.html`.
-* **Why didn't the pipeline run end-to-end?** Check `<output_dir>/slurm-out/` and the launcher's `slurm-res_building_stock_parallel_*.out`. The `--dependency=afterok` chain short-circuits on any failure, so downstream stages will simply show `Dependency` as their reason until the upstream stage is fixed and the chain rebuilt.
+* **Why didn't the pipeline run end-to-end?** Check `<output_dir>/<run_name>/slurm-out/` and the launcher's `slurm-res_building_stock_parallel_*.out` (in the repo root, where you invoked `sbatch`). The `--dependency=afterok` chain short-circuits on any failure, so downstream stages will simply show `Dependency` as their reason until the upstream stage is fixed and the chain rebuilt.
 
 ---
 
