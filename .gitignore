@@ -1,8 +1,18 @@
 # Ignore outputs folders
 outputs_*/
 outputs/
+inputs/
 .DS_Store
 
 # Ignore temp files starting with ~$ or .~ (common for Microsoft Office temp files)
 ~$*
 .~*
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+slurm-*.out
+.bsq_cache
+.claude
+validation_outputs*/
