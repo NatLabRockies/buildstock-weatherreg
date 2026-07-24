@@ -1114,6 +1114,11 @@ def main() -> None:
                          'a copy of dashboard.html + plotly-*.min.js). '
                          'plots/I_build_dashboard.sh sets this to '
                          '<parent(res_run_dir)>/dashboard/data/.')
+    ap.add_argument('--csv-dir', type=Path, default=None,
+                    help='Long-format CSV archive of the same data — for '
+                         'future dashboard iteration / ad-hoc analysis. '
+                         'Not loaded by the dashboard. Defaults to '
+                         '<out_dir>/../csv/ (i.e. <dashboard_dir>/csv/).')
     args = ap.parse_args()
 
     _log(f'aggregate.py — WORKERS={WORKERS} (env DASHBOARD_BUILD_WORKERS={os.environ.get("DASHBOARD_BUILD_WORKERS","unset")}, cpu_count={os.cpu_count()})')
@@ -1156,6 +1161,13 @@ def main() -> None:
         total_state_bytes += st_bytes
     _log(f'  state_*.js total → {total_state_bytes/1e6:.2f} MB across {len(per_state)} files'
          f' ({total_state_bytes/max(len(per_state),1)/1e6:.2f} MB avg)')
+
+    # csv/ archive — long-format CSVs of the same data for future dashboard
+    # iteration. Not loaded by the dashboard; a static-hosted deploy usually
+    # only ships dashboard.html + plotly/pako + data/, not csv/.
+    csv_dir = args.csv_dir if args.csv_dir else args.out_dir.parent / 'csv'
+    _write_csv_archive(bundle['main'], csv_dir)
+
     _log('Done.')
 
 
@@ -1197,6 +1209,183 @@ def _write_compressed_js(payload_obj, out_path,
     )
     out_path.write_text(js)
     return out_path.stat().st_size
+
+
+def _write_csv_archive(payload: dict, csv_dir) -> None:
+    """Persist the CONUS-visible payload as long-format CSVs at `csv_dir/`.
+
+    Not loaded by the dashboard — this is the source-of-truth archive for
+    future dashboard iteration or ad-hoc analysis in pandas / duckdb / Excel.
+    All time-series parts (cohort_daily, peak week, hourly max/min) are
+    CONUS-only; per-state versions live in the state_<postal>.js sidecars.
+
+    File layout:
+      stock_counts.csv                            year, cohort, state, ...
+      state_by_sector_annual_gwh.csv              scenario, year, wy, key, state, gwh
+      state_by_sector_peak_gw.csv                 scenario, year, wy, key, state,
+                                                    annual_gw, summer_gw, winter_gw
+      state_by_sector_peak_contributions.csv      scenario, year, wy, state,
+                                                    leaf_key, gw
+      cohort_daily_conus.csv                      scenario, year, wy, date,
+                                                    key, gwh_per_day
+      cohort_hourly_maxmin_conus.csv              scenario, year, wy, date,
+                                                    total_max_gw, total_min_gw,
+                                                    com_max_gw, com_min_gw
+      panel3_peak_week_conus.csv                  scenario, year, wy, season,
+                                                    timestamp_EST, key, gw
+      metadata.json                               scenarios, stock_years,
+                                                    weather_years, stack_order,
+                                                    colors, axis pins, meta
+    """
+    from pathlib import Path
+    csv_dir = Path(csv_dir)
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    _log(f'Writing csv/ archive at {csv_dir}...')
+
+    # --- stock_counts.csv ---
+    rows = []
+    sc = payload.get('stock_counts', {})
+    for year, by_cohort in sc.get('residential_units', {}).items():
+        for cohort, by_state in by_cohort.items():
+            for state, v in by_state.items():
+                rows.append({'year': int(year), 'cohort': cohort, 'state': state,
+                             'residential_units_M': v})
+    ru_df = pd.DataFrame(rows)
+    rows = []
+    for year, by_cohort in sc.get('commercial_sqft', {}).items():
+        for cohort, by_state in by_cohort.items():
+            for state, v in by_state.items():
+                rows.append({'year': int(year), 'cohort': cohort, 'state': state,
+                             'commercial_sqft_B': v})
+    cs_df = pd.DataFrame(rows)
+    rows = []
+    for year, by_cohort in sc.get('residential_samples', {}).items():
+        for cohort, by_state in by_cohort.items():
+            for state, v in by_state.items():
+                rows.append({'year': int(year), 'cohort': cohort, 'state': state,
+                             'residential_samples': v})
+    rs_df = pd.DataFrame(rows)
+    rows = []
+    for year, by_cohort in sc.get('commercial_samples', {}).items():
+        for cohort, by_state in by_cohort.items():
+            for state, v in by_state.items():
+                rows.append({'year': int(year), 'cohort': cohort, 'state': state,
+                             'commercial_samples': v})
+    cs_samp_df = pd.DataFrame(rows)
+    merge_on = ['year', 'cohort', 'state']
+    out = ru_df.merge(cs_df, on=merge_on, how='outer') \
+               .merge(rs_df, on=merge_on, how='outer') \
+               .merge(cs_samp_df, on=merge_on, how='outer') \
+               .sort_values(merge_on)
+    out.to_csv(csv_dir / 'stock_counts.csv', index=False)
+
+    # --- state_by_sector_annual_gwh.csv ---
+    rows = []
+    for scen, by_year in payload['state_by_sector']['annual_gwh'].items():
+        for year, by_wy in by_year.items():
+            for wy, by_key in by_wy.items():
+                for key, by_state in by_key.items():
+                    for state, gwh in by_state.items():
+                        rows.append((scen, int(year), int(wy), key, state, gwh))
+    df = pd.DataFrame(rows, columns=['scenario', 'year', 'weather_year',
+                                     'key', 'state', 'gwh'])
+    df.to_csv(csv_dir / 'state_by_sector_annual_gwh.csv', index=False)
+
+    # --- state_by_sector_peak_gw.csv ---
+    # peak_gw values are {annual, summer, winter} dicts (or scalars for old
+    # payloads — tolerate both).
+    rows = []
+    for scen, by_year in payload['state_by_sector']['peak_gw'].items():
+        for year, by_wy in by_year.items():
+            for wy, by_key in by_wy.items():
+                for key, by_state in by_key.items():
+                    for state, v in by_state.items():
+                        if isinstance(v, dict):
+                            rows.append((scen, int(year), int(wy), key, state,
+                                         v.get('annual'), v.get('summer'),
+                                         v.get('winter')))
+                        else:
+                            rows.append((scen, int(year), int(wy), key, state,
+                                         v, None, None))
+    df = pd.DataFrame(rows, columns=['scenario', 'year', 'weather_year',
+                                     'key', 'state',
+                                     'annual_gw', 'summer_gw', 'winter_gw'])
+    df.to_csv(csv_dir / 'state_by_sector_peak_gw.csv', index=False)
+
+    # --- state_by_sector_peak_contributions.csv ---
+    rows = []
+    for scen, by_year in payload['state_by_sector']['peak_contributions'].items():
+        for year, by_wy in by_year.items():
+            for wy, by_state in by_wy.items():
+                for state, by_key in by_state.items():
+                    for key, gw in by_key.items():
+                        rows.append((scen, int(year), int(wy), state, key, gw))
+    df = pd.DataFrame(rows, columns=['scenario', 'year', 'weather_year',
+                                     'state', 'leaf_key', 'gw'])
+    df.to_csv(csv_dir / 'state_by_sector_peak_contributions.csv', index=False)
+
+    # --- cohort_daily_conus.csv ---
+    rows = []
+    for scen, by_year in payload.get('cohort_daily', {}).items():
+        for year, by_wy in by_year.items():
+            for wy, entry in by_wy.items():
+                dates = entry.get('dates', [])
+                for key, values in entry.get('cohorts', {}).items():
+                    for date, gwh in zip(dates, values):
+                        rows.append((scen, int(year), int(wy), date, key, gwh))
+    df = pd.DataFrame(rows, columns=['scenario', 'year', 'weather_year',
+                                     'date', 'key', 'gwh_per_day'])
+    df.to_csv(csv_dir / 'cohort_daily_conus.csv', index=False)
+
+    # --- cohort_hourly_maxmin_conus.csv ---
+    rows = []
+    for scen, by_year in payload.get('cohort_hourly_maxmin', {}).items():
+        for year, by_wy in by_year.items():
+            for wy, entry in by_wy.items():
+                dates = entry.get('dates', [])
+                series = entry.get('series', {})
+                tmax = series.get('total_max', [])
+                tmin = series.get('total_min', [])
+                cmax = series.get('com_max', [])
+                cmin = series.get('com_min', [])
+                for i, date in enumerate(dates):
+                    rows.append((scen, int(year), int(wy), date,
+                                 tmax[i] if i < len(tmax) else None,
+                                 tmin[i] if i < len(tmin) else None,
+                                 cmax[i] if i < len(cmax) else None,
+                                 cmin[i] if i < len(cmin) else None))
+    df = pd.DataFrame(rows, columns=['scenario', 'year', 'weather_year', 'date',
+                                     'total_max_gw', 'total_min_gw',
+                                     'com_max_gw', 'com_min_gw'])
+    df.to_csv(csv_dir / 'cohort_hourly_maxmin_conus.csv', index=False)
+
+    # --- panel3_peak_week_conus.csv ---
+    rows = []
+    for scen, by_year in payload.get('panel3', {}).items():
+        for year, by_wy in by_year.items():
+            for wy, by_season in by_wy.items():
+                for season, entry in by_season.items():
+                    timestamps = entry.get('timestamps', [])
+                    cohorts = entry.get('cohorts', {})
+                    for key, values in cohorts.items():
+                        for ts, gw in zip(timestamps, values):
+                            rows.append((scen, int(year), int(wy), season, ts,
+                                         key, gw))
+    df = pd.DataFrame(rows, columns=['scenario', 'year', 'weather_year', 'season',
+                                     'timestamp_EST', 'key', 'gw'])
+    df.to_csv(csv_dir / 'panel3_peak_week_conus.csv', index=False)
+
+    # --- metadata.json (all the small things) ---
+    meta = {k: payload[k] for k in
+            ('scenarios', 'stock_years', 'res_cohorts', 'com_cohorts',
+             'stack_order', 'colors', 'sectors', 'states', 'axis', 'meta')
+            if k in payload}
+    if 'panel1' in payload and 'weather_years' in payload['panel1']:
+        meta['weather_years'] = payload['panel1']['weather_years']
+    (csv_dir / 'metadata.json').write_text(json.dumps(meta, indent=2))
+
+    total_bytes = sum(p.stat().st_size for p in csv_dir.iterdir())
+    _log(f'  csv/ → {total_bytes/1e6:.1f} MB across {len(list(csv_dir.iterdir()))} files')
 
 
 if __name__ == '__main__':

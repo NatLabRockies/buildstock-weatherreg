@@ -382,6 +382,9 @@ sbatch plots/I_build_dashboard.sh <res_run_dir> <com_run_dir>
 #     pako-*.min.js                 (copied from plots/; sync gzip lib)
 #     data/main.js                  ~30 MB CONUS payload (gzipped+base64)
 #     data/state_<postal>.js × 49   ~2-4 MB per-state sidecars, lazy-loaded on click
+#     csv/*.csv                     long-format CSV archive — same data, for
+#                                   future dashboard iteration / ad-hoc analysis.
+#                                   NOT loaded by dashboard.html. See section below.
 # → also runs plots/tests/ (payload schema + reconciliation + Playwright UI)
 #
 # Pass an explicit third arg to override the destination:
@@ -392,6 +395,29 @@ The build step also runs the test suite: payload schema invariants,
 cross-source reconciliation (per-cohort leaves sum to sector totals,
 coincident-peak decomposition sums exactly to the annual peak, etc.), and
 browser-driven UI tests against the rendered dashboard.
+
+### CSV archive (`<dashboard_dir>/csv/`)
+
+Same data as the compressed `data/*.js` files, but in long-format CSV — meant
+as a source-of-truth archive for future dashboard iteration or ad-hoc analysis.
+Not loaded by the dashboard; a static-hosted deploy usually only ships
+`dashboard.html`, `plotly-*.min.js`, `pako-*.min.js`, and `data/`.
+
+| File | Columns | Notes |
+|---|---|---|
+| `stock_counts.csv` | year, cohort, state, residential_units_M, commercial_sqft_B, res_samples, com_samples | ~1,800 rows |
+| `state_by_sector_annual_gwh.csv` | scenario, year, weather_year, key, state, gwh | ~615k rows, ~30 MB. Every (scen, year, wy, one of 28 sector-key rollups + leaves, state) |
+| `state_by_sector_peak_gw.csv` | scenario, year, weather_year, key, state, annual_gw, summer_gw, winter_gw | ~615k rows, ~34 MB. Seasonal peak split for every rollup/leaf |
+| `state_by_sector_peak_contributions.csv` | scenario, year, weather_year, state, leaf_key, gw | ~410k rows, ~20 MB. Coincident decomposition at each state's own peak hour (CONUS at CONUS-total-peak) |
+| `cohort_daily_conus.csv` | scenario, year, weather_year, date, key, gwh_per_day | ~2.76M rows, ~183 MB. CONUS 365-day trace per (scen, year, wy, 19 leaf keys) |
+| `cohort_hourly_maxmin_conus.csv` | scenario, year, weather_year, date, total_max_gw, total_min_gw, com_max_gw, com_min_gw | ~130k rows, ~9 MB. Daily hourly-max & min of the Total and Com-Total composites |
+| `panel3_peak_week_conus.csv` | scenario, year, weather_year, season, timestamp_EST, key, gw | ~1.65M rows, ~183 MB. ±3-day windows around summer / winter peaks |
+| `metadata.json` | scenarios, stock_years, weather_years, stack_order, colors, sectors, axis pins, res_/com_run_dir | Small — everything not naturally tabular |
+
+Per-state cohort_daily / peak_week / hourly-max-min are NOT in the CSVs (they'd
+add ~50× to the file sizes). They stay in the `data/state_<postal>.js` sidecars —
+extract with the same pattern the browser uses: read the file, pull the `var b64`
+line, `base64.b64decode` → `gzip.decompress` → `json.loads`.
 
 ### Serving
 
