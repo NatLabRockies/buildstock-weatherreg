@@ -1,3 +1,13 @@
 # Ignore outputs folders
 outputs_*/
 outputs/
+inputs/
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+slurm-*.out
+.bsq_cache
+.claude
+validation_outputs*/

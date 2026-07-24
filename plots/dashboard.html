@@ -1,0 +1,1983 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BuildStock Projection Dashboard</title>
+<script src="plotly-3.0.1.min.js"></script>
+<!-- pako = sync gzip ungzip in the browser. main.js + state_*.js store the
+     payload as base64-encoded gzipped JSON to fit within GitHub-Pages-friendly
+     file sizes; pako inflates them at load time. -->
+<script src="pako-2.1.0.min.js"></script>
+<!-- Main payload (CONUS view). Per-state cohort + peak-week data is loaded
+     lazily from data/state_<postal>.js when the user picks a state. -->
+<script src="data/main.js"></script>
+<style>
+  :root {
+    --bg: #fafafa; --panel: #ffffff; --ink: #1c1c1e; --muted: #6b6b6f;
+    --border: #e5e5ea; --accent: #1c4f93; --pill-bg: #f1f1f3;
+    --pill-bg-active: #1c4f93; --pill-ink-active: #ffffff; --tab-active: #1c4f93;
+    --good: #2c7a3d; --warn: #b25a1a; --bad: #b03434;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink); background: var(--bg); line-height: 1.4;
+  }
+
+  /* Sticky top bar holding title / controls / headline / tabs. Stays
+     visible while scrolling so users can swipe sliders and switch tabs
+     from anywhere on the page. Shadow on bottom edge signals "pinned". */
+  .sticky-top {
+    position: sticky; top: 0; z-index: 50;
+    background: var(--panel);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  }
+
+  header.title { padding: 6px 24px 2px; display: flex; align-items: baseline; gap: 18px;
+                 border-bottom: 1px solid var(--border); }
+  header.title h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  header.title .sub { color: var(--muted); font-size: 10px;
+                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .controls {
+    display: grid; grid-template-columns: auto 1fr 1fr; gap: 18px;
+    padding: 6px 24px; border-bottom: 1px solid var(--border); align-items: center;
+  }
+  .control-group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .control-group .label {
+    font-size: 10px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.04em; margin-right: 2px;
+  }
+  .slider-group { display: flex; flex-direction: column; gap: 0; }
+  .slider-row { display: flex; align-items: center; gap: 10px; }
+  .slider-row input[type=range] {
+    flex: 1; accent-color: var(--accent); height: 3px; cursor: pointer;
+  }
+  .slider-row .value { font-weight: 600; font-size: 12px; min-width: 32px; text-align: right; color: var(--accent); }
+  .slider-row .label { font-size: 10px; color: var(--muted);
+                       text-transform: uppercase; letter-spacing: 0.04em;
+                       min-width: 78px; }
+  .slider-row .endpts { font-size: 9px; color: var(--muted); display: flex; justify-content: space-between; }
+  .pill {
+    border: 1px solid var(--border); background: var(--pill-bg); color: var(--ink);
+    border-radius: 999px; padding: 2px 8px; font-size: 11px;
+    cursor: pointer; user-select: none; transition: all 0.12s ease;
+  }
+  .pill:hover { border-color: var(--accent); }
+  .pill.active { background: var(--pill-bg-active); color: var(--pill-ink-active); border-color: var(--pill-bg-active); }
+  select.pill {
+    appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'><path d='M0 0 L4 6 L8 0 Z' fill='%231c1c1e'/></svg>");
+    background-repeat: no-repeat; background-position: right 6px center;
+    background-size: 8px 6px; padding-right: 18px;
+  }
+
+  main { padding: 16px 32px 32px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto; gap: 16px; }
+  .grid-3 .panel.wide { grid-column: 1 / -1; }
+  /* Expanded view: grid collapses to one column, only the expanded panel
+     shows, and its plot grows. Other panels are simply hidden (not removed)
+     so re-collapse can re-show them without re-render. */
+  .grid-3.expanded { grid-template-columns: 1fr; }
+  .grid-3.expanded .panel:not(.expanded) { display: none; }
+  .grid-3.expanded .panel.expanded .plot { height: 72vh; min-height: 480px; }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 10px; padding: 12px 16px 6px; min-height: 360px;
+           position: relative; }
+  .panel .expand-btn {
+    position: absolute; top: 8px; right: 10px;
+    background: var(--pill-bg); border: 1px solid var(--border);
+    border-radius: 6px; width: 24px; height: 24px;
+    font-size: 14px; line-height: 1; cursor: pointer; z-index: 5;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); user-select: none;
+  }
+  .panel .expand-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .panel.expanded .expand-btn { color: var(--accent); border-color: var(--accent); }
+  .panel h2 { margin: 0 0 2px; font-size: 14px; font-weight: 600; }
+  .panel .panel-sub { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+  .panel .local-controls { margin-bottom: 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .panel .local-controls .label { font-size: 10px; color: var(--muted);
+                                  text-transform: uppercase; letter-spacing: 0.04em; }
+  .panel .subtabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .panel .subtabs button { background: none; border: none; border-bottom: 2px solid transparent;
+                           padding: 6px 10px; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .panel .subtabs button.active { color: var(--tab-active); border-bottom-color: var(--tab-active); }
+  .plot { width: 100%; height: 360px; }
+
+  .stub { padding: 32px; text-align: center; color: var(--muted); font-size: 13px;
+          background: var(--panel); border: 1px dashed var(--border); border-radius: 10px; }
+
+  footer { text-align: right; color: var(--muted); font-size: 11px; padding: 8px 32px 24px; }
+
+  /* Scenario-chip color swatch */
+  .pill .chip-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    margin-right: 4px; vertical-align: middle; transform: translateY(-1px);
+  }
+  .pill.active .chip-dot { box-shadow: 0 0 0 1.5px #fff; }
+
+  /* Stock-year tick labels under the slider, aligned to the track.
+     Flex space-between works because the 6 values are evenly spaced. */
+  .tick-labels {
+    display: flex; justify-content: space-between;
+    font-size: 9px; color: var(--muted);
+    margin: 1px 42px 0 88px;
+  }
+  /* Weather-year ticks: 7 anchors at non-uniform positions on an 18-value
+     slider. Absolute positioning by percent matches thumb positions exactly. */
+  .tick-labels-positioned {
+    position: relative; display: block; height: 12px;
+    margin: 1px 42px 0 88px;
+  }
+  .tick-labels-positioned span {
+    position: absolute; font-size: 9px; color: var(--muted);
+    white-space: nowrap; transform: translateX(-50%);
+  }
+  .tick-labels-positioned span:first-child { transform: translateX(0); }
+  .tick-labels-positioned span:last-child  { transform: translateX(-100%); }
+
+  /* First-paint splash. Hidden by JS after initial render. */
+  #loading-splash {
+    position: fixed; inset: 0; background: #fff; z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; color: var(--accent); font-weight: 500;
+    transition: opacity 0.25s ease-out;
+  }
+  #loading-splash.hidden { opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<div id="loading-splash">Loading dashboard…</div>
+
+<div class="sticky-top">
+  <header class="title">
+    <h1>BuildStock Projection Dashboard</h1>
+    <div class="sub" id="run-dirs"></div>
+  </header>
+
+  <section class="controls">
+    <div class="control-group">
+      <span class="label">Scenario</span>
+      <span id="ctl-scenario"></span>
+    </div>
+    <div class="slider-group">
+      <div class="slider-row">
+        <span class="label">Stock year</span>
+        <input type="range" id="ctl-stockyear" min="0" max="0" step="1">
+        <span class="value" id="ctl-stockyear-val">—</span>
+      </div>
+      <div class="slider-row endpts" id="ctl-stockyear-ends"></div>
+    </div>
+    <div class="slider-group">
+      <div class="slider-row">
+        <span class="label">Weather year</span>
+        <input type="range" id="ctl-weatheryear" min="0" max="0" step="1">
+        <span class="value" id="ctl-weatheryear-val">—</span>
+      </div>
+      <div class="slider-row endpts" id="ctl-weatheryear-ends"></div>
+    </div>
+  </section>
+
+</div>
+
+<main>
+  <div class="grid-3">
+    <div class="panel">
+      <h2>Trajectory</h2>
+      <div class="panel-sub">
+        Buildings sector load. <b>Future</b>: weather year fixed, x = future stock years. <b>Weather Year</b>: stock year fixed, x = weather years. Per-state scale pinned globally so sliding doesn't rescale.
+      </div>
+      <div class="subtabs" id="traj-axistabs">
+        <button class="active" data-traj-axis="future">Future Trajectory</button>
+        <button data-traj-axis="weather">Weather Year Trajectory</button>
+      </div>
+      <div class="subtabs" id="traj-subtabs">
+        <button class="active" data-subtab="total">Total</button>
+        <button data-subtab="breakdown">Breakdown (Res / Com / Gap)</button>
+      </div>
+      <div class="local-controls">
+        <button class="pill active" data-traj-metric="annual_gwh">Annual TWh</button>
+        <button class="pill"        data-traj-metric="peak_gw">Peak GW</button>
+        <button class="pill"        data-traj-metric="households">Households (M)</button>
+        <button class="pill"        data-traj-metric="floor_area">Floor area (B sqft)</button>
+        <button class="pill"        data-traj-metric="res_samples">Res samples</button>
+        <button class="pill"        data-traj-metric="com_samples">Com samples</button>
+        <span class="label" style="margin-left: 8px;">State</span>
+        <select class="pill" id="traj-state"></select>
+      </div>
+      <div id="plot-trajectory" class="plot"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Map — annual or peak by state</h2>
+      <div class="panel-sub">
+        Choropleth at the current (scenario, stock year, weather year). Pick sector + slice granularity. Color scale pinned globally per (key, metric).
+      </div>
+      <div class="local-controls">
+        <button class="pill active" data-map-metric="annual_gwh">Annual TWh</button>
+        <button class="pill"        data-map-metric="peak_gw">Peak GW</button>
+        <button class="pill"        data-map-metric="ei_per_sqft" title="Annual kWh per commercial sqft (annual_gwh * 1e6 / (sqft × 1e9))">kWh/sqft</button>
+        <button class="pill"        data-map-metric="ei_per_dwelling" title="Annual kWh per residential dwelling unit (annual_gwh * 1e6 / (units × 1e6))">kWh/dwelling</button>
+        <span class="label" style="margin-left: 8px;">Sector</span>
+        <select class="pill" id="map-sector">
+          <option value="total" selected>Total</option>
+          <option value="residential">Residential</option>
+          <option value="commercial">Commercial</option>
+          <option value="gap">Gap</option>
+        </select>
+        <span class="label" style="margin-left: 8px;">Slice</span>
+        <select class="pill" id="map-slice">
+          <option value="" selected>All (sector total)</option>
+          <optgroup label="Cohort">
+            <option value="NC">NC (new construction)</option>
+            <option value="SA">SA (surviving-adopted)</option>
+            <option value="SNA">SNA (surviving not-adopted)</option>
+          </optgroup>
+          <optgroup label="Enduse">
+            <option value="_non_hvac">non_hvac</option>
+            <option value="_cooling">cooling</option>
+            <option value="_heating">heating</option>
+          </optgroup>
+          <optgroup label="Cohort × Enduse">
+            <option value="NC_cooling">NC · cooling</option>
+            <option value="NC_heating">NC · heating</option>
+            <option value="NC_non_hvac">NC · non_hvac</option>
+            <option value="SA_cooling">SA · cooling</option>
+            <option value="SA_heating">SA · heating</option>
+            <option value="SA_non_hvac">SA · non_hvac</option>
+            <option value="SNA_cooling">SNA · cooling</option>
+            <option value="SNA_heating">SNA · heating</option>
+            <option value="SNA_non_hvac">SNA · non_hvac</option>
+          </optgroup>
+        </select>
+      </div>
+      <div class="local-controls">
+        <span class="label">Mode</span>
+        <button class="pill active" data-map-mode="absolute">Absolute</button>
+        <button class="pill"        data-map-mode="savings">Saved</button>
+        <button class="pill"        data-map-mode="pct_savings">% saved</button>
+        <span class="label" style="margin-left: 8px;">vs</span>
+        <select class="pill" id="map-reference"></select>
+        <span class="label" style="margin-left: 8px;">Scale</span>
+        <button class="pill active" id="map-scale-btn-global" data-map-scale="global" title="Colorscale pinned across all (scenario, year, wy) so cross-view comparison is stable">Global</button>
+        <button class="pill"        id="map-scale-btn-view"   data-map-scale="view"   title="Colorscale rescales to the visible states for the current view (max contrast, not comparable across sliders)">This view</button>
+      </div>
+      <div id="plot-map" class="plot"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Cohort decomposition — year-long</h2>
+      <div class="panel-sub">
+        Stacked area by cohort (res NC/SA/SNA + com NC/SA/SNA + com gap) for the current (scenario, stock year, weather year). Toggle daily vs monthly aggregation. Hover anywhere to see the Total alongside each cohort.
+      </div>
+      <div class="local-controls">
+        <button class="pill active" data-cohort-gran="daily">Daily</button>
+        <button class="pill"        data-cohort-gran="monthly">Monthly</button>
+        <button class="pill"        data-cohort-gran="hourly" title="Daily max & min of hourly GW for Total and Com Total — not a true hourly plot">hourly*</button>
+      </div>
+      <div id="plot-cohort" class="plot" style="height: 340px;"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Cohort decomposition — hourly, peak week</h2>
+      <div class="panel-sub">
+        Hourly stacked area by cohort over the ±3-day window centered on the seasonal CONUS peak. Same cohort palette as the year-long panel.
+      </div>
+      <div class="local-controls">
+        <button class="pill active" data-cohort-season="winter">Winter peak</button>
+        <button class="pill"        data-cohort-season="summer">Summer peak</button>
+      </div>
+      <div id="plot-cohort-pk" class="plot" style="height: 320px;"></div>
+    </div>
+  </div>
+
+</main>
+
+<footer id="footer-meta"></footer>
+
+<script>
+// `PAYLOAD` is loaded by data/main.js (via the script tag in <head>) before
+// this inline script runs. The per-state STATE_DATA registry is filled
+// on demand by lazy-loaded data/state_<postal>.js files.
+const PAYLOAD = window.PAYLOAD;
+window.STATE_DATA = window.STATE_DATA || {};
+
+// Series definitions for the 19-layer Breakdown stack. Palette encodes:
+//   - Enduse via hue family: non_hvac = gray, cooling = blue, heating = brown
+//   - Cohort via lightness: SNA darkest → SA medium → NC lightest
+//   - Gap is a distinct dark charcoal (unique to commercial, single flat band)
+// The commercial + residential portions of the stack share the SAME palette;
+// they're separated by a horizontal "Com Total" line drawn on top of the
+// commercial band (see renderTrajectoryBreakdown / renderCohort etc.).
+const SERIES_DEF = [
+  {key: 'gap',                       label: 'Com gap',           color: '#333333'},
+  {key: 'commercial_SNA_non_hvac',   label: 'Com SNA non_hvac',  color: '#6a6a6a'},
+  {key: 'commercial_SNA_cooling',    label: 'Com SNA cooling',   color: '#1c3a5e'},
+  {key: 'commercial_SNA_heating',    label: 'Com SNA heating',   color: '#5c2d0a'},
+  {key: 'commercial_SA_non_hvac',    label: 'Com SA non_hvac',   color: '#9a9a9a'},
+  {key: 'commercial_SA_cooling',     label: 'Com SA cooling',    color: '#4a90d9'},
+  {key: 'commercial_SA_heating',     label: 'Com SA heating',    color: '#a55a1a'},
+  {key: 'commercial_NC_non_hvac',    label: 'Com NC non_hvac',   color: '#cacaca'},
+  {key: 'commercial_NC_cooling',     label: 'Com NC cooling',    color: '#a4c8e8'},
+  {key: 'commercial_NC_heating',     label: 'Com NC heating',    color: '#d9a377'},
+  {key: 'residential_SNA_non_hvac',  label: 'Res SNA non_hvac',  color: '#6a6a6a'},
+  {key: 'residential_SNA_cooling',   label: 'Res SNA cooling',   color: '#1c3a5e'},
+  {key: 'residential_SNA_heating',   label: 'Res SNA heating',   color: '#5c2d0a'},
+  {key: 'residential_SA_non_hvac',   label: 'Res SA non_hvac',   color: '#9a9a9a'},
+  {key: 'residential_SA_cooling',    label: 'Res SA cooling',    color: '#4a90d9'},
+  {key: 'residential_SA_heating',    label: 'Res SA heating',    color: '#a55a1a'},
+  {key: 'residential_NC_non_hvac',   label: 'Res NC non_hvac',   color: '#cacaca'},
+  {key: 'residential_NC_cooling',    label: 'Res NC cooling',    color: '#a4c8e8'},
+  {key: 'residential_NC_heating',    label: 'Res NC heating',    color: '#d9a377'},
+];
+
+// Fast key → def lookup for renderers.
+const SERIES_BY_KEY = Object.fromEntries(SERIES_DEF.map(s => [s.key, s]));
+
+// Keys that live in the commercial half of the stack (gap + com layers). A
+// solid line is drawn at the cumulative y for these keys to visually
+// separate the commercial band from the residential band above it.
+const COM_KEYS = new Set(SERIES_DEF
+  .filter(s => s.key === 'gap' || s.key.startsWith('commercial_'))
+  .map(s => s.key));
+
+// Backward-compat alias: some references still use COHORT_DEF.
+const COHORT_DEF = SERIES_DEF;
+
+// Approximate state centroids for the on-map labels. Lat, lon.
+const STATE_CENTROIDS = {
+  'AL': [32.78, -86.83], 'AR': [34.97, -92.37], 'AZ': [34.27, -111.66],
+  'CA': [36.78, -119.42], 'CO': [39.06, -105.31], 'CT': [41.60, -72.73],
+  'DC': [38.91, -77.01], 'DE': [38.99, -75.51], 'FL': [27.99, -81.76],
+  'GA': [32.65, -83.44], 'IA': [42.07, -93.50], 'ID': [44.24, -114.48],
+  'IL': [40.35, -88.99], 'IN': [39.85, -86.28], 'KS': [38.50, -98.38],
+  'KY': [37.65, -84.67], 'LA': [31.07, -91.99], 'MA': [42.23, -71.53],
+  'MD': [39.06, -76.80], 'ME': [44.69, -69.38], 'MI': [43.33, -84.54],
+  'MN': [45.69, -93.90], 'MO': [38.46, -92.30], 'MS': [32.74, -89.68],
+  'MT': [46.92, -110.45], 'NC': [35.63, -79.81], 'ND': [47.53, -99.78],
+  'NE': [41.13, -98.27], 'NH': [43.45, -71.56], 'NJ': [40.30, -74.52],
+  'NM': [34.84, -106.25], 'NV': [38.31, -117.06], 'NY': [42.97, -74.95],
+  'OH': [40.39, -82.76], 'OK': [35.57, -96.93], 'OR': [44.57, -122.07],
+  'PA': [40.59, -77.21], 'RI': [41.68, -71.51], 'SC': [33.86, -80.95],
+  'SD': [44.30, -99.44], 'TN': [35.75, -86.69], 'TX': [31.05, -97.56],
+  'UT': [40.15, -111.86], 'VA': [37.77, -78.17], 'VT': [44.05, -72.71],
+  'WA': [47.40, -121.49], 'WI': [44.27, -89.62], 'WV': [38.49, -80.95],
+  'WY': [42.76, -107.30],
+};
+
+// Diverging colorscale: red (negative = scenario uses MORE than reference)
+// → white (zero, no change) → green (positive = scenario SAVES vs reference).
+// Plotly does not have a built-in 'RdYlGn'; this defines it explicitly.
+const SAVINGS_COLORSCALE = [
+  [0.00, 'rgb(178,24,43)'],     // red at zmin
+  [0.25, 'rgb(214,96,77)'],
+  [0.50, 'rgb(247,247,247)'],   // white at 0
+  [0.75, 'rgb(90,174,97)'],
+  [1.00, 'rgb(27,120,55)'],     // green at zmax
+];
+
+// Seasonal peak colorscale: red (negative = summer-peaking, hot states)
+// → white (balanced) → blue (positive = winter-peaking, cold states).
+// Magnitude = state's peak GW for the dominant season.
+const SEASONAL_PEAK_COLORSCALE = [
+  [0.00, 'rgb(178,24,43)'],     // red — summer peak (bottom)
+  [0.25, 'rgb(214,96,77)'],
+  [0.50, 'rgb(247,247,247)'],   // white — balanced
+  [0.75, 'rgb(67,147,195)'],
+  [1.00, 'rgb(33,102,172)'],    // blue — winter peak (top)
+];
+
+const state = {
+  scenario:      PAYLOAD.scenarios[0],
+  stockYearIdx:  PAYLOAD.stock_years.length - 1,
+  weatherYearIdx: PAYLOAD.panel1.weather_years.includes(2018)
+                    ? PAYLOAD.panel1.weather_years.indexOf(2018)
+                    : PAYLOAD.panel1.weather_years.length - 1,
+  trajAxis:      'future',        // 'future' = x is stock_years, wy fixed; 'weather' = x is weather_years, stock year fixed
+  trajSubtab:    'total',
+  trajMetric:    'annual_gwh',
+  trajState:     'CONUS',
+  mapMetric:     'annual_gwh',
+  mapSector:     'total',
+  mapSlice:      '',              // '' = all (sector total); or 'NC', 'SA', 'SNA', '_cooling', '_heating', '_non_hvac', 'NC_cooling', ...
+  mapScale:      'global',         // 'global' = pinned zmax across all views; 'view' = rescale to current view's data range
+  mapMode:       'absolute',
+  mapReference:  PAYLOAD.scenarios[0],          // Baseline by default
+  cohortSeason:  'winter',
+  cohortGranularity: 'daily',          // 'daily' | 'monthly' | 'hourly'
+  expandedPanel: null,                // null = grid view, else plot DIV id
+};
+
+// === Selectors derived from state ========================================
+function stockYear()   { return PAYLOAD.stock_years[state.stockYearIdx]; }
+function weatherYear() { return PAYLOAD.panel1.weather_years[state.weatherYearIdx]; }
+
+function fmt(n, digits=0) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return Number(n).toLocaleString(undefined, {maximumFractionDigits: digits, minimumFractionDigits: digits});
+}
+
+// Smart energy formatter: TWh for very large GWh, k GWh for thousands, GWh
+// for small. Used in the map's CONUS annotation and any place big GWh
+// numbers would otherwise read as "3,421,766 GWh".
+function fmtEnergy(v) {
+  if (v === null || v === undefined || Number.isNaN(v)) return '—';
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000) return (v / 1_000_000).toFixed(2) + ' TWh';
+  if (abs >=    10_000) return (v / 1000).toFixed(1) + 'k GWh';
+  if (abs >=     1_000) return (v / 1000).toFixed(2) + 'k GWh';
+  return Number(v).toLocaleString(undefined, {maximumFractionDigits: 1}) + ' GWh';
+}
+function fmtPower(v) {
+  if (v === null || v === undefined || Number.isNaN(v)) return '—';
+  return Number(v).toLocaleString(undefined, {maximumFractionDigits: 1}) + ' GW';
+}
+
+// === Lazy state-data loader ==============================================
+// CONUS data is in PAYLOAD; per-state cohort + peak-week data lives in
+// data/state_<postal>.js sidecars loaded on demand via <script> injection
+// (works under file:// because <script src> is exempt from CORS).
+const STATE_LOADING = {};       // postal → [callbacks]
+
+function ensureStateLoaded(postal, cb) {
+  if (postal === 'CONUS' || window.STATE_DATA[postal]) { cb(); return; }
+  if (STATE_LOADING[postal]) { STATE_LOADING[postal].push(cb); return; }
+  STATE_LOADING[postal] = [cb];
+  const s = document.createElement('script');
+  s.src = `data/state_${postal}.js`;
+  s.async = false;
+  s.onload  = () => { const cbs = STATE_LOADING[postal] || []; delete STATE_LOADING[postal]; cbs.forEach(f => f()); };
+  s.onerror = () => { const cbs = STATE_LOADING[postal] || []; delete STATE_LOADING[postal];
+                       console.error(`Failed to load state ${postal}`); cbs.forEach(f => f()); };
+  document.head.appendChild(s);
+}
+
+function isStateLoading(postal) {
+  return postal !== 'CONUS' && !window.STATE_DATA[postal];
+}
+
+// Lookup helpers that prefer per-state sidecar data when state ≠ CONUS,
+// falling back to PAYLOAD for CONUS or to null if not yet loaded.
+function setSelectedState(postal) {
+  state.trajState = postal;
+  const dd = document.getElementById('traj-state');
+  if (dd) dd.value = postal;
+  renderTrajectory();                  // uses state_by_sector (fully embedded)
+  renderCohort();                      // may show "Loading…" until sidecar lands
+  renderCohortPeakWeek();
+  ensureStateLoaded(postal, () => {
+    // Re-render only if the user is still on this state.
+    if (state.trajState === postal) {
+      renderCohort();
+      renderCohortPeakWeek();
+    }
+  });
+}
+
+// Per-state sidecars drop `dates`/`timestamps`/`peak_iso` to save ~10 MB/file —
+// the dashboard pulls them from the CONUS-equivalent entry in PAYLOAD.
+// === Pinned y-axis / color-scale max caches =============================
+// Computed once-per-(state, granularity) at first access. Population of the
+// per-state cache happens after the state's sidecar lands; CONUS values are
+// available immediately from PAYLOAD. Same pattern for seasonal choropleth.
+
+const cohortYMaxCache = {};       // 'state:granularity' → max daily/monthly GWh
+const cohortPkYMaxCache = {};     // state → max hourly GW within peak week
+const seasonalChorMaxCache = {};  // sector → max(|state seasonal peak|)
+const savingsChorMaxCache = {};   // 'mode:metric:sector:ref' → max |saved|
+
+function getCohortYMax(stateKey, granularity) {
+  const k = `${stateKey}:${granularity}`;
+  if (cohortYMaxCache[k] !== undefined) return cohortYMaxCache[k];
+  const dataSource = stateKey === 'CONUS'
+    ? PAYLOAD.cohort_daily
+    : window.STATE_DATA[stateKey]?.cohort_daily;
+  if (!dataSource) return null;
+  let maxVal = 0;
+  for (const scen of Object.keys(dataSource)) {
+    const by_y = dataSource[scen];
+    for (const year of Object.keys(by_y)) {
+      const by_wy = by_y[year];
+      for (const wy of Object.keys(by_wy)) {
+        const entry = by_wy[wy];
+        if (!entry?.cohorts) continue;
+        const arrays = COHORT_DEF
+          .filter(c => Array.isArray(entry.cohorts[c.key]))
+          .map(c => entry.cohorts[c.key]);
+        if (!arrays.length) continue;
+        const n = arrays[0].length;
+        if (granularity === 'daily') {
+          for (let i = 0; i < n; i++) {
+            const tot = arrays.reduce((s, a) => s + (a[i] || 0), 0);
+            if (tot > maxVal) maxVal = tot;
+          }
+        } else { // monthly — per-state sidecars don't carry dates; use CONUS dates (same calendar per wy)
+          const dates = entry.dates || PAYLOAD.cohort_daily[scen]?.[year]?.[wy]?.dates;
+          if (!dates) continue;
+          const monthly = new Array(12).fill(0);
+          for (let i = 0; i < n; i++) {
+            const m = parseInt(dates[i].slice(5, 7), 10) - 1;
+            for (const a of arrays) monthly[m] += a[i] || 0;
+          }
+          const mMax = Math.max(...monthly);
+          if (mMax > maxVal) maxVal = mMax;
+        }
+      }
+    }
+  }
+  cohortYMaxCache[k] = maxVal;
+  return maxVal;
+}
+
+function getCohortPkYMax(stateKey) {
+  if (cohortPkYMaxCache[stateKey] !== undefined) return cohortPkYMaxCache[stateKey];
+  const dataSource = stateKey === 'CONUS'
+    ? PAYLOAD.panel3
+    : window.STATE_DATA[stateKey]?.peak_week;
+  if (!dataSource) return null;
+  let maxVal = 0;
+  for (const scen of Object.keys(dataSource)) {
+    const by_y = dataSource[scen];
+    for (const year of Object.keys(by_y)) {
+      const by_wy = by_y[year];
+      for (const wy of Object.keys(by_wy)) {
+        const by_season = by_wy[wy] || {};
+        for (const season of Object.keys(by_season)) {
+          const w = by_season[season];
+          if (!w?.cohorts) continue;
+          const arrays = COHORT_DEF
+            .filter(c => Array.isArray(w.cohorts[c.key]))
+            .map(c => w.cohorts[c.key]);
+          if (!arrays.length) continue;
+          const n = arrays[0].length;
+          for (let i = 0; i < n; i++) {
+            const tot = arrays.reduce((s, a) => s + (a[i] || 0), 0);
+            if (tot > maxVal) maxVal = tot;
+          }
+        }
+      }
+    }
+  }
+  cohortPkYMaxCache[stateKey] = maxVal;
+  return maxVal;
+}
+
+function getSavingsChorMax(mode, metric, sector, ref) {
+  const k = `${mode}:${metric}:${sector}:${ref}`;
+  if (savingsChorMaxCache[k] !== undefined) return savingsChorMaxCache[k];
+  const scalar = v => (v && typeof v === 'object') ? v.annual : v;
+  const tree = PAYLOAD.state_by_sector[metric];
+  if (!tree) return null;
+  const refTree = tree[ref];
+  if (!refTree) return null;
+  let maxV = 0;
+  for (const scen of Object.keys(tree)) {
+    if (scen === ref) continue;            // skip baseline-vs-baseline (all zeros)
+    for (const year of Object.keys(tree[scen])) {
+      for (const wy of Object.keys(tree[scen][year])) {
+        const curMap = (tree[scen][year][wy] || {})[sector] || {};
+        const refMap = ((refTree[year] || {})[wy] || {})[sector] || {};
+        for (const st of Object.keys(curMap)) {
+          if (st === 'CONUS') continue;    // exclude CONUS so per-state scale isn't washed out
+          const c = scalar(curMap[st]);
+          const r = scalar(refMap[st]);
+          if (c == null || r == null) continue;
+          let v;
+          if (mode === 'savings')          v = r - c;
+          else if (mode === 'pct_savings') v = r ? (r - c) / r * 100 : null;
+          else continue;
+          if (v == null || Number.isNaN(v)) continue;
+          const av = Math.abs(v);
+          if (av > maxV) maxV = av;
+        }
+      }
+    }
+  }
+  savingsChorMaxCache[k] = maxV;
+  return maxV;
+}
+
+function getSeasonalChorMax(sector) {
+  if (seasonalChorMaxCache[sector] !== undefined) return seasonalChorMaxCache[sector];
+  let maxV = 0;
+  const tree = PAYLOAD.state_by_sector.peak_gw;
+  for (const scen of Object.keys(tree)) {
+    for (const year of Object.keys(tree[scen])) {
+      for (const wy of Object.keys(tree[scen][year])) {
+        const stateMap = (tree[scen][year][wy] || {})[sector] || {};
+        for (const st of Object.keys(stateMap)) {
+          if (st === 'CONUS') continue;
+          const e = stateMap[st];
+          if (!e || typeof e !== 'object') continue;
+          const m = Math.max(e.summer || 0, e.winter || 0);
+          if (m > maxV) maxV = m;
+        }
+      }
+    }
+  }
+  seasonalChorMaxCache[sector] = maxV;
+  return maxV;
+}
+
+function getCohortDailyEntry(postal, scenario, year, wy) {
+  if (postal === 'CONUS') {
+    return ((PAYLOAD.cohort_daily[scenario] || {})[year] || {})[wy];
+  }
+  const st = window.STATE_DATA[postal];
+  if (!st || !st.cohort_daily) return null;
+  const stEntry = ((st.cohort_daily[scenario] || {})[year] || {})[wy];
+  if (!stEntry) return null;
+  const conusEntry = ((PAYLOAD.cohort_daily[scenario] || {})[year] || {})[wy];
+  return {dates: conusEntry?.dates || [], cohorts: stEntry.cohorts};
+}
+
+// Returns {dates, series: {total_max, total_min, com_max, com_min}} or null.
+// series values are per-day hourly max/min in GW.
+function getCohortHourlyMaxMinEntry(postal, scenario, year, wy) {
+  const conus = ((PAYLOAD.cohort_hourly_maxmin?.[scenario] || {})[year] || {})[wy];
+  if (postal === 'CONUS') return conus;
+  const st = window.STATE_DATA[postal];
+  const stEntry = ((st?.cohort_hourly_maxmin?.[scenario] || {})[year] || {})[wy];
+  if (!stEntry) return null;
+  // Per-state sidecars carry only `series`; dates come from the CONUS entry
+  // (same calendar per (scen, year, wy)).
+  return {dates: conus?.dates || [], series: stEntry.series};
+}
+
+function getPeakWeekEntry(postal, scenario, year, wy, season) {
+  if (postal === 'CONUS') {
+    const all = ((PAYLOAD.panel3[scenario] || {})[year] || {})[wy];
+    return all ? all[season] : null;
+  }
+  const st = window.STATE_DATA[postal];
+  if (!st || !st.peak_week) return null;
+  // Per-state sidecars now carry their own timestamps + peak_iso
+  // (windows are centered on the state's own peak hour, not CONUS's),
+  // so the entry is fully self-contained — no merge with CONUS needed.
+  return (((st.peak_week[scenario] || {})[year] || {})[wy] || {})[season] || null;
+}
+
+function annualReEDs(sc, y, wy) {
+  return ((PAYLOAD.panel1.annual_gwh[sc] || {})[y] || {})[wy];
+}
+function peakReEDs(sc, y, wy) {
+  return ((PAYLOAD.panel1.peak_gw[sc] || {})[y] || {})[wy];
+}
+
+// Unified lookup into state_by_sector. For peak_gw the stored value is a
+// dict {annual, summer, winter} — this helper returns the annual scalar so
+// existing call sites (trajectory + breakdown + axis pinning) keep working.
+// The seasonal Peak GW choropleth reads the dict directly via its own path.
+// For the stock-count metrics (households / floor_area) the lookup routes to
+// PAYLOAD.stock_counts — these are scenario- and weather-year-invariant, so
+// `sc`, `wy`, and `sector` are ignored on that branch.
+// Map a stock-metric to (a) which payload subtree to read, and (b) which
+// cohorts to include in the sum. Samples metrics don't carry a 'gap' cohort
+// (no per-building proxy for unmodeled commercial) — same as households.
+const STOCK_METRIC_DEF = {
+  households:  {tree: 'residential_units',   cohorts: ['NC', 'SA', 'SNA']},
+  floor_area:  {tree: 'commercial_sqft',     cohorts: ['NC', 'SA', 'SNA']},
+  res_samples: {tree: 'residential_samples', cohorts: ['NC', 'SA', 'SNA']},
+  com_samples: {tree: 'commercial_samples',  cohorts: ['NC', 'SA', 'SNA']},
+};
+
+function stateMetricLookup(metric, sc, y, wy, sector, stOrConus) {
+  // For stock metrics the value is summed across the cohort dim; per-cohort
+  // values are accessed via stockCohortLookup() below.
+  const def = STOCK_METRIC_DEF[metric];
+  if (def) {
+    const cd = PAYLOAD.stock_counts?.[def.tree]?.[y] || {};
+    return def.cohorts.reduce(
+      (acc, k) => acc + ((cd[k] || {})[stOrConus] || 0), 0);
+  }
+  const tree = (PAYLOAD.state_by_sector[metric][sc] || {})[y] || {};
+  const sec_d = (tree[wy] || {})[sector] || {};
+  const v = sec_d[stOrConus];
+  // peak_gw stores {annual, summer, winter}; non-seasonal callers want annual.
+  return (v && typeof v === 'object') ? v.annual : v;
+}
+
+// Per-cohort lookup for stock metrics. Used by the Breakdown subtab to
+// stack NC / SA / SNA (+ gap for commercial floor area).
+function stockCohortLookup(metric, cohort, y, stOrConus) {
+  const def = STOCK_METRIC_DEF[metric];
+  if (!def) return 0;
+  return ((PAYLOAD.stock_counts?.[def.tree]?.[y] || {})[cohort] || {})[stOrConus] || 0;
+}
+
+// === Build controls ======================================================
+function buildControls() {
+  document.getElementById('run-dirs').textContent =
+      'res: ' + PAYLOAD.meta.res_run_dir + '   ·   com: ' + PAYLOAD.meta.com_run_dir;
+
+  // Scenario chips — colored dot ties chip to trajectory line color.
+  // At the unprojected baseline year (2018) only Baseline is meaningful
+  // — adoption begins at the projection anchor year (2027) so all four
+  // scenarios are identical-by-construction at 2018. Non-Baseline chips
+  // get visibly disabled when stockYear=2018 and re-enabled otherwise.
+  const scenarioEl = document.getElementById('ctl-scenario');
+  PAYLOAD.scenarios.forEach(s => {
+    const b = document.createElement('button');
+    b.className = 'pill' + (s === state.scenario ? ' active' : '');
+    b.dataset.scenario = s;
+    b.innerHTML = `<span class="chip-dot" style="background:${PAYLOAD.colors[s]}"></span>${s}`;
+    b.onclick = () => {
+      if (b.disabled) return;
+      state.scenario = s; refresh();
+    };
+    scenarioEl.appendChild(b);
+  });
+
+  function syncScenarioChipsForStockYear() {
+    const at2018 = stockYear() === 2018;
+    if (at2018 && state.scenario !== 'Baseline') {
+      state.scenario = 'Baseline';
+    }
+    document.querySelectorAll('[data-scenario]').forEach(btn => {
+      const isBaseline = btn.dataset.scenario === 'Baseline';
+      btn.disabled = at2018 && !isBaseline;
+      btn.style.opacity = btn.disabled ? '0.35' : '';
+      btn.style.cursor = btn.disabled ? 'not-allowed' : '';
+      btn.classList.toggle('active', btn.dataset.scenario === state.scenario);
+    });
+  }
+
+  // Stock year slider — discrete values; show all stock years as tick labels.
+  const syEl = document.getElementById('ctl-stockyear');
+  syEl.min = 0; syEl.max = PAYLOAD.stock_years.length - 1; syEl.value = state.stockYearIdx;
+  syEl.oninput = () => {
+    state.stockYearIdx = +syEl.value;
+    syncScenarioChipsForStockYear();
+    refresh();
+  };
+  document.getElementById('ctl-stockyear-val').textContent = stockYear();
+  syncScenarioChipsForStockYear();
+  const syTicks = document.getElementById('ctl-stockyear-ends');
+  syTicks.classList.add('tick-labels');
+  syTicks.classList.remove('endpts');
+  syTicks.innerHTML = PAYLOAD.stock_years.map(y => `<span>${y}</span>`).join('');
+
+  // Weather year slider — 18 values; show 7 anchor years as ticks
+  const wyEl = document.getElementById('ctl-weatheryear');
+  wyEl.min = 0; wyEl.max = PAYLOAD.panel1.weather_years.length - 1; wyEl.value = state.weatherYearIdx;
+  wyEl.oninput = () => { state.weatherYearIdx = +wyEl.value; refresh(); };
+  document.getElementById('ctl-weatheryear-val').textContent = weatherYear();
+  const wyTicks = document.getElementById('ctl-weatheryear-ends');
+  wyTicks.classList.remove('endpts');
+  wyTicks.classList.add('tick-labels-positioned');
+  const wys = PAYLOAD.panel1.weather_years;
+  const lastIdx = wys.length - 1;
+  // Anchor indices: first, every 3 years, then last (deduped).
+  const anchors = [...new Set([0, 3, 6, 9, 12, 15, lastIdx])]
+      .filter(i => i >= 0 && i <= lastIdx)
+      .sort((a, b) => a - b);
+  wyTicks.innerHTML = anchors.map(i => {
+    const pct = (i / lastIdx) * 100;
+    return `<span style="left:${pct}%;">${wys[i]}</span>`;
+  }).join('');
+
+  // Trajectory sub-tabs.  Stock metrics use the same Total / Breakdown
+  // split as the energy metrics — Total shows the sum across cohorts,
+  // Breakdown stacks NC / SA / SNA (+ gap for floor area). Both subtabs
+  // stay enabled for all metrics.
+  function syncTrajSubtabForMetric() { /* both subtabs are always available */ }
+  document.querySelectorAll('#traj-subtabs button').forEach(btn => {
+    btn.onclick = () => {
+      if (btn.disabled) return;
+      document.querySelectorAll('#traj-subtabs button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.trajSubtab = btn.dataset.subtab;
+      renderTrajectory();
+    };
+  });
+  document.querySelectorAll('#traj-axistabs button').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('#traj-axistabs button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.trajAxis = btn.dataset.trajAxis;
+      renderTrajectory();
+    };
+  });
+
+  // Trajectory metric + state dropdown
+  document.querySelectorAll('[data-traj-metric]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-traj-metric]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.trajMetric = btn.dataset.trajMetric;
+      syncTrajSubtabForMetric();
+      renderTrajectory();
+    };
+  });
+  const stEl = document.getElementById('traj-state');
+  ['CONUS', ...PAYLOAD.states].forEach(s => {
+    const o = document.createElement('option');
+    o.value = s; o.textContent = s;
+    if (s === state.trajState) o.selected = true;
+    stEl.appendChild(o);
+  });
+  stEl.onchange = () => setSelectedState(stEl.value);
+
+  // Map metric + sector chips
+  document.querySelectorAll('[data-map-metric]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-map-metric]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.mapMetric = btn.dataset.mapMetric;
+      syncMapSectorForMetric();
+      renderMap();
+    };
+  });
+  const mapSectorEl = document.getElementById('map-sector');
+  if (mapSectorEl) {
+    mapSectorEl.onchange = () => {
+      state.mapSector = mapSectorEl.value;
+      syncMapSliceForSector();
+      renderMap();
+    };
+  }
+  const mapSliceEl = document.getElementById('map-slice');
+  if (mapSliceEl) {
+    mapSliceEl.onchange = () => { state.mapSlice = mapSliceEl.value; renderMap(); };
+  }
+
+  // Intensity metrics: numerator and denominator must physically match, so
+  // when the user picks kWh/sqft we force sector = commercial (and disable
+  // sector picker so a mismatched view can't happen). kWh/dwelling forces
+  // sector = residential. Reverting to Annual GWh / Peak GW re-enables it.
+  function syncMapSectorForMetric() {
+    const el = document.getElementById('map-sector');
+    if (!el) return;
+    if (state.mapMetric === 'ei_per_sqft') {
+      state.mapSector = 'commercial'; el.value = 'commercial'; el.disabled = true;
+    } else if (state.mapMetric === 'ei_per_dwelling') {
+      state.mapSector = 'residential'; el.value = 'residential'; el.disabled = true;
+    } else {
+      el.disabled = false;
+    }
+    syncMapSliceForSector();
+  }
+  // Slice picker: cohort/enduse breakdown only exists inside residential and
+  // commercial. For sector='total' or 'gap' the map key is flat (see
+  // mapCompoundKey) so any slice pick would be silently ignored — force
+  // slice='' and disable the picker so the UI reflects what actually renders.
+  function syncMapSliceForSector() {
+    const el = document.getElementById('map-slice');
+    if (!el) return;
+    if (state.mapSector === 'total' || state.mapSector === 'gap') {
+      state.mapSlice = ''; el.value = ''; el.disabled = true;
+    } else {
+      el.disabled = false;
+    }
+  }
+  document.querySelectorAll('[data-cohort-season]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-cohort-season]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.cohortSeason = btn.dataset.cohortSeason;
+      renderCohortPeakWeek();
+    };
+  });
+  document.querySelectorAll('[data-cohort-gran]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-cohort-gran]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.cohortGranularity = btn.dataset.cohortGran;
+      renderCohort();
+    };
+  });
+  document.querySelectorAll('[data-map-mode]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-map-mode]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.mapMode = btn.dataset.mapMode;
+      renderMap();
+    };
+  });
+  document.querySelectorAll('[data-map-scale]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-map-scale]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.mapScale = btn.dataset.mapScale;
+      renderMap();
+    };
+  });
+  const refEl = document.getElementById('map-reference');
+  PAYLOAD.scenarios.forEach(sc => {
+    const o = document.createElement('option');
+    o.value = sc; o.textContent = sc;
+    if (sc === state.mapReference) o.selected = true;
+    refEl.appendChild(o);
+  });
+  refEl.onchange = () => { state.mapReference = refEl.value; renderMap(); };
+
+  document.getElementById('footer-meta').textContent =
+      PAYLOAD.scenarios.length + ' scenarios × ' +
+      PAYLOAD.stock_years.length + ' stock years × ' +
+      PAYLOAD.panel1.weather_years.length + ' weather years · payload ' +
+      (JSON.stringify(PAYLOAD).length / 1e6).toFixed(1) + ' MB';
+
+  // Initial sync so the map controls reflect the initial state — sector/slice
+  // may need to disable each other from the first render, not just on-click.
+  syncMapSectorForMetric();
+}
+
+function syncActivePills() {
+  document.getElementById('ctl-scenario').querySelectorAll('.pill').forEach(p =>
+    p.classList.toggle('active', p.textContent === state.scenario));
+  document.getElementById('ctl-stockyear-val').textContent = stockYear();
+  document.getElementById('ctl-weatheryear-val').textContent = weatherYear();
+}
+
+// === Dashboard panels ====================================================
+function renderTrajectory() {
+  if (state.trajSubtab === 'total') {
+    return renderTrajectoryTotal();
+  }
+  return renderTrajectoryBreakdown();
+}
+
+// Per-metric display config used by both renderTrajectoryTotal and
+// renderTrajectoryBreakdown to label axes + format hover.
+const STOCK_METRIC_DISPLAY = {
+  households:  {unitTag: 'M HH',   yLabel: 'Residential households (millions, occupied)', hoverDigits: 2},
+  floor_area:  {unitTag: 'B sqft', yLabel: 'Commercial floor area — simulated, excludes gap (billion sq ft)', hoverDigits: 2},
+  res_samples: {unitTag: 'samples',
+                yLabel: 'Distinct ResStock simulation samples (count)',
+                hoverDigits: 0},
+  com_samples: {unitTag: 'samples',
+                yLabel: 'Distinct ComStock simulation samples (count)',
+                hoverDigits: 0},
+};
+
+function renderTrajectoryTotal() {
+  const metric = state.trajMetric;
+  const isStock = metric in STOCK_METRIC_DISPLAY;
+  const sectorForState = 'total';
+  const wySel = weatherYear();
+  const stSel = state.trajState;
+  const ySel = stockYear();
+  const isWeatherAxis = state.trajAxis === 'weather';
+  // xAxisValues: what goes on the X axis; the "outer loop" variable when we
+  // draw one line per scenario. Weather-year mode pins stock year (from the
+  // slider) and iterates over weather years; future mode pins wy.
+  const xAxisValues = isWeatherAxis ? PAYLOAD.panel1.weather_years : PAYLOAD.stock_years;
+  const xLabel = isWeatherAxis ? `Weather year (stock ${ySel})` : `Stock year (amy${wySel})`;
+  const traces = [];
+
+  if (isStock) {
+    // Stock counts are scenario- and weather-year-invariant. In weather-year
+    // mode the value is constant across x (the stock year is pinned to ySel),
+    // so we draw a horizontal reference line instead of an animated series.
+    const {unitTag, hoverDigits} = STOCK_METRIC_DISPLAY[metric];
+    if (isWeatherAxis) {
+      const yVal = stateMetricLookup(metric, null, ySel, null, null, stSel);
+      const ys = xAxisValues.map(() => yVal);
+      traces.push({
+        x: xAxisValues, y: ys,
+        mode: 'lines+markers', name: 'Stock',
+        line: {color: '#444', width: 3, dash: 'dot'},
+        marker: {size: 6},
+        hovertemplate: `Stock<br>amy%{x}: %{y:,.${hoverDigits}f} ${unitTag}<extra></extra>`,
+      });
+    } else {
+      const ys = xAxisValues.map(y =>
+        stateMetricLookup(metric, null, y, null, null, stSel));
+      traces.push({
+        x: xAxisValues, y: ys,
+        mode: 'lines+markers', name: 'Stock',
+        line: {color: '#444', width: 3},
+        marker: {size: 6},
+        hovertemplate: `Stock<br>%{x}: %{y:,.${hoverDigits}f} ${unitTag}<extra></extra>`,
+      });
+    }
+  } else {
+    // Annual energy displayed as TWh (÷ 1000 from stored GWh) to keep the
+    // y-axis readable — TWh is more natural at CONUS/state annual scales.
+    const displayScale = metric === 'annual_gwh' ? 1e-3 : 1;
+    const displayUnit  = metric === 'annual_gwh' ? 'TWh' : 'GW';
+    PAYLOAD.scenarios.forEach(scenario => {
+      const color = PAYLOAD.colors[scenario];
+      // In future mode, we draw one line per (scenario, wy); wySel highlighted.
+      // In weather mode, we draw one line per (scenario, stock_year); ySel highlighted.
+      const outerValues = isWeatherAxis ? PAYLOAD.stock_years : PAYLOAD.panel1.weather_years;
+      const selectedOuter = isWeatherAxis ? ySel : wySel;
+      outerValues.forEach(outer => {
+        const ys = xAxisValues.map(xv => {
+          const raw = isWeatherAxis
+            ? stateMetricLookup(metric, scenario, outer, xv, sectorForState, stSel)
+            : stateMetricLookup(metric, scenario, xv, outer, sectorForState, stSel);
+          return raw == null ? raw : raw * displayScale;
+        });
+        const isSel = (outer === selectedOuter);
+        const legendLabel = isWeatherAxis ? `stock ${outer}` : `amy${outer}`;
+        traces.push({
+          x: xAxisValues, y: ys,
+          mode: 'lines', name: scenario,
+          legendgroup: scenario,
+          showlegend: isSel,
+          line: {color: color, width: isSel ? 4 : 1.5},
+          opacity: isSel ? 1.0 : 0.20,
+          hovertemplate: `<b>${scenario}</b> · ${legendLabel}<br>%{x}: %{y:,.2f} ${displayUnit}<extra></extra>`,
+        });
+      });
+    });
+  }
+
+  let yLabel;
+  let yMax;
+  if (isStock) {
+    yLabel = STOCK_METRIC_DISPLAY[metric].yLabel;
+    yMax = stateMetricLookup(metric, null, 2050, null, null, stSel) || 1;
+  } else {
+    yLabel = metric === 'annual_gwh' ? 'Annual energy (TWh)' : 'Annual peak power (GW)';
+    yMax = (PAYLOAD.axis.trajectory_max[stSel] || {})[sectorForState]?.[metric] || 1;
+    if (metric === 'annual_gwh') yMax = yMax * 1e-3;
+  }
+  const layout = {
+    margin: {t: 24, r: 8, b: 36, l: 70},
+    xaxis: {tickmode: 'array', tickvals: xAxisValues, title: {text: xLabel, font: {size: 11}}},
+    yaxis: {title: {text: yLabel, standoff: 6, font: {size: 12}},
+            gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05],
+            tickformat: metric === 'annual_gwh' ? ',.0f' : undefined},
+    legend: {orientation: 'h', y: -0.20, font: {size: 11}, groupclick: 'togglegroup'},
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    title: {text: isStock
+              ? `${stSel} · stock count (scenario / amy independent)`
+              : (isWeatherAxis ? `${stSel} · stock ${ySel} highlighted`
+                               : `${stSel} · amy${wySel} highlighted`),
+            x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+  };
+  Plotly.react('plot-trajectory', traces, layout, {displayModeBar: false, responsive: true});
+}
+
+function renderTrajectoryBreakdown() {
+  const metric = state.trajMetric;
+  const isStock = metric in STOCK_METRIC_DISPLAY;
+  const wySel = weatherYear();
+  const stSel = state.trajState;
+  const scenario = state.scenario;
+  const ySel = stockYear();
+  const isWeatherAxis = state.trajAxis === 'weather';
+  const xAxisValues = isWeatherAxis ? PAYLOAD.panel1.weather_years : PAYLOAD.stock_years;
+  const xLabel = isWeatherAxis ? `Weather year (stock ${ySel})` : `Stock year (amy${wySel})`;
+
+  let traces, yLabel, yMax, titleText, hoverFmt;
+  if (isStock) {
+    // Stock metrics stack cohorts NC / SA / SNA. floor_area does NOT include
+    // the commercial gap here because per-state gap area isn't tracked in
+    // stock_counts (gap is CONUS-level only, distributed as an hourly load
+    // profile without per-state floor-area data). The "Total" line thus
+    // reports simulated non-gap floor area only; the ylabel says so.
+    // Before the projection anchor year (2027) every modeled unit lives in
+    // SNA, so the stack at 2018 is one solid band.
+    const baseDef = metric === 'households' || metric === 'res_samples'
+      ? [{key: 'SNA', label: 'Existing — not adopted', color: '#7e8a96'},
+         {key: 'SA',  label: 'Existing — adopted',     color: '#4a90e2'},
+         {key: 'NC',  label: 'New construction',       color: '#1f4e79'}]
+      : [{key: 'SNA', label: 'Existing — not adopted', color: '#7e8a96'},
+         {key: 'SA',  label: 'Existing — adopted',     color: '#f6b26b'},
+         {key: 'NC',  label: 'New construction',       color: '#b25a1a'}];
+    const COHORT_DEF = baseDef;
+    const {unitTag, hoverDigits} = STOCK_METRIC_DISPLAY[metric];
+    hoverFmt = `%{x}: %{y:,.${hoverDigits}f} ${unitTag}`;
+    // Stock metrics are weather-year-invariant. In weather mode we pin the
+    // stock year (from slider) and draw a flat stack across weather years.
+    const stockLookupY = isWeatherAxis
+      ? (cohortKey) => xAxisValues.map(() => stockCohortLookup(metric, cohortKey, ySel, stSel))
+      : (cohortKey) => xAxisValues.map(y => stockCohortLookup(metric, cohortKey, y, stSel));
+    const totalLookupY = isWeatherAxis
+      ? () => xAxisValues.map(() => stateMetricLookup(metric, null, ySel, null, null, stSel))
+      : () => xAxisValues.map(y => stateMetricLookup(metric, null, y, null, null, stSel));
+    traces = COHORT_DEF.map(c => ({
+      x: xAxisValues,
+      y: stockLookupY(c.key),
+      type: 'scatter', mode: 'none', name: c.label,
+      stackgroup: 'one', fillcolor: c.color, line: {width: 0}, hoveron: 'points+fills',
+      hovertemplate: `<b>${c.label}</b><br>${hoverFmt}<extra></extra>`,
+    }));
+    const totals = totalLookupY();
+    traces.push({
+      x: xAxisValues, y: totals,
+      type: 'scatter', mode: 'lines', name: 'Total',
+      line: {color: '#111', width: 1.5},
+      hovertemplate: `<b>Total</b><br>${hoverFmt}<extra></extra>`,
+    });
+    yLabel = STOCK_METRIC_DISPLAY[metric].yLabel;
+    yMax = Math.max(...totals) || 1;
+    titleText = `${stSel} · ${metric.includes('samples') ? 'samples' : 'stock count'} `
+              + `by cohort (scenario / amy independent)`;
+  } else {
+    // Energy breakdown: 19 stacked layers per stack_order (bottom→top):
+    //   gap → com SNA (non_hvac/cooling/heating) → com SA (..) → com NC (..)
+    //   → res SNA (..) → res SA (..) → res NC (..).
+    // Annual: sum of per-(sector, cohort, enduse) annual values commutes.
+    // Peak: use coincident decomposition — each series' value at the CONUS
+    // (or per-state) total-peak hour, guaranteed to sum to the total peak.
+    // dataLookup(key, xValue) returns the value for that key at the given x.
+    // Future mode: xValue is the stock year; wy is pinned to wySel.
+    // Weather mode: xValue is the weather year; stock year is pinned to ySel.
+    // Display TWh for annual energy (scale ÷1000 from stored GWh); GW for peak.
+    const displayScale = metric === 'annual_gwh' ? 1e-3 : 1;
+    let dataLookup;
+    if (metric === 'annual_gwh') {
+      dataLookup = isWeatherAxis
+        ? (key, xv) => (stateMetricLookup('annual_gwh', scenario, ySel, xv, key, stSel) || 0) * displayScale
+        : (key, xv) => (stateMetricLookup('annual_gwh', scenario, xv, wySel, key, stSel) || 0) * displayScale;
+    } else {
+      const contribs = PAYLOAD.state_by_sector.peak_contributions[scenario] || {};
+      dataLookup = isWeatherAxis
+        ? (key, xv) => ((contribs[ySel] || {})[xv] || {})[stSel]?.[key] || 0
+        : (key, xv) => ((contribs[xv] || {})[wySel] || {})[stSel]?.[key] || 0;
+    }
+    const stackKeys = PAYLOAD.stack_order || SERIES_DEF.map(s => s.key);
+    const unitTag = metric === 'annual_gwh' ? 'TWh / yr' : 'GW';
+    hoverFmt = `%{x}: %{y:,.2f} ${unitTag}`;
+    traces = stackKeys.map(key => {
+      const def = SERIES_BY_KEY[key] || {label: key, color: '#888'};
+      return {
+        x: xAxisValues,
+        y: xAxisValues.map(xv => dataLookup(key, xv)),
+        type: 'scatter', mode: 'none', name: def.label,
+        stackgroup: 'one', fillcolor: def.color, line: {width: 0}, hoveron: 'points+fills',
+        hovertemplate: `<b>${def.label}</b><br>${hoverFmt}<extra></extra>`,
+      };
+    });
+    // Commercial-side cumulative — solid line separating com from res.
+    const comTotals = xAxisValues.map(xv =>
+      stackKeys.filter(k => COM_KEYS.has(k)).reduce((acc, k) => acc + dataLookup(k, xv), 0));
+    traces.push({
+      x: xAxisValues, y: comTotals,
+      type: 'scatter', mode: 'lines', name: 'Com Total',
+      line: {color: '#2e7d3e', width: 2.4, dash: 'solid'},
+      hovertemplate: `<b>Com Total</b><br>${hoverFmt}<extra></extra>`,
+    });
+    // Grand total on top of the whole stack.
+    const totals = xAxisValues.map(xv =>
+      stackKeys.reduce((acc, key) => acc + dataLookup(key, xv), 0));
+    traces.push({
+      x: xAxisValues, y: totals,
+      type: 'scatter', mode: 'lines', name: 'Total',
+      line: {color: '#111', width: 1.8},
+      hovertemplate: `<b>Total</b><br>${hoverFmt}<extra></extra>`,
+    });
+    yLabel = metric === 'annual_gwh' ? 'Annual energy (TWh)' : 'Annual peak power — coincident decomposition (GW)';
+    yMax = (PAYLOAD.axis.trajectory_max[stSel] || {})['total']?.[metric] || 1;
+    if (metric === 'annual_gwh') yMax = yMax * 1e-3;
+    titleText = isWeatherAxis
+      ? `${scenario} · ${stSel} · stock ${ySel}` + (metric === 'peak_gw' ? '  (Σ at peak hour)' : '')
+      : `${scenario} · ${stSel} · amy${wySel}` + (metric === 'peak_gw' ? '  (Σ at peak hour)' : '');
+  }
+  const layout = {
+    margin: {t: 24, r: 8, b: 36, l: 70},
+    xaxis: {tickmode: 'array', tickvals: xAxisValues, title: {text: xLabel, font: {size: 11}}},
+    yaxis: {title: {text: yLabel, standoff: 6, font: {size: 12}},
+            gridcolor: '#eee', zeroline: false, range: [0, yMax * 1.05],
+            tickformat: metric === 'annual_gwh' ? ',.0f' : undefined},
+    // 'reversed' so Total appears first in the unified hover popup and
+    // legend; cohorts / sectors then read top-down matching the visual
+    // stack — same convention used in the cohort_daily panel.
+    legend: {orientation: 'h', y: -0.18, font: {size: 11}, traceorder: 'reversed'},
+    hovermode: 'closest',
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    title: {text: titleText, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+  };
+  Plotly.react('plot-trajectory', traces, layout, {displayModeBar: false, responsive: true});
+}
+
+// Compose the state_by_sector compound key from (sector, slice).
+//   slice = ''                → sector total (e.g. 'residential')
+//   slice = 'NC' | 'SA' | 'SNA'    → cohort total (e.g. 'residential_SA')
+//   slice = '_cooling' | '_heating' | '_non_hvac' → enduse total across cohorts:
+//                                                    not a stored key, dashboard sums leaves
+//   slice = 'NC_cooling' | ...     → leaf (e.g. 'residential_NC_cooling')
+// For sector='gap' or 'total', slice is ignored — those are flat keys.
+function mapCompoundKey(sector, slice) {
+  if (sector === 'gap' || sector === 'total') return sector;
+  if (!slice) return sector;
+  return `${sector}_${slice}`;
+}
+
+function renderMap() {
+  const metric = state.mapMetric;
+  const slice = state.mapSlice;
+  const mode = state.mapMode, refSc = state.mapReference;
+  const y = stockYear(), wy = weatherYear();
+
+  // Intensity metrics (kWh/sqft, kWh/dwelling) are derived from annual_gwh
+  // divided by the state's stock count (from stock_counts) — no separate
+  // payload key. The state_by_sector tree is always keyed by the underlying
+  // metric name (annual_gwh or peak_gw), so we use `basisMetric` when
+  // reading and `metric` when labeling colorbar / hover.
+  const isIntensity = metric === 'ei_per_sqft' || metric === 'ei_per_dwelling';
+  const basisMetric = isIntensity ? 'annual_gwh' : metric;
+  // Force sector to match denominator for intensity metrics — otherwise the
+  // ratio is physically meaningless (e.g. residential energy per commercial
+  // sqft). This mirrors the UI hint (sector picker is disabled when an
+  // intensity metric is active) and also runs defensively at render time in
+  // case some other code path skipped syncMapSectorForMetric.
+  const sector = isIntensity
+    ? (metric === 'ei_per_sqft' ? 'commercial' : 'residential')
+    : state.mapSector;
+
+  // For enduse-only slices ('_cooling', '_heating', '_non_hvac') no leaf-
+  // free stored key exists — sum across the 3 cohorts. For all other slices
+  // it's a single-key lookup.
+  const isEnduseAcrossCohorts = slice.startsWith('_');
+  function pullBySector(payloadTree) {
+    if (isEnduseAcrossCohorts && (sector === 'residential' || sector === 'commercial')) {
+      const enduse = slice.slice(1);
+      const merged = {};
+      for (const c of ['NC', 'SA', 'SNA']) {
+        const src = payloadTree[`${sector}_${c}_${enduse}`] || {};
+        for (const st in src) merged[st] = (merged[st] || 0) + (typeof src[st] === 'object' ? src[st].annual : src[st]);
+      }
+      return merged;
+    }
+    return payloadTree[mapCompoundKey(sector, slice)] || {};
+  }
+
+  const curTree = ((PAYLOAD.state_by_sector[basisMetric][state.scenario] || {})[y] || {})[wy] || {};
+  const refTree = ((PAYLOAD.state_by_sector[basisMetric][refSc]          || {})[y] || {})[wy] || {};
+  // pullBySector may return a reference into PAYLOAD when the slice is a
+  // single stored key. Shallow-copy so intensity conversion (below) never
+  // mutates the payload — a second render otherwise sees divided values
+  // and divides them again, cascading to nonsense magnitudes.
+  const cur = {...pullBySector(curTree)};
+  const ref = {...pullBySector(refTree)};
+  const states = PAYLOAD.states;
+
+  // Intensity divisor per state (and CONUS). For per-sqft we use commercial
+  // floorspace (B sqft) summed across NC+SA+SNA at the current stock year;
+  // for per-dwelling we use residential dwelling units (M HH) summed the
+  // same way. Both sectors and both slices use the SAME divisor per state —
+  // "kWh per sqft" always means per commercial sqft of that state, regardless
+  // of whether the numerator is res or com energy. That keeps the metric
+  // definition unambiguous.
+  function stockSum(tree, yr, cohorts) {
+    const merged = {};
+    for (const c of cohorts) {
+      const src = ((tree || {})[yr] || {})[c] || {};
+      for (const st in src) merged[st] = (merged[st] || 0) + (src[st] || 0);
+    }
+    return merged;
+  }
+  let divisor = null;      // {state: number} for intensity metrics, else null
+  let intensityUnitLabel = '';
+  let intensityScale = 1;   // multiplier applied AFTER the ratio to get kWh
+  if (metric === 'ei_per_sqft') {
+    // annual_gwh (GWh = 1e6 kWh) / commercial_sqft (B sqft = 1e9 sqft)
+    // = (GWh / B sqft) * 1e-3 → kWh/sqft
+    divisor = stockSum(PAYLOAD.stock_counts.commercial_sqft, y, ['NC', 'SA', 'SNA']);
+    intensityScale = 1e-3;
+    intensityUnitLabel = 'kWh/sqft';
+  } else if (metric === 'ei_per_dwelling') {
+    // annual_gwh (GWh = 1e6 kWh) / residential_units (M HH = 1e6 units)
+    // = GWh / M HH → kWh/dwelling exactly
+    divisor = stockSum(PAYLOAD.stock_counts.residential_units, y, ['NC', 'SA', 'SNA']);
+    intensityScale = 1;
+    intensityUnitLabel = 'kWh/dwelling';
+  }
+  // Convert energy → intensity in-place. Skip states where divisor is 0
+  // (e.g. a state with no commercial floorspace — should not happen at CONUS
+  // level but we guard defensively).
+  if (isIntensity) {
+    const apply = (obj) => {
+      const out = {};
+      for (const st in obj) {
+        const d = divisor?.[st];
+        const v = obj[st];
+        out[st] = (d && d > 0 && typeof v === 'number')
+          ? (v / d) * intensityScale
+          : null;
+      }
+      return out;
+    };
+    Object.assign(cur, apply(cur));
+    Object.assign(ref, apply(ref));
+  }
+
+  // Per-state value under the chosen mode. peak_gw values are now dicts
+  // {annual, summer, winter}; for savings / pct_savings we use .annual
+  // (peak saved at the absolute peak hour). For seasonal Peak GW mode the
+  // dict is unpacked separately further down.
+  const scalar = v => (v && typeof v === 'object') ? v.annual : v;
+  const computeValue = (curV, refV) => {
+    const c = scalar(curV), r = scalar(refV);
+    if (c === undefined || c === null) return null;
+    if (mode === 'absolute') return c;
+    if (r === undefined || r === null) return null;
+    if (mode === 'savings') return r - c;                   // positive = current saves
+    if (mode === 'pct_savings') return r ? (r - c) / r * 100 : null;
+    return c;
+  };
+  let values = states.map(s => computeValue(cur[s], ref[s]));
+  let conusVal = computeValue(cur['CONUS'], ref['CONUS']);
+
+  // Display Annual energy as TWh (÷ 1000 from stored GWh). Intensity metrics
+  // already carry their own units; peak_gw stays in GW. Applied AFTER
+  // computeValue so savings / pct_savings arithmetic works on the same basis
+  // (savings scale linearly; pct is unit-invariant). pct_savings is skipped
+  // by design (it's a ratio, unit conversion is a no-op).
+  if (basisMetric === 'annual_gwh' && !isIntensity && mode !== 'pct_savings') {
+    values = values.map(v => v == null ? v : v * 1e-3);
+    conusVal = conusVal == null ? conusVal : conusVal * 1e-3;
+  }
+
+  // Colorscale + zmin/zmax: monotonic for absolute energy, diverging
+  // (signed by season) for absolute peak, diverging (signed by savings)
+  // for savings/pct_savings.
+  let colorscale, zmin, zmax, cbTitle;
+  let isSeasonalPeak = false;
+  // Intensity metrics use the standard sequential/diverging colorscale flow
+  // (no seasonal peak decomposition). zmax is derived from the current
+  // per-state values (globally-pinned intensity would need a payload pass;
+  // for now we compute a stable-enough max across all states for THIS
+  // scenario/year/wy so the scale shifts predictably).
+  if (isIntensity) {
+    if (mode === 'absolute') {
+      colorscale = 'YlGnBu';
+      zmin = 0;
+      // Data-driven zmax so intensity variance is legible. For a pinned-
+      // across-slider max we'd need a payload precomputation; this shifts
+      // slightly with the slider but stays honest to the data.
+      const posValues = states.map(s => cur[s]).filter(v => v !== null && v !== undefined);
+      zmax = posValues.length ? Math.max(...posValues) * 1.05 : 1;
+    } else {
+      colorscale = SAVINGS_COLORSCALE;
+      const diffs = states.map(s => {
+        const c = cur[s], r = ref[s];
+        if (c == null || r == null) return null;
+        if (mode === 'savings') return r - c;
+        return r ? (r - c) / r * 100 : null;
+      }).filter(v => v !== null);
+      const maxAbs = diffs.length ? Math.max(...diffs.map(Math.abs)) * 1.05 : 1;
+      zmin = -maxAbs; zmax = maxAbs;
+    }
+    cbTitle = mode === 'absolute' ? `Annual ${intensityUnitLabel}`
+            : mode === 'savings'  ? `Saved ${intensityUnitLabel}`
+            : `Saved (%)`;
+  } else if (mode === 'absolute' && basisMetric === 'peak_gw') {
+    // Diverging: + winter-peaking, − summer-peaking; magnitude = peak GW.
+    // Read straight from state_by_sector.peak_gw — the values are now
+    // {annual, summer, winter} dicts so the seasonal split lives where
+    // every other peak lookup already goes (no duplicate data structure).
+    isSeasonalPeak = true;
+    // Use the same compound key resolution as the annual path for consistency.
+    // For enduse-across-cohorts, seasonal peaks can't be trivially summed (max
+    // isn't additive) — fall back to the sector-level compound key.
+    const sec_d = isEnduseAcrossCohorts
+      ? ((PAYLOAD.state_by_sector.peak_gw[state.scenario] || {})[y] || {})[wy]?.[sector] || {}
+      : ((PAYLOAD.state_by_sector.peak_gw[state.scenario] || {})[y] || {})[wy]?.[mapCompoundKey(sector, slice)] || {};
+    values = states.map(s => {
+      const e = sec_d[s];
+      if (!e || typeof e !== 'object') return null;
+      return e.winter >= e.summer ? +e.winter : -e.summer;
+    });
+    const cE = sec_d['CONUS'];
+    conusVal = (cE && typeof cE === 'object')
+      ? (cE.winter >= cE.summer ? +cE.winter : -cE.summer)
+      : null;
+    colorscale = SEASONAL_PEAK_COLORSCALE;
+    const chorKey = isEnduseAcrossCohorts ? sector : mapCompoundKey(sector, slice);
+    const maxAbs = getSeasonalChorMax(chorKey) || 1;
+    zmin = -maxAbs;
+    zmax = +maxAbs;
+    cbTitle = 'Peak power (GW)';
+  } else if (mode === 'absolute') {
+    colorscale = 'YlGnBu';
+    zmin = 0;
+    const chorKey = isEnduseAcrossCohorts ? sector : mapCompoundKey(sector, slice);
+    zmax = (PAYLOAD.axis.choropleth_max[chorKey] || {})[basisMetric] || 1;
+    if (basisMetric === 'annual_gwh') zmax = zmax * 1e-3;
+    cbTitle = basisMetric === 'annual_gwh' ? 'Annual energy (TWh / yr)' : 'Peak power (GW)';
+  } else {
+    colorscale = SAVINGS_COLORSCALE;
+    const chorKey = isEnduseAcrossCohorts ? sector : mapCompoundKey(sector, slice);
+    const pinned = getSavingsChorMax(mode, basisMetric, chorKey, refSc);
+    let maxAbs = pinned || 1;
+    if (basisMetric === 'annual_gwh' && mode === 'savings') maxAbs = maxAbs * 1e-3;
+    zmin = -maxAbs;
+    zmax =  maxAbs;
+    cbTitle = mode === 'savings'
+      ? (basisMetric === 'annual_gwh' ? 'Energy saved (TWh / yr)' : 'Peak saved (GW)')
+      : (basisMetric === 'annual_gwh' ? 'Energy saved (%)'       : 'Peak saved (%)');
+  }
+
+  // View-scale override: replace the globally-pinned zmin/zmax with a
+  // data-driven range covering just what's on the map right now. Intensity
+  // metrics are already view-scaled (their pinned path doesn't exist yet),
+  // so the override only applies to the pinned energy / peak / savings paths.
+  if (state.mapScale === 'view' && !isIntensity) {
+    const finiteValues = values.filter(v => v !== null && v !== undefined && Number.isFinite(v));
+    if (finiteValues.length) {
+      const vMin = Math.min(...finiteValues);
+      const vMax = Math.max(...finiteValues);
+      if (isSeasonalPeak || (mode !== 'absolute')) {
+        // Diverging: symmetric around 0 so the neutral color still means zero.
+        const maxAbs = Math.max(Math.abs(vMin), Math.abs(vMax)) * 1.05 || 1;
+        zmin = -maxAbs; zmax = maxAbs;
+      } else {
+        // Sequential from 0. If the data doesn't touch zero, still anchor
+        // low end at 0 to keep interpretation of color = magnitude.
+        zmin = 0;
+        zmax = vMax * 1.05 || 1;
+      }
+    }
+  }
+
+  const unit = mode === 'pct_savings' ? ' %'
+             : isIntensity ? ` ${intensityUnitLabel}`
+             : (basisMetric === 'annual_gwh' ? ' TWh' : ' GW');
+  const fmtConus = v => {
+    if (v === null) return '—';
+    if (mode === 'pct_savings') return (v > 0 ? '+' : '') + v.toFixed(2) + ' %';
+    if (isSeasonalPeak) {
+      const season = v >= 0 ? 'winter' : 'summer';
+      return `${fmtPower(Math.abs(v))} (${season})`;
+    }
+    if (isIntensity) return `${Number(v).toLocaleString(undefined, {maximumFractionDigits: 1})} ${intensityUnitLabel}`;
+    if (basisMetric === 'annual_gwh') return `${Number(v).toLocaleString(undefined, {maximumFractionDigits: 2})} TWh`;
+    return fmtPower(v);
+  };
+  const fmtVal = v => v === null ? '—'
+                    : (mode === 'pct_savings' ? v.toFixed(1)
+                       : Number(v).toLocaleString(undefined, {maximumFractionDigits: 1}));
+
+  // Compact label for on-map text: state postal + a tight value summary.
+  // Numbers with |v|>=10k get a 'k' suffix; percent gets 1 decimal + sign.
+  // In seasonalPeak mode, the sign carries season info (− summer, + winter)
+  // so show absolute magnitude and prefix with W/S.
+  const fmtCompact = (v) => {
+    if (v === null || v === undefined || Number.isNaN(v)) return '';
+    if (mode === 'pct_savings') return (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+    if (isSeasonalPeak) {
+      const season = v >= 0 ? 'W' : 'S';
+      return `${season} ${Math.abs(v).toFixed(0)}`;
+    }
+    if (isIntensity) return v.toFixed(Math.abs(v) < 10 ? 2 : 1);
+    // Annual TWh values are typically < 1000 (state max ~500 TWh, CONUS ~4000).
+    // Show 2 decimals when small, 1 when medium, 0 when large.
+    if (basisMetric === 'annual_gwh') {
+      const abs = Math.abs(v);
+      return v.toFixed(abs >= 100 ? 0 : abs >= 10 ? 1 : 2);
+    }
+    const abs = Math.abs(v);
+    if (abs >= 100000) return (v/1000).toFixed(0) + 'k';
+    if (abs >=  10000) return (v/1000).toFixed(1) + 'k';
+    if (abs >=   1000) return (v/1000).toFixed(2) + 'k';
+    return v.toFixed(basisMetric === 'peak_gw' ? 1 : 0);
+  };
+  const labels = states.map((s, i) => {
+    const v = values[i];
+    const compact = fmtCompact(v);
+    return compact ? `<b>${s}</b><br>${compact}` : `<b>${s}</b>`;
+  });
+
+  // In seasonal-peak mode, z stays signed (so the diverging colorscale
+  // renders correctly) but the hover and colorbar ticks display absolute
+  // magnitudes with a season label. customdata is [season_name, |value|]
+  // so the hovertemplate can pull them by index.
+  const customData = isSeasonalPeak
+    ? values.map(v => v === null ? ['', 0] : (v >= 0 ? ['winter', v] : ['summer', -v]))
+    : null;
+  const hoverTpl = isSeasonalPeak
+    ? `<b>%{location}</b><br>%{customdata[1]:.1f} GW (%{customdata[0]} peak)<extra></extra>`
+    : `<b>%{location}</b><br>%{z:,.2f}${unit}<extra></extra>`;
+
+  // Colorbar config: in seasonal mode, override the tick labels so both
+  // halves of the diverging scale read as positive magnitudes.
+  const colorbarCfg = {title: {text: cbTitle, side: 'right'}, thickness: 12, len: 0.8};
+  if (isSeasonalPeak) {
+    colorbarCfg.tickvals = [-zmax, -zmax/2, 0, zmax/2, zmax];
+    colorbarCfg.ticktext = colorbarCfg.tickvals.map(v => Math.abs(v).toFixed(0));
+  }
+
+  const data = [
+    {
+      type: 'choropleth', locationmode: 'USA-states',
+      locations: states, z: values, customdata: customData,
+      zmin: zmin, zmax: zmax, colorscale: colorscale,
+      colorbar: colorbarCfg,
+      marker: {line: {color: '#fff', width: 0.5}},
+      hovertemplate: hoverTpl,
+    },
+    {
+      // State labels (postal + value) overlay.
+      type: 'scattergeo', mode: 'text',
+      lat: states.map(s => STATE_CENTROIDS[s]?.[0]),
+      lon: states.map(s => STATE_CENTROIDS[s]?.[1]),
+      text: labels,
+      textfont: {size: 9, color: '#1c1c1e', family: 'Helvetica, Arial, sans-serif'},
+      hoverinfo: 'skip', showlegend: false,
+    },
+  ];
+
+  // CONUS annotation in the top-right corner. For savings/pct_savings the
+  // CONUS value applies the same operation to the CONUS pseudo-state values
+  // (which were computed coincidentally for peak in the aggregator).
+  const sameAsRef = (mode !== 'absolute' && refSc === state.scenario);
+  // Find min / max states across the current view — labels reveal the actual
+  // data range even when the color scale is globally pinned.
+  let minStateLabel = '', maxStateLabel = '';
+  if (!sameAsRef) {
+    let minI = -1, maxI = -1, minV = Infinity, maxV = -Infinity;
+    for (let i = 0; i < states.length; i++) {
+      const v = values[i];
+      if (v === null || v === undefined || !Number.isFinite(v)) continue;
+      if (v < minV) { minV = v; minI = i; }
+      if (v > maxV) { maxV = v; maxI = i; }
+    }
+    if (minI >= 0) minStateLabel = `<b>min:</b> ${states[minI]} — ${fmtConus(minV)}`;
+    if (maxI >= 0) maxStateLabel = `<b>max:</b> ${states[maxI]} — ${fmtConus(maxV)}`;
+  }
+  const annText = sameAsRef
+    ? `<b>CONUS</b><br>(${state.scenario} vs ${refSc} = self)`
+    : `<b>CONUS:</b> ${fmtConus(conusVal)}<br>${maxStateLabel}<br>${minStateLabel}`;
+  // In seasonal Peak GW mode, color the annotation by which season is the
+  // CONUS peak (matches the dual peak annotations on the cohort daily panel).
+  const annColor = (isSeasonalPeak && conusVal !== null && conusVal < 0)
+                   ? '#b25a1a'  // summer (orange)
+                   : '#1c4f93'; // winter (blue) — also the neutral default
+
+  // Title label — same pattern as other panels. For savings/pct_savings,
+  // include "vs <ref>" so the comparison is visible at a glance.
+  const titleText = (mode === 'absolute')
+    ? `${state.scenario} · stock ${y} · amy${wy} · ${sector}`
+    : `${state.scenario} vs ${refSc} · stock ${y} · amy${wy} · ${sector}`;
+
+  const layout = {
+    margin: {t: 22, r: 0, b: 0, l: 0},
+    geo: {scope: 'usa', projection: {type: 'albers usa'},
+          showlakes: true, lakecolor: '#fafafa', bgcolor: '#fff'},
+    title: {text: titleText, x: 0.01, y: 1.0, xanchor: 'left', yanchor: 'top',
+            font: {size: 11, color: '#888'}},
+    annotations: [
+      {
+        text: annText,
+        xref: 'paper', yref: 'paper',
+        x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top',
+        showarrow: false,
+        bgcolor: 'rgba(255,255,255,0.94)',
+        bordercolor: annColor, borderwidth: 1, borderpad: 6,
+        font: {size: 12, color: annColor},
+        align: 'right',
+      },
+      // Seasonal mode: label the colorbar endpoints. The colorbar lives on
+      // the right of the geo plot at x≈1.02 spanning y∈[0.1, 0.9] (len:0.8,
+      // centered). Anchor labels just outside its top/bottom.
+      ...(isSeasonalPeak ? [
+        {
+          text: '<b>winter</b>',
+          xref: 'paper', yref: 'paper',
+          x: 1.04, y: 0.93, xanchor: 'left', yanchor: 'bottom',
+          showarrow: false,
+          font: {size: 11, color: '#1c4f93'},
+        },
+        {
+          text: '<b>summer</b>',
+          xref: 'paper', yref: 'paper',
+          x: 1.04, y: 0.07, xanchor: 'left', yanchor: 'top',
+          showarrow: false,
+          font: {size: 11, color: '#b25a1a'},
+        },
+      ] : []),
+    ],
+  };
+  Plotly.react('plot-map', data, layout, {displayModeBar: false, responsive: true});
+}
+
+// Aggregate per-day values into 12 monthly bins (by month from the ISO date).
+function aggregateDailyToMonthly(values, dates) {
+  const monthly = new Array(12).fill(0);
+  for (let i = 0; i < values.length && i < dates.length; i++) {
+    const month = parseInt(dates[i].slice(5, 7), 10) - 1;
+    monthly[month] += values[i] || 0;
+  }
+  return monthly;
+}
+
+function renderCohort() {
+  if (state.cohortGranularity === 'hourly') {
+    return renderCohortHourlyMaxMin();
+  }
+  const wy = weatherYear();
+  const st = state.trajState;
+  const entry = getCohortDailyEntry(st, state.scenario, stockYear(), wy);
+  if (!entry || !entry.cohorts) {
+    const placeholder = isStateLoading(st)
+      ? `Loading ${st} data…`
+      : 'No data';
+    Plotly.react('plot-cohort', [], {
+      margin: {t: 24, r: 8, b: 36, l: 70},
+      annotations: [{text: placeholder, xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {color: '#999'}}],
+    }, {displayModeBar: false, responsive: true});
+    return;
+  }
+
+  // Choose daily or monthly resolution. Values are stored as GWh and
+  // rescaled to TWh (÷ 1000) on read so daily/monthly y-axes stay compact
+  // and consistent with the trajectory + choropleth panels.
+  const isMonthly = state.cohortGranularity === 'monthly';
+  let xs, cohortValues, yLabel, hoverFmt, tickFmt;
+  const scaleArr = (arr) => Array.isArray(arr) ? arr.map(v => (v || 0) * 1e-3) : arr;
+  if (isMonthly) {
+    // 12 month-center x values within the weather year. Use 'YYYY-MM-15'
+    // so Plotly treats them as dates and tick-formats nicely.
+    const yearPrefix = entry.dates[0]?.slice(0, 4) || '2018';
+    xs = Array.from({length: 12}, (_, i) =>
+      `${yearPrefix}-${String(i + 1).padStart(2, '0')}-15`);
+    cohortValues = {};
+    Object.keys(entry.cohorts).forEach(k => {
+      cohortValues[k] = scaleArr(aggregateDailyToMonthly(entry.cohorts[k], entry.dates));
+    });
+    yLabel = 'Monthly energy (TWh / month)';
+    hoverFmt = '%{x|%b}';
+    tickFmt = '%b';
+  } else {
+    xs = entry.dates;
+    cohortValues = {};
+    Object.keys(entry.cohorts).forEach(k => { cohortValues[k] = scaleArr(entry.cohorts[k]); });
+    yLabel = 'Daily energy (TWh / day)';
+    hoverFmt = '%{x|%b %d}';
+    tickFmt = '%b %d';
+  }
+
+  const traces = COHORT_DEF
+    .filter(c => Array.isArray(cohortValues[c.key]))
+    .map(c => ({
+      x: xs, y: cohortValues[c.key],
+      type: 'scatter', mode: 'none', name: c.label,
+      stackgroup: 'one', fillcolor: c.color, line: {width: 0}, hoveron: 'points+fills',
+      hovertemplate: `<b>${c.label}</b><br>${hoverFmt}: %{y:,.3f} TWh<extra></extra>`,
+    }));
+
+  // Com boundary + grand total lines.
+  const N = xs.length;
+  const comTot = new Array(N).fill(0);
+  const total = new Array(N).fill(0);
+  COHORT_DEF.forEach(c => {
+    if (!Array.isArray(cohortValues[c.key])) return;
+    for (let i = 0; i < N; i++) {
+      const v = cohortValues[c.key][i] || 0;
+      total[i] += v;
+      if (COM_KEYS.has(c.key)) comTot[i] += v;
+    }
+  });
+  traces.push({
+    x: xs, y: comTot,
+    type: 'scatter', mode: 'lines', name: 'Com Total',
+    line: {color: '#2e7d3e', width: 2.4},
+    hovertemplate: `<b>Com Total</b><br>${hoverFmt}: %{y:,.3f} TWh<extra></extra>`,
+  });
+  traces.push({
+    x: xs, y: total,
+    type: 'scatter', mode: 'lines', name: 'Total',
+    line: {color: '#111', width: 1.8},
+    hovertemplate: `<b>Total</b><br>${hoverFmt}: %{y:,.3f} TWh<extra></extra>`,
+  });
+
+  // Peak annotations: only in daily mode (monthly bins make day-level
+  // anchoring visually awkward; unified hover gives the magnitude anyway).
+  const peakAnns = [];
+  if (!isMonthly) {
+    [
+      {key: 'winter', label: 'Winter peak', color: '#1c4f93'},
+      {key: 'summer', label: 'Summer peak', color: '#b25a1a'},
+    ].forEach(({key, label, color}) => {
+      const w = getPeakWeekEntry(state.trajState, state.scenario, stockYear(), wy, key);
+      if (!w) return;
+      const peakDateStr = w.peak_iso.slice(0, 10);
+      const peakDayIdx = entry.dates.findIndex(d => d.startsWith(peakDateStr));
+      // stackHeight is in TWh — matches cohortValues (already TWh-scaled).
+      const stackHeight = peakDayIdx >= 0
+        ? COHORT_DEF.filter(c => Array.isArray(cohortValues[c.key]))
+            .reduce((sum, c) => sum + (cohortValues[c.key][peakDayIdx] || 0), 0)
+        : 0;
+      peakAnns.push({
+        x: peakDateStr, y: stackHeight,
+        text: `${label}<br>${w.peak_gw.toFixed(1)} GW`,
+        xref: 'x', yref: 'y', showarrow: true,
+        arrowhead: 0, ay: -22, ax: 0,
+        font: {size: 10, color: color}, bgcolor: 'rgba(255,255,255,0.9)',
+        bordercolor: color, borderwidth: 1, borderpad: 3,
+      });
+    });
+  }
+
+  // Pinned y-axis: max across all (scenario, year, wy) for this (state,
+  // granularity). Stays fixed as the user slides through scenarios/years/wys.
+  // getCohortYMax returns GWh (raw cohort_daily units); rescale to TWh here
+  // to match the values shown on this panel.
+  const yMax = getCohortYMax(state.trajState, state.cohortGranularity);
+  const yMaxScaled = yMax ? yMax * 1e-3 : yMax;
+  const layout = {
+    margin: {t: 30, r: 8, b: 36, l: 70},
+    xaxis: {gridcolor: '#eee', tickformat: tickFmt},
+    yaxis: {title: {text: yLabel, standoff: 6, font: {size: 12}},
+            gridcolor: '#eee', zeroline: false, tickformat: '.2s',
+            range: yMaxScaled ? [0, yMaxScaled * 1.05] : undefined,
+            rangemode: 'tozero'},
+    // 'reversed' so Total appears first in the unified hover popup and the
+    // cohort order matches the visual stack top-to-bottom (com_gap → res_NC).
+    legend: {orientation: 'h', y: -0.15, font: {size: 10}, traceorder: 'reversed'},
+    hovermode: 'closest',
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    title: {text: `${state.scenario} · ${state.trajState} · stock ${stockYear()} · amy${wy}`, x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+    annotations: peakAnns,
+  };
+  Plotly.react('plot-cohort', traces, layout, {displayModeBar: false, responsive: true});
+}
+
+// hourly* view: 4 series drawn as lines against the same daily x-axis as the
+// Daily view. Each y point is a max or min of the corresponding hourly
+// composite over that day (GW). Not a true hourly plot — the "*" in the
+// label warns of this.
+function renderCohortHourlyMaxMin() {
+  const wy = weatherYear();
+  const st = state.trajState;
+  const y = stockYear();
+  const entry = getCohortHourlyMaxMinEntry(st, state.scenario, y, wy);
+  if (!entry || !entry.series) {
+    const placeholder = isStateLoading(st)
+      ? `Loading ${st} data…`
+      : `No hourly* data at stock year ${y} (populated only for projection years, ≥ 2027)`;
+    Plotly.react('plot-cohort', [], {
+      margin: {t: 24, r: 8, b: 36, l: 70},
+      annotations: [{text: placeholder, xref: 'paper', yref: 'paper', x: 0.5, y: 0.5, showarrow: false, font: {color: '#999'}}],
+    }, {displayModeBar: false, responsive: true});
+    return;
+  }
+  const xs = entry.dates;
+  const s = entry.series;
+  const hoverFmt = '%{x|%b %d}: %{y:,.2f} GW';
+  const traces = [
+    {x: xs, y: s.total_max || [], mode: 'lines', name: 'Total daily-max',
+     line: {color: '#111', width: 1.8},
+     hovertemplate: `<b>Total daily-max</b><br>${hoverFmt}<extra></extra>`},
+    {x: xs, y: s.total_min || [], mode: 'lines', name: 'Total daily-min',
+     line: {color: '#111', width: 1.2, dash: 'dot'},
+     hovertemplate: `<b>Total daily-min</b><br>${hoverFmt}<extra></extra>`},
+    {x: xs, y: s.com_max || [], mode: 'lines', name: 'Com daily-max',
+     line: {color: '#a55a1a', width: 1.5},
+     hovertemplate: `<b>Com daily-max</b><br>${hoverFmt}<extra></extra>`},
+    {x: xs, y: s.com_min || [], mode: 'lines', name: 'Com daily-min',
+     line: {color: '#a55a1a', width: 1.2, dash: 'dot'},
+     hovertemplate: `<b>Com daily-min</b><br>${hoverFmt}<extra></extra>`},
+  ];
+
+  // Summer / Winter peak annotations — same peak_iso that renderCohortPeakWeek
+  // uses, anchored to the Total daily-max line at the peak day.
+  const peakAnns = [];
+  [
+    {key: 'winter', label: 'Winter peak', color: '#1c4f93'},
+    {key: 'summer', label: 'Summer peak', color: '#b25a1a'},
+  ].forEach(({key, label, color}) => {
+    const w = getPeakWeekEntry(st, state.scenario, stockYear(), wy, key);
+    if (!w) return;
+    const peakDateStr = w.peak_iso.slice(0, 10);
+    const dayIdx = xs.findIndex(d => d.startsWith(peakDateStr));
+    const y = dayIdx >= 0 ? (s.total_max?.[dayIdx] || 0) : 0;
+    peakAnns.push({
+      x: peakDateStr, y,
+      text: `${label}<br>${w.peak_gw.toFixed(1)} GW`,
+      xref: 'x', yref: 'y', showarrow: true,
+      arrowhead: 0, ay: -22, ax: 0,
+      font: {size: 10, color}, bgcolor: 'rgba(255,255,255,0.9)',
+      bordercolor: color, borderwidth: 1, borderpad: 3,
+    });
+  });
+
+  const layout = {
+    margin: {t: 30, r: 8, b: 36, l: 70},
+    xaxis: {gridcolor: '#eee', tickformat: '%b %d'},
+    yaxis: {title: {text: 'Hourly power — daily max/min (GW)', standoff: 6, font: {size: 12}},
+            gridcolor: '#eee', zeroline: false, tickformat: '.2s',
+            rangemode: 'tozero'},
+    legend: {orientation: 'h', y: -0.15, font: {size: 10}},
+    hovermode: 'closest',
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    title: {text: `${state.scenario} · ${st} · stock ${stockYear()} · amy${wy} · hourly*`,
+            x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+    annotations: peakAnns,
+  };
+  Plotly.react('plot-cohort', traces, layout, {displayModeBar: false, responsive: true});
+}
+
+function renderCohortPeakWeek() {
+  const wy = weatherYear();
+  const st = state.trajState;
+  const wk = getPeakWeekEntry(st, state.scenario, stockYear(), wy, state.cohortSeason);
+  if (!wk || !wk.cohorts) {
+    const placeholder = isStateLoading(st)
+      ? `Loading ${st} data…`
+      : `No ${state.cohortSeason} peak data`;
+    Plotly.react('plot-cohort-pk', [], {
+      margin: {t: 24, r: 8, b: 36, l: 70},
+      yaxis: {title: {text: 'Power (GW)', standoff: 6, font: {size: 12}}, rangemode: 'tozero'},
+      annotations: [{text: placeholder, xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
+                     showarrow: false, font: {color: '#999'}}],
+    }, {displayModeBar: false, responsive: true});
+    return;
+  }
+  const traces = COHORT_DEF
+    .filter(c => Array.isArray(wk.cohorts[c.key]))
+    .map(c => ({
+      x: wk.timestamps, y: wk.cohorts[c.key],
+      type: 'scatter', mode: 'none', name: c.label,
+      stackgroup: 'one', fillcolor: c.color, line: {width: 0}, hoveron: 'points+fills',
+      hovertemplate: `<b>${c.label}</b><br>%{x|%a %b %d %H:%M}: %{y:,.1f} GW<extra></extra>`,
+    }));
+  // Com boundary + grand total lines.
+  const Npk = wk.timestamps.length;
+  const comTotPk = new Array(Npk).fill(0);
+  const totalPk = new Array(Npk).fill(0);
+  COHORT_DEF.forEach(c => {
+    if (!Array.isArray(wk.cohorts[c.key])) return;
+    for (let i = 0; i < Npk; i++) {
+      const v = wk.cohorts[c.key][i] || 0;
+      totalPk[i] += v;
+      if (COM_KEYS.has(c.key)) comTotPk[i] += v;
+    }
+  });
+  traces.push({
+    x: wk.timestamps, y: comTotPk,
+    type: 'scatter', mode: 'lines', name: 'Com Total',
+    line: {color: '#2e7d3e', width: 2.4},
+    hovertemplate: `<b>Com Total</b><br>%{x|%a %b %d %H:%M}: %{y:,.1f} GW<extra></extra>`,
+  });
+  traces.push({
+    x: wk.timestamps, y: totalPk,
+    type: 'scatter', mode: 'lines', name: 'Total',
+    line: {color: '#111', width: 1.8},
+    hovertemplate: `<b>Total</b><br>%{x|%a %b %d %H:%M}: %{y:,.1f} GW<extra></extra>`,
+  });
+  // Pinned y-axis: max across all (scenario, year, wy, season) for this state.
+  const yMaxPk = getCohortPkYMax(state.trajState);
+  const layout = {
+    margin: {t: 30, r: 8, b: 36, l: 70},
+    xaxis: {gridcolor: '#eee', tickformat: '%a %b %d'},
+    yaxis: {title: {text: 'Power (GW)', standoff: 6, font: {size: 12}},
+            gridcolor: '#eee', zeroline: false,
+            range: yMaxPk ? [0, yMaxPk * 1.05] : undefined,
+            rangemode: 'tozero'},
+    legend: {orientation: 'h', y: -0.18, font: {size: 10}, traceorder: 'reversed'},
+    hovermode: 'closest',
+    paper_bgcolor: '#fff', plot_bgcolor: '#fff',
+    title: {text: `${state.scenario} · ${state.trajState} · stock ${stockYear()} · amy${wy} · ${state.cohortSeason} peak`,
+            x: 0.01, y: 1.0, font: {size: 11, color: '#888'}},
+    annotations: [{
+      x: wk.peak_iso, y: wk.peak_gw,
+      text: `${state.cohortSeason === 'winter' ? 'Winter' : 'Summer'} peak<br>${wk.peak_gw.toFixed(1)} GW`,
+      xref: 'x', yref: 'y', showarrow: true, arrowhead: 0, ax: 0, ay: -28,
+      font: {size: 11, color: state.cohortSeason === 'winter' ? '#1c4f93' : '#b25a1a'},
+      bgcolor: 'rgba(255,255,255,0.9)',
+      bordercolor: state.cohortSeason === 'winter' ? '#1c4f93' : '#b25a1a',
+      borderwidth: 1, borderpad: 3,
+    }],
+  };
+  Plotly.react('plot-cohort-pk', traces, layout, {displayModeBar: false, responsive: true});
+}
+
+// === Expand / collapse ===================================================
+// Each panel gets a small button in the top-right that toggles full-width
+// view. Other panels are hidden via CSS (.grid-3.expanded .panel:not(.expanded)).
+const PLOT_IDS = ['plot-trajectory', 'plot-map', 'plot-cohort', 'plot-cohort-pk'];
+
+function injectExpandButtons() {
+  PLOT_IDS.forEach(plotId => {
+    const plot = document.getElementById(plotId);
+    if (!plot) return;
+    const panel = plot.closest('.panel');
+    if (!panel || panel.querySelector('.expand-btn')) return;
+    panel.dataset.panelId = plotId;
+    const btn = document.createElement('button');
+    btn.className = 'expand-btn';
+    btn.textContent = '⤢';
+    btn.title = 'Expand this panel';
+    btn.onclick = () => toggleExpand(plotId);
+    panel.appendChild(btn);
+  });
+}
+
+function toggleExpand(panelId) {
+  state.expandedPanel = (state.expandedPanel === panelId) ? null : panelId;
+  applyExpand();
+}
+
+function applyExpand() {
+  const exp = state.expandedPanel;
+  document.querySelectorAll('.panel').forEach(p => {
+    p.classList.toggle('expanded', p.dataset.panelId === exp);
+    const btn = p.querySelector('.expand-btn');
+    if (btn) {
+      btn.textContent = (p.dataset.panelId === exp) ? '⤡' : '⤢';
+      btn.title = (p.dataset.panelId === exp) ? 'Collapse' : 'Expand this panel';
+    }
+  });
+  document.querySelectorAll('.grid-3').forEach(g => {
+    g.classList.toggle('expanded', exp !== null);
+  });
+  // Plotly's responsive mode writes inline width/height on the plot DIV;
+  // those inline styles beat CSS, so a plot expanded to ~1400 px stays
+  // 1400 px after the grid CSS reverts to 1fr 1fr — visually pushing the
+  // right column off-screen. Clear the inline styles before resizing so
+  // Plotly re-reads the actual (post-CSS) container size.
+  PLOT_IDS.forEach(id => {
+    const div = document.getElementById(id);
+    if (div) {
+      div.style.removeProperty('width');
+      div.style.removeProperty('height');
+    }
+  });
+  // Double RAF: wait for the browser to apply the class-toggle layout
+  // change before asking Plotly to resize.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    PLOT_IDS.forEach(id => {
+      try {
+        Plotly.relayout(id, {autosize: true});
+        Plotly.Plots.resize(id);
+      } catch (e) {}
+    });
+  }));
+}
+
+// === Refresh =============================================================
+function refresh() {
+  syncActivePills();
+  renderTrajectory();
+  renderMap();
+  renderCohort();
+  renderCohortPeakWeek();
+}
+
+buildControls();
+refresh();
+injectExpandButtons();
+
+// Cross-panel linking: clicking a state on the map drills the trajectory
+// to that state. Clicking the same state again goes back to CONUS.
+const mapDiv = document.getElementById('plot-map');
+if (mapDiv && mapDiv.on) {
+  mapDiv.on('plotly_click', (evt) => {
+    const pt = evt?.points?.[0];
+    if (!pt?.location) return;       // ignore clicks on the text overlay
+    const next = (state.trajState === pt.location) ? 'CONUS' : pt.location;
+    setSelectedState(next);
+  });
+}
+
+// First-paint splash off after the initial render finishes.
+requestAnimationFrame(() => {
+  const splash = document.getElementById('loading-splash');
+  if (splash) {
+    splash.classList.add('hidden');
+    setTimeout(() => splash.remove(), 300);
+  }
+});
+</script>
+</body>
+</html>

@@ -4,7 +4,7 @@ File Series Checker
 This script checks for missing and misaligned files in a directory based
 on a specified file prefix, upgrade number, and step length. It
 processes two file series with prefixes, `com_meta` and
-`com_eulp_hvac_elec_MWh` (or `res_...`), and groups results by upgrade.
+`com_eulp_{cooling,heating}_elec_MWh` (or `res_...`), and groups results by upgrade.
 
 Features:
 - Identifies missing files in the series
@@ -20,13 +20,6 @@ Usage:
 Output:
 - Results are printed to the terminal and saved to `check_results.txt`
   in the specified directory.
-
-TODO (optional):
-- Identify missing files before the first file.
-- Remove "Misaligned files" processes as they are not necessary (?).
-- Ensure that there are no files that should come after the last file
-  (using meta_master?).
-- Write main function for better modularity and reusability.
 """
 
 import os
@@ -112,8 +105,9 @@ if __name__ == "__main__":
     # Replace with your target directory
     directory = "/projects/geohc/jm_ReEDS-2.0/postprocessing/reValue/parallel_agg/outputs/outputs_2025-01-20-15-17-29"
     
-    # File prefixes begin with either com_ or res_
-    file_prefixes = ["com_meta", "com_eulp_hvac_elec_MWh"]
+    # File prefixes begin with either com_ or res_. D writes one chunk file
+    # per enduse (cooling_elec, heating_elec) and one meta file per chunk.
+    file_prefixes = ["com_meta", "com_eulp_cooling_elec_MWh", "com_eulp_heating_elec_MWh"]
     
     # List of upgrades
     upgrades = [0, 1, 18]
