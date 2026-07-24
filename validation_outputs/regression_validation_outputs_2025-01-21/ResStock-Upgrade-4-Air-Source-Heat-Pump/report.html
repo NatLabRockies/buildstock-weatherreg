@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html><head><meta charset='utf-8'><title>Validation report</title>
+
+    <style>
+    body { font-family: Arial, sans-serif; margin: 24px; color: #111; background: #fafafa; }
+    h1 { margin-bottom: 6px; }
+    h2 { margin-top: 24px; margin-bottom: 8px; }
+    table { border-collapse: collapse; margin: 12px 0; width: auto; }
+    th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
+    th { background: #f0f0f0; }
+    section { margin-bottom: 24px; }
+    .grid { display: flex; flex-wrap: wrap; gap: 12px; }
+    .grid figure { margin: 0; }
+    .grid img { max-width: 360px; border: 1px solid #ddd; background: white; padding: 4px; }
+    </style>
+    
+</head><body>
+<h1>Validation report</h1>
+<p>Comparison: ResStock Upgrade 4 (Air-Source Heat Pump)</p>
+<p>Ref: C:\ReEDS\geo_predict\validation_inputs_2025-12-19\res_4_ref_outputs_2025-12-15-14-51-32\agg_res_eulp_hvac_elec_GWh_upgrade4.csv<br>Reg: C:\ReEDS\geo_predict\validation_inputs_2025-12-19\res_4_reg_outputs_2025-12-03-13-50-22\agg_res_eulp_hvac_elec_GWh_upgrade4.csv</p>
+<section><h2>Overview</h2>
+<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody><tr><td>Comparison</td><td>ResStock Upgrade 4 (Air-Source Heat Pump)</td></tr><tr><td>Ref rows</td><td>8,760</td></tr><tr><td>Reg rows</td><td>8,760</td></tr><tr><td>Common hours</td><td>8,760</td></tr><tr><td>Missing in reg</td><td>0</td></tr><tr><td>Missing in ref</td><td>0</td></tr><tr><td>Counties</td><td>3,107</td></tr><tr><td>Mapping missing counties</td><td>8</td></tr><tr><td>Balancing areas</td><td>133</td></tr></tbody></table>
+</section>
+<section><h2>Annual totals</h2>
+<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody><tr><td>Annual ref</td><td>800,142.37 GWh</td></tr><tr><td>Annual reg</td><td>802,178.99 GWh</td></tr><tr><td>Percent diff (reg-ref)/ref</td><td>0.25%</td></tr></tbody></table>
+</section>
+<section><h2>Seasonal percent difference</h2>
+<table><thead><tr><th>Season</th><th>Ref (GWh)</th><th>Reg (GWh)</th><th>Pct diff</th></tr></thead><tbody><tr><td>DJF</td><td>304,382.37</td><td>295,045.00</td><td>-3.07%</td></tr><tr><td>MAM</td><td>125,950.04</td><td>132,781.70</td><td>5.42%</td></tr><tr><td>JJA</td><td>223,471.39</td><td>219,111.38</td><td>-1.95%</td></tr><tr><td>SON</td><td>146,338.57</td><td>155,240.91</td><td>6.08%</td></tr></tbody></table>
+</section>
+<section><h2>Monthly percent difference</h2>
+<table><thead><tr><th>Month</th><th>Ref (GWh)</th><th>Reg (GWh)</th><th>Pct diff</th></tr></thead><tbody><tr><td>01</td><td>121,096.00</td><td>113,019.14</td><td>-6.67%</td></tr><tr><td>02</td><td>90,520.60</td><td>88,315.46</td><td>-2.44%</td></tr><tr><td>03</td><td>48,242.09</td><td>50,001.59</td><td>3.65%</td></tr><tr><td>04</td><td>35,071.68</td><td>38,781.28</td><td>10.58%</td></tr><tr><td>05</td><td>42,636.28</td><td>43,998.84</td><td>3.20%</td></tr><tr><td>06</td><td>62,206.62</td><td>62,126.48</td><td>-0.13%</td></tr><tr><td>07</td><td>87,763.77</td><td>85,463.84</td><td>-2.62%</td></tr><tr><td>08</td><td>73,501.00</td><td>71,521.06</td><td>-2.69%</td></tr><tr><td>09</td><td>47,760.39</td><td>47,134.25</td><td>-1.31%</td></tr><tr><td>10</td><td>37,223.47</td><td>41,299.50</td><td>10.95%</td></tr><tr><td>11</td><td>61,354.71</td><td>66,807.17</td><td>8.89%</td></tr><tr><td>12</td><td>92,765.77</td><td>93,710.40</td><td>1.02%</td></tr></tbody></table>
+</section>
+<section><h2>County percent difference stats</h2>
+<ul><li>Mean abs pct diff: 2.08%</li><li>Median abs pct diff: 1.68%</li><li>Max positive pct diff: 16.61% (Kenedy County, TX (48261))</li><li>Max negative pct diff: -14.28% (Chaffee County, CO (8015))</li></ul>
+<table><thead><tr><th>Top + counties</th><th>Pct diff</th></tr></thead><tbody><tr><td>Kenedy County, TX (48261)</td><td>16.61%</td></tr><tr><td>Eagle County, CO (8037)</td><td>13.90%</td></tr><tr><td>Fall River County, SD (46047)</td><td>11.71%</td></tr><tr><td>Custer County, SD (46033)</td><td>11.38%</td></tr><tr><td>Costilla County, CO (8023)</td><td>11.21%</td></tr></tbody></table>
+<table><thead><tr><th>Top - counties</th><th>Pct diff</th></tr></thead><tbody><tr><td>Chaffee County, CO (8015)</td><td>-14.28%</td></tr><tr><td>Hinsdale County, CO (8053)</td><td>-14.21%</td></tr><tr><td>Archuleta County, CO (8007)</td><td>-13.59%</td></tr><tr><td>Rio Grande County, CO (8105)</td><td>-13.48%</td></tr><tr><td>Alamosa County, CO (8003)</td><td>-12.57%</td></tr></tbody></table>
+</section>
+<section><h2>Balancing area percent difference stats</h2>
+<ul><li>Mean abs pct diff: 1.49%</li><li>Median abs pct diff: 1.13%</li><li>Max positive pct diff: 5.69% (BA p73 (MO))</li><li>Max negative pct diff: -5.27% (BA p1 (WA))</li></ul>
+<table><thead><tr><th>Top + BAs</th><th>Pct diff</th></tr></thead><tbody><tr><td>BA p73 (MO)</td><td>5.69%</td></tr><tr><td>BA p23 (WY)</td><td>4.11%</td></tr><tr><td>BA p51 (OK)</td><td>3.99%</td></tr><tr><td>BA p39 (NE)</td><td>3.96%</td></tr><tr><td>BA p33 (CO)</td><td>3.94%</td></tr></tbody></table>
+<table><thead><tr><th>Top - BAs</th><th>Pct diff</th></tr></thead><tbody><tr><td>BA p1 (WA)</td><td>-5.27%</td></tr><tr><td>BA p12 (NV)</td><td>-4.47%</td></tr><tr><td>BA p11 (CA)</td><td>-4.45%</td></tr><tr><td>BA p34 (CO)</td><td>-4.31%</td></tr><tr><td>BA p2 (WA)</td><td>-3.67%</td></tr></tbody></table>
+</section>
+<section><h2>MAPE</h2>
+<table><thead><tr><th>Metric</th><th>Mean</th><th>Median</th></tr></thead><tbody><tr><td>County-month MAPE (ref&gt;0)</td><td>8.16%</td><td>5.37%</td></tr><tr><td>BA-month MAPE (ref&gt;0)</td><td>7.51%</td><td>5.13%</td></tr></tbody></table>
+</section>
+<section><h2>Correlations</h2>
+<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody><tr><td>National hourly correlation</td><td>0.9938</td></tr><tr><td>Daily total correlation</td><td>0.9938</td></tr></tbody></table>
+</section>
+<section><h2>Diurnal profile correlation by month</h2>
+<table><thead><tr><th>Month</th><th>Correlation</th></tr></thead><tbody><tr><td>01</td><td>0.9949</td></tr><tr><td>02</td><td>0.9967</td></tr><tr><td>03</td><td>0.9953</td></tr><tr><td>04</td><td>0.9771</td></tr><tr><td>05</td><td>0.9989</td></tr><tr><td>06</td><td>0.9994</td></tr><tr><td>07</td><td>0.9995</td></tr><tr><td>08</td><td>0.9998</td></tr><tr><td>09</td><td>0.9993</td></tr><tr><td>10</td><td>0.8887</td></tr><tr><td>11</td><td>0.9975</td></tr><tr><td>12</td><td>0.9921</td></tr></tbody></table>
+</section>
+<section><h2>Error metrics (national)</h2>
+<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody><tr><td>MAE</td><td>4.917 GWh</td></tr><tr><td>Normalized MAE</td><td>0.0538 (5.38%)</td></tr><tr><td>RMSE</td><td>6.710 GWh</td></tr></tbody></table>
+</section>
+<section><h2>Error metrics (counties)</h2>
+<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody><tr><td>MAE mean</td><td>0.003 GWh</td></tr><tr><td>MAE median</td><td>0.001 GWh</td></tr><tr><td>NMAE mean</td><td>0.1253</td></tr><tr><td>NMAE median</td><td>0.1228</td></tr><tr><td>Best NMAE county</td><td>0.0631 (Monroe County, FL (12087))</td></tr><tr><td>Worst NMAE county</td><td>0.4354 (Kenedy County, TX (48261))</td></tr><tr><td>RMSE mean</td><td>0.005 GWh</td></tr><tr><td>RMSE median</td><td>0.002 GWh</td></tr><tr><td>Max RMSE county</td><td>0.218 GWh (Los Angeles County, CA (6037))</td></tr><tr><td>Min RMSE county</td><td>0.000 GWh (Petroleum County, MT (30069))</td></tr></tbody></table>
+</section>
+<section><h2>Error metrics (balancing areas)</h2>
+<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody><tr><td>MAE mean</td><td>0.064 GWh</td></tr><tr><td>MAE median</td><td>0.033 GWh</td></tr><tr><td>NMAE mean</td><td>0.0998</td></tr><tr><td>NMAE median</td><td>0.1006</td></tr><tr><td>Best NMAE BA</td><td>0.0592 (BA p65 (TX))</td></tr><tr><td>Worst NMAE BA</td><td>0.1622 (BA p11 (CA))</td></tr><tr><td>RMSE mean</td><td>0.091 GWh</td></tr><tr><td>RMSE median</td><td>0.047 GWh</td></tr><tr><td>Max RMSE BA</td><td>0.460 GWh (BA p103 (MI))</td></tr><tr><td>Min RMSE BA</td><td>0.001 GWh (BA p19 (MT))</td></tr></tbody></table>
+</section>
+<section><h2>Peak demand</h2>
+<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody><tr><td>Ref peak</td><td>375.310 GWh at 2012-02-12 08:00:00</td></tr><tr><td>Reg peak</td><td>367.540 GWh at 2012-02-12 08:00:00</td></tr><tr><td>Peak percent diff</td><td>-2.07%</td></tr><tr><td>Reg at ref-peak hour</td><td>367.540 GWh (pct diff vs ref -2.07%)</td></tr><tr><td>Ref at reg-peak hour</td><td>375.310 GWh (pct diff vs reg 2.11%)</td></tr><tr><td>Load factor ref</td><td>0.243</td></tr><tr><td>Load factor reg</td><td>0.249</td></tr><tr><td>Load factor delta</td><td>0.006</td></tr></tbody></table>
+</section>
+<section><h2>High-load thresholds</h2>
+<table><thead><tr><th>Percentile</th><th>Ref</th><th>Reg</th><th>Pct diff</th></tr></thead><tbody><tr><td>90%</td><td>173.421 GWh</td><td>168.915 GWh</td><td>-2.60%</td></tr><tr><td>95%</td><td>201.162 GWh</td><td>196.557 GWh</td><td>-2.29%</td></tr><tr><td>99%</td><td>266.622 GWh</td><td>255.853 GWh</td><td>-4.04%</td></tr></tbody></table>
+</section>
+<section><h2>County peak percent diff</h2>
+<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody><tr><td>Mean</td><td>-1.01%</td></tr><tr><td>Median</td><td>-0.72%</td></tr><tr><td>Max</td><td>55.16% (Pope County, IL (17151))</td></tr><tr><td>Min</td><td>-52.49% (Borden County, TX (48033))</td></tr></tbody></table>
+</section>
+<section><h2>Charts</h2>
+<div class='grid'><figure><figcaption>Monthly percent difference</figcaption><img src='monthly_percent_diff.png' alt='Monthly percent difference'></figure><figure><figcaption>County percent difference (top +/-)</figcaption><img src='county_percent_diff_top.png' alt='County percent difference (top +/-)'></figure><figure><figcaption>Daily totals scatter</figcaption><img src='daily_totals_scatter.png' alt='Daily totals scatter'></figure><figure><figcaption>Hourly totals scatter</figcaption><img src='hourly_totals_scatter.png' alt='Hourly totals scatter'></figure><figure><figcaption>National hourly profile by month (ref vs reg)</figcaption><img src='national_8760_by_month.png' alt='National hourly profile by month (ref vs reg)'></figure><figure><figcaption>BA p10 hourly profile by month (ref vs reg)</figcaption><img src='target_ba_8760_by_month.png' alt='BA p10 hourly profile by month (ref vs reg)'></figure></div>
+</section>
+<section><h2>County hourly reg vs ref scatters (ranked by NMAE)</h2>
+<div class='grid'><figure><figcaption>county_hourly_scatter_best_12087</figcaption><img src='county_hourly_scatter_best_12087.png' alt='county_hourly_scatter_best_12087'></figure><figure><figcaption>county_hourly_scatter_best_48007</figcaption><img src='county_hourly_scatter_best_48007.png' alt='county_hourly_scatter_best_48007'></figure><figure><figcaption>county_hourly_scatter_best_48061</figcaption><img src='county_hourly_scatter_best_48061.png' alt='county_hourly_scatter_best_48061'></figure><figure><figcaption>county_hourly_scatter_middle_27173</figcaption><img src='county_hourly_scatter_middle_27173.png' alt='county_hourly_scatter_middle_27173'></figure><figure><figcaption>county_hourly_scatter_middle_37127</figcaption><img src='county_hourly_scatter_middle_37127.png' alt='county_hourly_scatter_middle_37127'></figure><figure><figcaption>county_hourly_scatter_middle_48115</figcaption><img src='county_hourly_scatter_middle_48115.png' alt='county_hourly_scatter_middle_48115'></figure><figure><figcaption>county_hourly_scatter_worst_48033</figcaption><img src='county_hourly_scatter_worst_48033.png' alt='county_hourly_scatter_worst_48033'></figure><figure><figcaption>county_hourly_scatter_worst_48261</figcaption><img src='county_hourly_scatter_worst_48261.png' alt='county_hourly_scatter_worst_48261'></figure><figure><figcaption>county_hourly_scatter_worst_48263</figcaption><img src='county_hourly_scatter_worst_48263.png' alt='county_hourly_scatter_worst_48263'></figure></div>
+</section>
+<section><h2> BA p10 county hourly reg vs ref scatters</h2>
+<div class='grid'><figure><figcaption>target_county_hourly_scatter_6025</figcaption><img src='target_county_hourly_scatter_6025.png' alt='target_county_hourly_scatter_6025'></figure><figure><figcaption>target_county_hourly_scatter_6027</figcaption><img src='target_county_hourly_scatter_6027.png' alt='target_county_hourly_scatter_6027'></figure><figure><figcaption>target_county_hourly_scatter_6029</figcaption><img src='target_county_hourly_scatter_6029.png' alt='target_county_hourly_scatter_6029'></figure><figure><figcaption>target_county_hourly_scatter_6037</figcaption><img src='target_county_hourly_scatter_6037.png' alt='target_county_hourly_scatter_6037'></figure><figure><figcaption>target_county_hourly_scatter_6051</figcaption><img src='target_county_hourly_scatter_6051.png' alt='target_county_hourly_scatter_6051'></figure><figure><figcaption>target_county_hourly_scatter_6059</figcaption><img src='target_county_hourly_scatter_6059.png' alt='target_county_hourly_scatter_6059'></figure><figure><figcaption>target_county_hourly_scatter_6065</figcaption><img src='target_county_hourly_scatter_6065.png' alt='target_county_hourly_scatter_6065'></figure><figure><figcaption>target_county_hourly_scatter_6071</figcaption><img src='target_county_hourly_scatter_6071.png' alt='target_county_hourly_scatter_6071'></figure><figure><figcaption>target_county_hourly_scatter_6107</figcaption><img src='target_county_hourly_scatter_6107.png' alt='target_county_hourly_scatter_6107'></figure><figure><figcaption>target_county_hourly_scatter_6111</figcaption><img src='target_county_hourly_scatter_6111.png' alt='target_county_hourly_scatter_6111'></figure></div>
+</section>
+<section><h2>BA hourly reg vs ref scatters (ranked by NMAE)</h2>
+<div class='grid'><figure><figcaption>ba_hourly_scatter_best_p101</figcaption><img src='ba_hourly_scatter_best_p101.png' alt='ba_hourly_scatter_best_p101'></figure><figure><figcaption>ba_hourly_scatter_best_p102</figcaption><img src='ba_hourly_scatter_best_p102.png' alt='ba_hourly_scatter_best_p102'></figure><figure><figcaption>ba_hourly_scatter_best_p65</figcaption><img src='ba_hourly_scatter_best_p65.png' alt='ba_hourly_scatter_best_p65'></figure><figure><figcaption>ba_hourly_scatter_middle_p14</figcaption><img src='ba_hourly_scatter_middle_p14.png' alt='ba_hourly_scatter_middle_p14'></figure><figure><figcaption>ba_hourly_scatter_middle_p16</figcaption><img src='ba_hourly_scatter_middle_p16.png' alt='ba_hourly_scatter_middle_p16'></figure><figure><figcaption>ba_hourly_scatter_middle_p76</figcaption><img src='ba_hourly_scatter_middle_p76.png' alt='ba_hourly_scatter_middle_p76'></figure><figure><figcaption>ba_hourly_scatter_worst_p11</figcaption><img src='ba_hourly_scatter_worst_p11.png' alt='ba_hourly_scatter_worst_p11'></figure><figure><figcaption>ba_hourly_scatter_worst_p124</figcaption><img src='ba_hourly_scatter_worst_p124.png' alt='ba_hourly_scatter_worst_p124'></figure><figure><figcaption>ba_hourly_scatter_worst_p29</figcaption><img src='ba_hourly_scatter_worst_p29.png' alt='ba_hourly_scatter_worst_p29'></figure></div>
+</section>
+<section><h2>Warnings</h2>
+<ul><li>Counties missing in mapping file: 8 (9001, 9003, 9005, 9007, 9009...)</li></ul>
+</section>
+</body></html>
